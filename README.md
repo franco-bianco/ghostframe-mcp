@@ -1,8 +1,19 @@
 # Chrome DevTools MCP
 
-`chrome-devtools-mcp` is a server that enables Model-Context-Protocol (MCP)
-clients to automate Chrome for debugging purposes. This is an early experimental
-prototype!
+`chrome-devtools-mcp` is a Model-Context-Protocol (MCP) server that brings
+the power of Chrome DevTools to coding agents. Using it, coding agents can live
+debug style, performance or networking issues directly in Chrome.
+
+## Key features
+
+- **Get performance insights**: Uses [Chrome
+  DevTools](https://github.com/ChromeDevTools/devtools-frontend) to record
+  traces and extract performance insights.
+- **Advanced browser debugging**: Analyze network requests, take screenshots and
+  check the browser console.
+- **Reliable automation**. Uses
+  [puppeteer](https://github.com/puppeteer/puppeteer) to automate actions in
+  Chrome and automatically wait for action results.
 
 ## Disclaimers
 
