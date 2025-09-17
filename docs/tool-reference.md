@@ -22,7 +22,8 @@
   - [`emulate_cpu`](#emulate_cpu)
   - [`emulate_network`](#emulate_network)
   - [`resize_page`](#resize_page)
-- **[Performance](#performance)** (2 tools)
+- **[Performance](#performance)** (3 tools)
+  - [`performance_analyze_insight`](#performance_analyze_insight)
   - [`performance_start_trace`](#performance_start_trace)
   - [`performance_stop_trace`](#performance_stop_trace)
 - **[Network](#network)** (2 tools)
@@ -215,6 +216,16 @@
 ---
 
 ## Performance
+
+### `performance_analyze_insight`
+
+**Description:** Provides more detailed information on a specific Performance Insight that was highlighed in the results of a trace recording
+
+**Parameters:**
+
+- **insightName** (string) **(required)**: The name of the Insight you want more information on. For example: "DocumentLatency" or "LCPBreakdown"
+
+---
 
 ### `performance_start_trace`
 
