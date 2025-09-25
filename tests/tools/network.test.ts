@@ -18,6 +18,7 @@ describe('network', () => {
       await withBrowser(async (response, context) => {
         await listNetworkRequests.handler({params: {}}, response, context);
         assert.ok(response.includeNetworkRequests);
+        assert.strictEqual(response.networkRequestsPageIdx, undefined);
       });
     });
   });

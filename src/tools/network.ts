@@ -15,9 +15,29 @@ export const listNetworkRequests = defineTool({
     category: ToolCategories.NETWORK,
     readOnlyHint: true,
   },
-  schema: {},
-  handler: async (_request, response) => {
-    response.setIncludeNetworkRequests(true);
+  schema: {
+    pageSize: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        'Maximum number of requests to return. When omitted, returns all requests.',
+      ),
+    pageIdx: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe(
+        'Page number to return (0-based). When omitted, returns the first page.',
+      ),
+  },
+  handler: async (request, response) => {
+    response.setIncludeNetworkRequests(true, {
+      pageSize: request.params.pageSize,
+      pageIdx: request.params.pageIdx,
+    });
   },
 });
 

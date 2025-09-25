@@ -42,7 +42,10 @@ export type ImageContentData = {
 export interface Response {
   appendResponseLine(value: string): void;
   setIncludePages(value: boolean): void;
-  setIncludeNetworkRequests(value: boolean): void;
+  setIncludeNetworkRequests(
+    value: boolean,
+    options?: {pageSize?: number; pageIdx?: number},
+  ): void;
   setIncludeConsoleData(value: boolean): void;
   setIncludeSnapshot(value: boolean): void;
   attachImage(value: ImageContentData): void;

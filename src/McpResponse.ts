@@ -13,6 +13,7 @@ import {
 } from './formatters/networkFormatter.js';
 import {formatA11ySnapshot} from './formatters/snapshotFormatter.js';
 import {formatConsoleEvent} from './formatters/consoleFormatter.js';
+import {paginate, type PaginationOptions} from './utils/pagination.js';
 
 export class McpResponse implements Response {
   #includePages: boolean = false;
@@ -23,6 +24,7 @@ export class McpResponse implements Response {
   #textResponseLines: string[] = [];
   #formattedConsoleData?: string[];
   #images: ImageContentData[] = [];
+  #networkRequestsPaginationOptions?: PaginationOptions;
 
   setIncludePages(value: boolean): void {
     this.#includePages = value;
@@ -32,8 +34,20 @@ export class McpResponse implements Response {
     this.#includeSnapshot = value;
   }
 
-  setIncludeNetworkRequests(value: boolean): void {
+  setIncludeNetworkRequests(
+    value: boolean,
+    options?: {pageSize?: number; pageIdx?: number},
+  ): void {
     this.#includeNetworkRequests = value;
+    if (!value || !options) {
+      this.#networkRequestsPaginationOptions = undefined;
+      return;
+    }
+
+    this.#networkRequestsPaginationOptions = {
+      pageSize: options.pageSize,
+      pageIdx: options.pageIdx,
+    };
   }
 
   setIncludeConsoleData(value: boolean): void {
@@ -57,6 +71,9 @@ export class McpResponse implements Response {
   }
   get attachedNetworkRequestUrl(): string | undefined {
     return this.#attachedNetworkRequestUrl;
+  }
+  get networkRequestsPageIdx(): number | undefined {
+    return this.#networkRequestsPaginationOptions?.pageIdx;
   }
 
   appendResponseLine(value: string): void {
@@ -162,7 +179,30 @@ Call browser_handle_dialog to handle it before continuing.`);
       const requests = context.getNetworkRequests();
       response.push('## Network requests');
       if (requests.length) {
-        for (const request of requests) {
+        const paginationResult = paginate(
+          requests,
+          this.#networkRequestsPaginationOptions,
+        );
+        if (paginationResult.invalidPage) {
+          response.push('Invalid page number provided. Showing first page.');
+        }
+
+        const {startIndex, endIndex, currentPage, totalPages} =
+          paginationResult;
+        response.push(
+          `Showing ${startIndex + 1}-${endIndex} of ${requests.length} (Page ${currentPage + 1} of ${totalPages}).`,
+        );
+
+        if (this.#networkRequestsPaginationOptions) {
+          if (paginationResult.hasNextPage) {
+            response.push(`Next page: ${currentPage + 1}`);
+          }
+          if (paginationResult.hasPreviousPage) {
+            response.push(`Previous page: ${currentPage - 1}`);
+          }
+        }
+
+        for (const request of paginationResult.items) {
           response.push(getShortDescriptionForRequest(request));
         }
       } else {

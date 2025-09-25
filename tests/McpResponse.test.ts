@@ -185,6 +185,7 @@ Call browser_handle_dialog to handle it before continuing.`,
         result[0].text,
         `# test response
 ## Network requests
+Showing 1-1 of 1 (Page 1 of 1).
 http://example.com GET [pending]`,
       );
     });
@@ -217,6 +218,7 @@ Status:  [pending]
 ### Request Headers
 - content-size:10
 ## Network requests
+Showing 1-1 of 1 (Page 1 of 1).
 http://example.com GET [pending]`,
       );
     });
@@ -258,6 +260,73 @@ Log>`),
 ## Console messages
 <no console messages found>`,
       );
+    });
+  });
+});
+
+describe('McpResponse network pagination', () => {
+  it('returns all requests when pagination is not provided', async () => {
+    await withBrowser(async (response, context) => {
+      const requests = Array.from({length: 5}, () => getMockRequest());
+      context.getNetworkRequests = () => requests;
+      response.setIncludeNetworkRequests(true);
+      const result = await response.handle('test', context);
+      const text = (result[0].text as string).toString();
+      assert.ok(text.includes('Showing 1-5 of 5 (Page 1 of 1).'));
+      assert.ok(!text.includes('Next page:'));
+      assert.ok(!text.includes('Previous page:'));
+    });
+  });
+
+  it('returns first page by default', async () => {
+    await withBrowser(async (response, context) => {
+      const requests = Array.from({length: 30}, (_, idx) =>
+        getMockRequest({method: `GET-${idx}`}),
+      );
+      context.getNetworkRequests = () => {
+        return requests;
+      };
+      response.setIncludeNetworkRequests(true, {pageSize: 10});
+      const result = await response.handle('test', context);
+      const text = (result[0].text as string).toString();
+      assert.ok(text.includes('Showing 1-10 of 30 (Page 1 of 3).'));
+      assert.ok(text.includes('Next page: 1'));
+      assert.ok(!text.includes('Previous page:'));
+    });
+  });
+
+  it('returns subsequent page when pageIdx provided', async () => {
+    await withBrowser(async (response, context) => {
+      const requests = Array.from({length: 25}, (_, idx) =>
+        getMockRequest({method: `GET-${idx}`}),
+      );
+      context.getNetworkRequests = () => requests;
+      response.setIncludeNetworkRequests(true, {
+        pageSize: 10,
+        pageIdx: 1,
+      });
+      const result = await response.handle('test', context);
+      const text = (result[0].text as string).toString();
+      assert.ok(text.includes('Showing 11-20 of 25 (Page 2 of 3).'));
+      assert.ok(text.includes('Next page: 2'));
+      assert.ok(text.includes('Previous page: 0'));
+    });
+  });
+
+  it('handles invalid page number by showing first page', async () => {
+    await withBrowser(async (response, context) => {
+      const requests = Array.from({length: 5}, () => getMockRequest());
+      context.getNetworkRequests = () => requests;
+      response.setIncludeNetworkRequests(true, {
+        pageSize: 2,
+        pageIdx: 10, // Invalid page number
+      });
+      const result = await response.handle('test', context);
+      const text = (result[0].text as string).toString();
+      assert.ok(
+        text.includes('Invalid page number provided. Showing first page.'),
+      );
+      assert.ok(text.includes('Showing 1-2 of 5 (Page 1 of 3).'));
     });
   });
 });
