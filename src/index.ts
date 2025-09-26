@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-const [major, minor] = process.version.substring(1).split('.').map(Number);
+import {version} from 'node:process';
+
+const [major, minor] = version.substring(1).split('.').map(Number);
 
 if (major < 22 || (major === 22 && minor < 12)) {
   console.error(

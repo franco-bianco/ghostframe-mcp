@@ -8,8 +8,8 @@
       "ESNext.Iterator",
       "ESNext.Collection"
     ],
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
     "outDir": "./build",
     "rootDir": ".",
     "strict": true,
