@@ -46,6 +46,7 @@ export function getMockRequest(
     method?: string;
     response?: HTTPResponse;
     failure?: HTTPRequest['failure'];
+    resourceType?: string;
   } = {},
 ): HTTPRequest {
   return {
@@ -60,6 +61,9 @@ export function getMockRequest(
     },
     failure() {
       return options.failure?.() ?? null;
+    },
+    resourceType() {
+      return options.resourceType ?? 'document';
     },
     headers(): Record<string, string> {
       return {

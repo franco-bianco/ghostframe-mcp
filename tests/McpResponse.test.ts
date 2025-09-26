@@ -190,6 +190,7 @@ http://example.com GET [pending]`,
       );
     });
   });
+
   it('does not include network requests when setting is false', async () => {
     await withBrowser(async (response, context) => {
       response.setIncludeNetworkRequests(false);
@@ -259,6 +260,134 @@ Log>`),
         `# test response
 ## Console messages
 <no console messages found>`,
+      );
+    });
+  });
+});
+
+describe('McpResponse network request filtering', () => {
+  it('filters network requests by resource type', async () => {
+    await withBrowser(async (response, context) => {
+      response.setIncludeNetworkRequests(true, {
+        resourceTypes: ['script', 'stylesheet'],
+      });
+      context.getNetworkRequests = () => {
+        return [
+          getMockRequest({resourceType: 'script'}),
+          getMockRequest({resourceType: 'image'}),
+          getMockRequest({resourceType: 'stylesheet'}),
+          getMockRequest({resourceType: 'document'}),
+        ];
+      };
+      const result = await response.handle('test', context);
+      assert.strictEqual(
+        result[0].text,
+        `# test response
+## Network requests
+Showing 1-2 of 2 (Page 1 of 1).
+http://example.com GET [pending]
+http://example.com GET [pending]`,
+      );
+    });
+  });
+
+  it('filters network requests by single resource type', async () => {
+    await withBrowser(async (response, context) => {
+      response.setIncludeNetworkRequests(true, {
+        resourceTypes: ['image'],
+      });
+      context.getNetworkRequests = () => {
+        return [
+          getMockRequest({resourceType: 'script'}),
+          getMockRequest({resourceType: 'image'}),
+          getMockRequest({resourceType: 'stylesheet'}),
+        ];
+      };
+      const result = await response.handle('test', context);
+      assert.strictEqual(
+        result[0].text,
+        `# test response
+## Network requests
+Showing 1-1 of 1 (Page 1 of 1).
+http://example.com GET [pending]`,
+      );
+    });
+  });
+
+  it('shows no requests when filter matches nothing', async () => {
+    await withBrowser(async (response, context) => {
+      response.setIncludeNetworkRequests(true, {
+        resourceTypes: ['font'],
+      });
+      context.getNetworkRequests = () => {
+        return [
+          getMockRequest({resourceType: 'script'}),
+          getMockRequest({resourceType: 'image'}),
+          getMockRequest({resourceType: 'stylesheet'}),
+        ];
+      };
+      const result = await response.handle('test', context);
+      assert.strictEqual(
+        result[0].text,
+        `# test response
+## Network requests
+No requests found.`,
+      );
+    });
+  });
+
+  it('shows all requests when no filters are provided', async () => {
+    await withBrowser(async (response, context) => {
+      response.setIncludeNetworkRequests(true);
+      context.getNetworkRequests = () => {
+        return [
+          getMockRequest({resourceType: 'script'}),
+          getMockRequest({resourceType: 'image'}),
+          getMockRequest({resourceType: 'stylesheet'}),
+          getMockRequest({resourceType: 'document'}),
+          getMockRequest({resourceType: 'font'}),
+        ];
+      };
+      const result = await response.handle('test', context);
+      assert.strictEqual(
+        result[0].text,
+        `# test response
+## Network requests
+Showing 1-5 of 5 (Page 1 of 1).
+http://example.com GET [pending]
+http://example.com GET [pending]
+http://example.com GET [pending]
+http://example.com GET [pending]
+http://example.com GET [pending]`,
+      );
+    });
+  });
+
+  it('shows all requests when empty resourceTypes array is provided', async () => {
+    await withBrowser(async (response, context) => {
+      response.setIncludeNetworkRequests(true, {
+        resourceTypes: [],
+      });
+      context.getNetworkRequests = () => {
+        return [
+          getMockRequest({resourceType: 'script'}),
+          getMockRequest({resourceType: 'image'}),
+          getMockRequest({resourceType: 'stylesheet'}),
+          getMockRequest({resourceType: 'document'}),
+          getMockRequest({resourceType: 'font'}),
+        ];
+      };
+      const result = await response.handle('test', context);
+      assert.strictEqual(
+        result[0].text,
+        `# test response
+## Network requests
+Showing 1-5 of 5 (Page 1 of 1).
+http://example.com GET [pending]
+http://example.com GET [pending]
+http://example.com GET [pending]
+http://example.com GET [pending]
+http://example.com GET [pending]`,
       );
     });
   });

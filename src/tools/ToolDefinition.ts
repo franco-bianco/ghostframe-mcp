@@ -44,7 +44,7 @@ export interface Response {
   setIncludePages(value: boolean): void;
   setIncludeNetworkRequests(
     value: boolean,
-    options?: {pageSize?: number; pageIdx?: number},
+    options?: {pageSize?: number; pageIdx?: number; resourceTypes?: string[]},
   ): void;
   setIncludeConsoleData(value: boolean): void;
   setIncludeSnapshot(value: boolean): void;
