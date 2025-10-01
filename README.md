@@ -7,6 +7,8 @@ control and inspect a live Chrome browser. It acts as a Model-Context-Protocol
 (MCP) server, giving your AI coding assistant access to the full power of
 Chrome DevTools for reliable automation, in-depth debugging, and performance analysis.
 
+## [Tool reference](./docs/tool-reference.md) | [Changelog](./CHANGELOG.md) | [Contributing](./CONTRIBUTING.md) | [Troubleshooting](./docs/troubleshooting.md)
+
 ## Key features
 
 - **Get performance insights**: Uses [Chrome
@@ -197,6 +199,8 @@ Your MCP client should open the browser and record a performance trace.
 > The MCP server will start the browser automatically once the MCP client uses a tool that requires a running browser instance. Connecting to the Chrome DevTools MCP server on its own will not automatically start the browser.
 
 ## Tools
+
+If you run into any issues, checkout our [troubleshooting guide](./docs/troubleshooting.md).
 
 <!-- BEGIN AUTO GENERATED TOOLS -->
 
