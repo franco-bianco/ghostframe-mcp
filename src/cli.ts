@@ -15,7 +15,11 @@ export const cliOptions = {
       'Connect to a running Chrome instance using port forwarding. For more details see: https://developer.chrome.com/docs/devtools/remote-debugging/local-server.',
     alias: 'u',
     coerce: (url: string) => {
-      new URL(url);
+      try {
+        new URL(url);
+      } catch {
+        throw new Error(`Provided browserUrl ${url} is not valid URL.`);
+      }
       return url;
     },
   },
