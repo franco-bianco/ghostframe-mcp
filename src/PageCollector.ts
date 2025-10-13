@@ -4,11 +4,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {Browser, HTTPRequest, Page} from 'puppeteer-core';
+import {
+  type Browser,
+  type Frame,
+  type Handler,
+  type HTTPRequest,
+  type Page,
+  type PageEvents,
+} from 'puppeteer-core';
+
+export type ListenerMap<EventMap extends PageEvents = PageEvents> = {
+  [K in keyof EventMap]?: (event: EventMap[K]) => void;
+};
 
 export class PageCollector<T> {
   #browser: Browser;
-  #initializer: (page: Page, collector: (item: T) => void) => void;
+  #listenersInitializer: (
+    collector: (item: T) => void,
+  ) => ListenerMap<PageEvents>;
+  #listeners = new WeakMap<Page, ListenerMap>();
   /**
    * The Array in this map should only be set once
    * As we use the reference to it.
@@ -18,10 +32,10 @@ export class PageCollector<T> {
 
   constructor(
     browser: Browser,
-    initializer: (page: Page, collector: (item: T) => void) => void,
+    listeners: (collector: (item: T) => void) => ListenerMap<PageEvents>,
   ) {
     this.#browser = browser;
-    this.#initializer = initializer;
+    this.#listenersInitializer = listeners;
   }
 
   async init() {
@@ -37,6 +51,14 @@ export class PageCollector<T> {
       }
       this.#initializePage(page);
     });
+    this.#browser.on('targetdestroyed', async target => {
+      const page = await target.page();
+      if (!page) {
+        return;
+      }
+      console.log('destro');
+      this.#cleanupPageDestroyed(page);
+    });
   }
 
   public addPage(page: Page) {
@@ -50,25 +72,40 @@ export class PageCollector<T> {
 
     const stored: T[] = [];
     this.storage.set(page, stored);
-
-    page.on('framenavigated', frame => {
+    const listeners = this.#listenersInitializer(value => {
+      stored.push(value);
+    });
+    listeners['framenavigated'] = (frame: Frame) => {
       // Only reset the storage on main frame navigation
       if (frame !== page.mainFrame()) {
         return;
       }
-      this.cleanup(page);
-    });
-    this.#initializer(page, value => {
-      stored.push(value);
-    });
+      this.cleanupAfterNavigation(page);
+    };
+
+    for (const [name, listener] of Object.entries(listeners)) {
+      page.on(name, listener as Handler<unknown>);
+    }
+
+    this.#listeners.set(page, listeners);
   }
 
-  protected cleanup(page: Page) {
+  protected cleanupAfterNavigation(page: Page) {
     const collection = this.storage.get(page);
     if (collection) {
       // Keep the reference alive
       collection.length = 0;
     }
+  }
+
+  #cleanupPageDestroyed(page: Page) {
+    const listeners = this.#listeners.get(page);
+    if (listeners) {
+      for (const [name, listener] of Object.entries(listeners)) {
+        page.off(name, listener as Handler<unknown>);
+      }
+    }
+    this.storage.delete(page);
   }
 
   getData(page: Page): T[] {
@@ -77,7 +114,7 @@ export class PageCollector<T> {
 }
 
 export class NetworkCollector extends PageCollector<HTTPRequest> {
-  override cleanup(page: Page) {
+  override cleanupAfterNavigation(page: Page) {
     const requests = this.storage.get(page) ?? [];
     if (!requests) {
       return;
