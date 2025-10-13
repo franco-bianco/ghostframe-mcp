@@ -150,7 +150,7 @@ Emulating: 4x slowdown`,
     });
   });
 
-  it('adds a dialog', async () => {
+  it('adds a prompt dialog', async () => {
     await withBrowser(async (response, context) => {
       const page = context.getSelectedPage();
       const dialogPromise = new Promise<void>(resolve => {
@@ -159,7 +159,7 @@ Emulating: 4x slowdown`,
         });
       });
       page.evaluate(() => {
-        alert('test');
+        prompt('message', 'default');
       });
       await dialogPromise;
       const result = await response.handle('test', context);
@@ -168,7 +168,31 @@ Emulating: 4x slowdown`,
         result[0].text,
         `# test response
 # Open dialog
-alert: test (default value: test).
+prompt: message (default value: "default").
+Call handle_dialog to handle it before continuing.`,
+      );
+    });
+  });
+
+  it('adds an alert dialog', async () => {
+    await withBrowser(async (response, context) => {
+      const page = context.getSelectedPage();
+      const dialogPromise = new Promise<void>(resolve => {
+        page.on('dialog', () => {
+          resolve();
+        });
+      });
+      page.evaluate(() => {
+        alert('message');
+      });
+      await dialogPromise;
+      const result = await response.handle('test', context);
+      await context.getDialog()?.dismiss();
+      assert.strictEqual(
+        result[0].text,
+        `# test response
+# Open dialog
+alert: message.
 Call handle_dialog to handle it before continuing.`,
       );
     });
