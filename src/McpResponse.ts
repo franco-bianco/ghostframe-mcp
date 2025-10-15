@@ -7,7 +7,7 @@ import type {
   ImageContent,
   TextContent,
 } from '@modelcontextprotocol/sdk/types.js';
-import type {ResourceType} from 'puppeteer-core';
+import type {ConsoleMessage, ResourceType} from 'puppeteer-core';
 
 import {formatConsoleEvent} from './formatters/consoleFormatter.js';
 import {
@@ -29,19 +29,29 @@ interface NetworkRequestData {
   responseBody?: string;
 }
 
+export interface ConsoleMessageData {
+  type: string;
+  message: string;
+  args: string[];
+}
+
 export class McpResponse implements Response {
   #includePages = false;
   #includeSnapshot = false;
   #includeVerboseSnapshot = false;
   #attachedNetworkRequestData?: NetworkRequestData;
-  #includeConsoleData = false;
+  #consoleMessagesData?: ConsoleMessageData[];
   #textResponseLines: string[] = [];
-  #formattedConsoleData?: string[];
   #images: ImageContentData[] = [];
   #networkRequestsOptions?: {
     include: boolean;
     pagination?: PaginationOptions;
     resourceTypes?: ResourceType[];
+  };
+  #consoleDataOptions?: {
+    include: boolean;
+    pagination?: PaginationOptions;
+    types?: string[];
   };
 
   setIncludePages(value: boolean): void {
@@ -79,8 +89,30 @@ export class McpResponse implements Response {
     };
   }
 
-  setIncludeConsoleData(value: boolean): void {
-    this.#includeConsoleData = value;
+  setIncludeConsoleData(
+    value: boolean,
+    options?: {
+      pageSize?: number;
+      pageIdx?: number;
+      types?: string[];
+    },
+  ): void {
+    if (!value) {
+      this.#consoleDataOptions = undefined;
+      return;
+    }
+
+    this.#consoleDataOptions = {
+      include: value,
+      pagination:
+        options?.pageSize || options?.pageIdx
+          ? {
+              pageSize: options.pageSize,
+              pageIdx: options.pageIdx,
+            }
+          : undefined,
+      types: options?.types,
+    };
   }
 
   attachNetworkRequest(reqid: number): void {
@@ -98,13 +130,19 @@ export class McpResponse implements Response {
   }
 
   get includeConsoleData(): boolean {
-    return this.#includeConsoleData;
+    return this.#consoleDataOptions?.include ?? false;
   }
   get attachedNetworkRequestId(): number | undefined {
     return this.#attachedNetworkRequestData?.networkRequestStableId;
   }
   get networkRequestsPageIdx(): number | undefined {
     return this.#networkRequestsOptions?.pagination?.pageIdx;
+  }
+  get consoleMessagesPageIdx(): number | undefined {
+    return this.#consoleDataOptions?.pagination?.pageIdx;
+  }
+  get consoleMessagesTypes(): string[] | undefined {
+    return this.#consoleDataOptions?.types;
   }
 
   appendResponseLine(value: string): void {
@@ -142,8 +180,6 @@ export class McpResponse implements Response {
       await context.createTextSnapshot(this.#includeVerboseSnapshot);
     }
 
-    let formattedConsoleMessages: string[];
-
     if (this.#attachedNetworkRequestData?.networkRequestStableId) {
       const request = context.getNetworkRequestById(
         this.#attachedNetworkRequestData.networkRequestStableId,
@@ -159,14 +195,35 @@ export class McpResponse implements Response {
       }
     }
 
-    if (this.#includeConsoleData) {
-      const consoleMessages = context.getConsoleData();
-      if (consoleMessages) {
-        formattedConsoleMessages = await Promise.all(
-          consoleMessages.map(message => formatConsoleEvent(message)),
-        );
-        this.#formattedConsoleData = formattedConsoleMessages;
-      }
+    if (this.#consoleDataOptions?.include) {
+      const messages = context.getConsoleData();
+
+      this.#consoleMessagesData = await Promise.all(
+        messages.map(async (item): Promise<ConsoleMessageData> => {
+          if ('args' in item) {
+            const consoleMessage = item as ConsoleMessage;
+            return {
+              type: consoleMessage.type(),
+              message: consoleMessage.text(),
+              args: await Promise.all(
+                consoleMessage.args().map(async arg => {
+                  const stringArg = await arg.jsonValue().catch(() => {
+                    // Ignore errors.
+                  });
+                  return typeof stringArg === 'object'
+                    ? JSON.stringify(stringArg)
+                    : String(stringArg);
+                }),
+              ),
+            };
+          }
+          return {
+            type: 'error',
+            message: (item as Error).message,
+            args: [],
+          };
+        }),
+      );
     }
 
     return this.format(toolName, context);
@@ -264,10 +321,19 @@ Call ${handleDialog.name} to handle it before continuing.`);
       }
     }
 
-    if (this.#includeConsoleData && this.#formattedConsoleData) {
+    if (this.#consoleDataOptions?.include) {
+      const messages = this.#consoleMessagesData ?? [];
+
       response.push('## Console messages');
-      if (this.#formattedConsoleData.length) {
-        response.push(...this.#formattedConsoleData);
+      if (messages.length) {
+        const data = this.#dataWithPagination(
+          messages,
+          this.#consoleDataOptions.pagination,
+        );
+        response.push(...data.info);
+        response.push(
+          ...data.items.map(message => formatConsoleEvent(message)),
+        );
       } else {
         response.push('<no console messages found>');
       }
