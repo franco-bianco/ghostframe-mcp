@@ -197,6 +197,15 @@ Or, from the IDE **Activity Bar** > `Kiro` > `MCP Servers` > `Click Open MCP Con
 </details>
 
 <details>
+  <summary>Qoder</summary>
+
+In **Qoder Settings**, go to `MCP Server` > `+ Add` > Use the configuration snippet provided above.
+
+Alternatively, follow the <a href="https://docs.qoder.com/user-guide/chat/model-context-protocol">MCP guide</a> and use the standard config from above.
+
+</details>
+
+<details>
   <summary>Visual Studio</summary>
   
   **Click the button to install:**
