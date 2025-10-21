@@ -5,12 +5,8 @@
  */
 
 import type {TextSnapshotNode} from '../McpContext.js';
-import {zod} from '../third_party/modelcontextprotocol-sdk/index.js';
-import type {
-  Dialog,
-  ElementHandle,
-  Page,
-} from '../third_party/puppeteer-core/index.js';
+import {zod} from '../third_party/index.js';
+import type {Dialog, ElementHandle, Page} from '../third_party/index.js';
 import type {TraceResult} from '../trace-processing/parse.js';
 import type {PaginationOptions} from '../utils/types.js';
 
