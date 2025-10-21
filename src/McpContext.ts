@@ -8,6 +8,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type {Debugger} from 'debug';
+
+import type {ListenerMap} from './PageCollector.js';
+import {NetworkCollector, PageCollector} from './PageCollector.js';
+import {Locator} from './third_party/puppeteer-core/index.js';
 import type {
   Browser,
   ConsoleMessage,
@@ -17,10 +21,7 @@ import type {
   Page,
   SerializedAXNode,
   PredefinedNetworkConditions,
-} from 'puppeteer-core';
-
-import type {ListenerMap} from './PageCollector.js';
-import {NetworkCollector, PageCollector} from './PageCollector.js';
+} from './third_party/puppeteer-core/index.js';
 import {listPages} from './tools/pages.js';
 import {takeSnapshot} from './tools/snapshot.js';
 import {CLOSE_PAGE_ERROR} from './tools/ToolDefinition.js';
@@ -91,9 +92,16 @@ export class McpContext implements Context {
   #nextSnapshotId = 1;
   #traceResults: TraceResult[] = [];
 
-  private constructor(browser: Browser, logger: Debugger) {
+  #locatorClass: typeof Locator;
+
+  private constructor(
+    browser: Browser,
+    logger: Debugger,
+    locatorClass: typeof Locator,
+  ) {
     this.browser = browser;
     this.logger = logger;
+    this.#locatorClass = locatorClass;
 
     this.#networkCollector = new NetworkCollector(this.browser);
 
@@ -122,8 +130,13 @@ export class McpContext implements Context {
     await this.#consoleCollector.init();
   }
 
-  static async from(browser: Browser, logger: Debugger) {
-    const context = new McpContext(browser, logger);
+  static async from(
+    browser: Browser,
+    logger: Debugger,
+    /* Let tests use unbundled Locator class to avoid overly strict checks within puppeteer that fail when mixing bundled and unbundled class instances */
+    locatorClass: typeof Locator = Locator,
+  ) {
+    const context = new McpContext(browser, logger, locatorClass);
     await context.#init();
     return context;
   }
@@ -427,5 +440,29 @@ export class McpContext implements Context {
 
   getNetworkRequestStableId(request: HTTPRequest): number {
     return this.#networkCollector.getIdForResource(request);
+  }
+
+  waitForTextOnPage({
+    text,
+    timeout,
+  }: {
+    text: string;
+    timeout?: number | undefined;
+  }): Promise<Element> {
+    const page = this.getSelectedPage();
+    const frames = page.frames();
+
+    const locator = this.#locatorClass.race(
+      frames.flatMap(frame => [
+        frame.locator(`aria/${text}`),
+        frame.locator(`text/${text}`),
+      ]),
+    );
+
+    if (timeout) {
+      locator.setTimeout(timeout);
+    }
+
+    return locator.wait();
   }
 }

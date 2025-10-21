@@ -29,11 +29,31 @@ import license from 'rollup-plugin-license';
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-/** @type {import('rollup').RollupOptions} */
-const sdk = {
-  input: './build/src/third_party/modelcontextprotocol-sdk/index.js',
+const allowedLicenses = [
+  'MIT',
+  'Apache 2.0',
+  'Apache-2.0',
+  'BSD-3-Clause',
+  'BSD-2-Clause',
+  'ISC',
+  '0BSD',
+];
+
+/**
+ * @param {string} wrapperIndexPath
+ * @param {import('rollup').OutputOptions} [extraOutputOptions={}]
+ * @param {string[]} [external=[]]
+ * @returns {import('rollup').RollupOptions}
+ */
+const bundleDependency = (
+  wrapperIndexPath,
+  extraOutputOptions = {},
+  external = [],
+) => ({
+  input: wrapperIndexPath,
   output: {
-    file: './build/src/third_party/modelcontextprotocol-sdk/index.js',
+    ...extraOutputOptions,
+    file: wrapperIndexPath,
     sourcemap: !isProduction,
     format: 'esm',
   },
@@ -48,18 +68,14 @@ const sdk = {
       thirdParty: {
         allow: {
           test: dependency => {
-            let allowed_licenses = ['MIT', 'Apache 2.0', 'BSD-2-Clause', 'ISC'];
-            return allowed_licenses.includes(dependency.license);
+            return allowedLicenses.includes(dependency.license);
           },
           failOnUnlicensed: true,
           failOnViolation: true,
         },
         output: {
           file: path.join(
-            'build',
-            'src',
-            'third_party',
-            'modelcontextprotocol-sdk',
+            path.dirname(wrapperIndexPath),
             'THIRD_PARTY_NOTICES',
           ),
           template(dependencies) {
@@ -90,6 +106,16 @@ const sdk = {
     json(),
     nodeResolve(),
   ],
-};
+  external,
+});
 
-export default [sdk];
+export default [
+  bundleDependency('./build/src/third_party/modelcontextprotocol-sdk/index.js'),
+  bundleDependency(
+    './build/src/third_party/puppeteer-core/index.js',
+    {
+      inlineDynamicImports: true,
+    },
+    ['./bidi.js', '../bidi/bidi.js'],
+  ),
+];

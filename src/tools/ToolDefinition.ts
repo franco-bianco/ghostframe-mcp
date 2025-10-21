@@ -4,10 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {Dialog, ElementHandle, Page} from 'puppeteer-core';
-
 import type {TextSnapshotNode} from '../McpContext.js';
 import {zod} from '../third_party/modelcontextprotocol-sdk/index.js';
+import type {
+  Dialog,
+  ElementHandle,
+  Page,
+} from '../third_party/puppeteer-core/index.js';
 import type {TraceResult} from '../trace-processing/parse.js';
 import type {PaginationOptions} from '../utils/types.js';
 
@@ -93,6 +96,10 @@ export type Context = Readonly<{
     filename: string,
   ): Promise<{filename: string}>;
   waitForEventsAfterAction(action: () => Promise<unknown>): Promise<void>;
+  waitForTextOnPage(params: {
+    text: string;
+    timeout?: number | undefined;
+  }): Promise<Element>;
 }>;
 
 export function defineTool<Schema extends zod.ZodRawShape>(
