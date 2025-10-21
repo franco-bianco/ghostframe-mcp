@@ -144,8 +144,11 @@ export class PageCollector<T> {
     }
 
     const data: T[] = [];
+
     for (let index = this.#maxNavigationSaved; index >= 0; index--) {
-      data.push(...navigations[index]);
+      if (navigations[index]) {
+        data.push(...navigations[index]);
+      }
     }
     return data;
   }
