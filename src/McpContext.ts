@@ -141,9 +141,9 @@ export class McpContext implements Context {
     return context;
   }
 
-  getNetworkRequests(): HTTPRequest[] {
+  getNetworkRequests(includePreviousNavigations?: boolean): HTTPRequest[] {
     const page = this.getSelectedPage();
-    return this.#networkCollector.getData(page);
+    return this.#networkCollector.getData(page, includePreviousNavigations);
   }
 
   getConsoleData(): Array<ConsoleMessage | Error> {
@@ -464,5 +464,22 @@ export class McpContext implements Context {
     }
 
     return locator.wait();
+  }
+
+  /**
+   * We need to ignore favicon request as they make our test flaky
+   */
+  async setUpNetworkCollectorForTesting() {
+    this.#networkCollector = new NetworkCollector(this.browser, collect => {
+      return {
+        request: req => {
+          if (req.url().includes('favicon.ico')) {
+            return;
+          }
+          collect(req);
+        },
+      } as ListenerMap;
+    });
+    await this.#networkCollector.init();
   }
 }

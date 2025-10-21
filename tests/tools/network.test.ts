@@ -10,9 +10,11 @@ import {
   getNetworkRequest,
   listNetworkRequests,
 } from '../../src/tools/network.js';
-import {withBrowser} from '../utils.js';
+import {serverHooks} from '../server.js';
+import {html, withBrowser, stabilizeResponseOutput} from '../utils.js';
 
 describe('network', () => {
+  const server = serverHooks();
   describe('network_list_requests', () => {
     it('list requests', async () => {
       await withBrowser(async (response, context) => {
@@ -21,23 +23,72 @@ describe('network', () => {
         assert.strictEqual(response.networkRequestsPageIdx, undefined);
       });
     });
+
+    it('list requests form current navigations only', async t => {
+      server.addHtmlRoute('/one', html`<main>First</main>`);
+      server.addHtmlRoute('/two', html`<main>Second</main>`);
+      server.addHtmlRoute('/three', html`<main>Third</main>`);
+
+      await withBrowser(async (response, context) => {
+        await context.setUpNetworkCollectorForTesting();
+        const page = context.getSelectedPage();
+        await page.goto(server.getRoute('/one'));
+        await page.goto(server.getRoute('/two'));
+        await page.goto(server.getRoute('/three'));
+        await listNetworkRequests.handler(
+          {
+            params: {},
+          },
+          response,
+          context,
+        );
+        const responseData = await response.handle('list_request', context);
+        t.assert.snapshot?.(stabilizeResponseOutput(responseData[0].text));
+      });
+    });
+
+    it('list requests from previous navigations', async t => {
+      server.addHtmlRoute('/one', html`<main>First</main>`);
+      server.addHtmlRoute('/two', html`<main>Second</main>`);
+      server.addHtmlRoute('/three', html`<main>Third</main>`);
+
+      await withBrowser(async (response, context) => {
+        await context.setUpNetworkCollectorForTesting();
+        const page = context.getSelectedPage();
+        await page.goto(server.getRoute('/one'));
+        await page.goto(server.getRoute('/two'));
+        await page.goto(server.getRoute('/three'));
+        await listNetworkRequests.handler(
+          {
+            params: {
+              includePreviousNavigations: true,
+            },
+          },
+          response,
+          context,
+        );
+        const responseData = await response.handle('list_request', context);
+        t.assert.snapshot?.(stabilizeResponseOutput(responseData[0].text));
+      });
+    });
   });
   describe('network_get_request', () => {
     it('attaches request', async () => {
       await withBrowser(async (response, context) => {
-        const page = await context.getSelectedPage();
+        const page = context.getSelectedPage();
         await page.goto('data:text/html,<div>Hello MCP</div>');
         await getNetworkRequest.handler(
           {params: {reqid: 1}},
           response,
           context,
         );
+
         assert.equal(response.attachedNetworkRequestId, 1);
       });
     });
     it('should not add the request list', async () => {
       await withBrowser(async (response, context) => {
-        const page = await context.getSelectedPage();
+        const page = context.getSelectedPage();
         await page.goto('data:text/html,<div>Hello MCP</div>');
         await getNetworkRequest.handler(
           {params: {reqid: 1}},
@@ -45,6 +96,31 @@ describe('network', () => {
           context,
         );
         assert(!response.includeNetworkRequests);
+      });
+    });
+    it('should get request from previous navigations', async t => {
+      server.addHtmlRoute('/one', html`<main>First</main>`);
+      server.addHtmlRoute('/two', html`<main>Second</main>`);
+      server.addHtmlRoute('/three', html`<main>Third</main>`);
+
+      await withBrowser(async (response, context) => {
+        await context.setUpNetworkCollectorForTesting();
+        const page = context.getSelectedPage();
+        await page.goto(server.getRoute('/one'));
+        await page.goto(server.getRoute('/two'));
+        await page.goto(server.getRoute('/three'));
+        await getNetworkRequest.handler(
+          {
+            params: {
+              reqid: 1,
+            },
+          },
+          response,
+          context,
+        );
+        const responseData = await response.handle('get_request', context);
+
+        t.assert.snapshot?.(stabilizeResponseOutput(responseData[0].text));
       });
     });
   });
