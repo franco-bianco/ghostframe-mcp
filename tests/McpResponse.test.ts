@@ -9,7 +9,13 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {describe, it} from 'node:test';
 
-import {getMockRequest, getMockResponse, html, withBrowser} from './utils.js';
+import {
+  getMockRequest,
+  getMockResponse,
+  html,
+  stabilizeResponseOutput,
+  withBrowser,
+} from './utils.js';
 
 describe('McpResponse', () => {
   it('list pages', async () => {
@@ -51,7 +57,7 @@ Testing 2`,
     });
   });
 
-  it('returns correctly formatted snapshot for a simple tree', async () => {
+  it('returns correctly formatted snapshot for a simple tree', async t => {
     await withBrowser(async (response, context) => {
       const page = context.getSelectedPage();
       await page.setContent(
@@ -65,19 +71,11 @@ Testing 2`,
       response.includeSnapshot();
       const result = await response.handle('test', context);
       assert.equal(result[0].type, 'text');
-      assert.strictEqual(
-        result[0].text,
-        `# test response
-## Page content
-uid=1_0 RootWebArea "My test page"
-  uid=1_1 button "Click me" focusable focused
-  uid=1_2 textbox value="Input"
-`,
-      );
+      t.assert.snapshot?.(result[0].text);
     });
   });
 
-  it('returns values for textboxes', async () => {
+  it('returns values for textboxes', async t => {
     await withBrowser(async (response, context) => {
       const page = context.getSelectedPage();
       await page.setContent(
@@ -91,19 +89,11 @@ uid=1_0 RootWebArea "My test page"
       response.includeSnapshot();
       const result = await response.handle('test', context);
       assert.equal(result[0].type, 'text');
-      assert.strictEqual(
-        result[0].text,
-        `# test response
-## Page content
-uid=1_0 RootWebArea "My test page"
-  uid=1_1 StaticText "username"
-  uid=1_2 textbox "username" focusable focused value="mcp"
-`,
-      );
+      t.assert.snapshot?.(result[0].text);
     });
   });
 
-  it('returns verbose snapshot', async () => {
+  it('returns verbose snapshot', async t => {
     await withBrowser(async (response, context) => {
       const page = context.getSelectedPage();
       await page.setContent(html`<aside>test</aside>`);
@@ -112,22 +102,11 @@ uid=1_0 RootWebArea "My test page"
       });
       const result = await response.handle('test', context);
       assert.equal(result[0].type, 'text');
-      assert.strictEqual(
-        result[0].text,
-        `# test response
-## Page content
-uid=1_0 RootWebArea "My test page"
-  uid=1_1 ignored
-    uid=1_2 ignored
-      uid=1_3 complementary
-        uid=1_4 StaticText "test"
-          uid=1_5 InlineTextBox "test"
-`,
-      );
+      t.assert.snapshot?.(result[0].text);
     });
   });
 
-  it('saves snapshot to file', async () => {
+  it('saves snapshot to file', async t => {
     const filePath = join(tmpdir(), 'test-screenshot.png');
     try {
       await withBrowser(async (response, context) => {
@@ -139,25 +118,10 @@ uid=1_0 RootWebArea "My test page"
         });
         const result = await response.handle('test', context);
         assert.equal(result[0].type, 'text');
-        console.log(result[0].text);
-        assert.strictEqual(
-          result[0].text,
-          `# test response
-## Page content
-Saved snapshot to ${filePath}.`,
-        );
+        t.assert.snapshot?.(stabilizeResponseOutput(result[0].text));
       });
       const content = await readFile(filePath, 'utf-8');
-      assert.strictEqual(
-        content,
-        `uid=1_0 RootWebArea "My test page"
-  uid=1_1 ignored
-    uid=1_2 ignored
-      uid=1_3 complementary
-        uid=1_4 StaticText "test"
-          uid=1_5 InlineTextBox "test"
-`,
-      );
+      t.assert.snapshot?.(stabilizeResponseOutput(content));
     } finally {
       await rm(filePath, {force: true});
     }
@@ -492,6 +456,7 @@ No requests found.`,
         ];
       };
       const result = await response.handle('test', context);
+
       assert.strictEqual(
         result[0].text,
         `# test response
