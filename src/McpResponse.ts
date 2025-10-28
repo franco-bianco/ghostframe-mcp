@@ -44,6 +44,7 @@ export class McpResponse implements Response {
     pagination?: PaginationOptions;
     resourceTypes?: ResourceType[];
     includePreservedRequests?: boolean;
+    networkRequestIdInDevToolsUI?: number;
   };
   #consoleDataOptions?: {
     include: boolean;
@@ -67,6 +68,7 @@ export class McpResponse implements Response {
     options?: PaginationOptions & {
       resourceTypes?: ResourceType[];
       includePreservedRequests?: boolean;
+      networkRequestIdInDevToolsUI?: number;
     },
   ): void {
     if (!value) {
@@ -85,6 +87,7 @@ export class McpResponse implements Response {
           : undefined,
       resourceTypes: options?.resourceTypes,
       includePreservedRequests: options?.includePreservedRequests,
+      networkRequestIdInDevToolsUI: options?.networkRequestIdInDevToolsUI,
     };
   }
 
@@ -391,6 +394,8 @@ Call ${handleDialog.name} to handle it before continuing.`);
             getShortDescriptionForRequest(
               request,
               context.getNetworkRequestStableId(request),
+              context.getNetworkRequestStableId(request) ===
+                this.#networkRequestsOptions?.networkRequestIdInDevToolsUI,
             ),
           );
         }
