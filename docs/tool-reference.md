@@ -246,12 +246,11 @@
 
 ### `get_network_request`
 
-**Description:** Gets a network request by reqid. You can get all requests by calling [`list_network_requests`](#list_network_requests).
-Get the request currently selected in the DevTools UI by ommitting reqid
+**Description:** Gets a network request by an optional reqid, if omitted returns the currently selected request in the DevTools Network panel.
 
 **Parameters:**
 
-- **reqid** (number) _(optional)_: The reqid of the network request. If omitted, looks up the current request selected in DevTools UI.
+- **reqid** (number) _(optional)_: The reqid of the network request. If omitted returns the currently selected request in the DevTools Network panel.
 
 ---
 
