@@ -6,6 +6,9 @@
 
 import {describe, it} from 'node:test';
 
+import sinon from 'sinon';
+
+import {AggregatedIssue} from '../../node_modules/chrome-devtools-frontend/mcp/mcp.js';
 import type {ConsoleMessageData} from '../../src/formatters/consoleFormatter.js';
 import {
   formatConsoleEventShort,
@@ -91,5 +94,32 @@ describe('consoleFormatter', () => {
       const result = formatConsoleEventVerbose(message);
       t.assert.snapshot?.(result);
     });
+  });
+
+  it('formats a console.log message with issue type', t => {
+    const mockAggregatedIssue = sinon.createStubInstance(AggregatedIssue);
+    const mockDescription = {
+      file: 'mock.md',
+      links: [
+        {link: 'http://example.com/learnmore', linkTitle: 'Learn more'},
+        {
+          link: 'http://example.com/another-learnmore',
+          linkTitle: 'Learn more 2',
+        },
+      ],
+    };
+    mockAggregatedIssue.getDescription.returns(mockDescription);
+    const mockDescriptionFileContent =
+      '# Mock Issue Title\n\nThis is a mock issue description';
+
+    const message: ConsoleMessageData = {
+      consoleMessageStableId: 5,
+      type: 'issue',
+      description: mockDescriptionFileContent,
+      item: mockAggregatedIssue,
+    };
+
+    const result = formatConsoleEventVerbose(message);
+    t.assert.snapshot?.(result);
   });
 });
