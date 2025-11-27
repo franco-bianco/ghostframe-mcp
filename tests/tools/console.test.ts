@@ -7,6 +7,7 @@
 import assert from 'node:assert';
 import {afterEach, before, beforeEach, describe, it} from 'node:test';
 
+import {AggregatedIssue} from '../../node_modules/chrome-devtools-frontend/mcp/mcp.js';
 import {setIssuesEnabled} from '../../src/features.js';
 import {loadIssueDescriptions} from '../../src/issue-descriptions.js';
 import {McpResponse} from '../../src/McpResponse.js';
@@ -14,14 +15,14 @@ import {
   getConsoleMessage,
   listConsoleMessages,
 } from '../../src/tools/console.js';
+import {serverHooks} from '../server.js';
 import {withBrowser} from '../utils.js';
 
 describe('console', () => {
+  before(async () => {
+    await loadIssueDescriptions();
+  });
   describe('list_console_messages', () => {
-    before(async () => {
-      await loadIssueDescriptions();
-    });
-
     it('list messages', async () => {
       await withBrowser(async (response, context) => {
         await listConsoleMessages.handler({params: {}}, response, context);
@@ -153,6 +154,7 @@ describe('console', () => {
     });
 
     describe('issues type', () => {
+      const server = serverHooks();
       beforeEach(() => {
         setIssuesEnabled(true);
       });
@@ -160,7 +162,7 @@ describe('console', () => {
         setIssuesEnabled(false);
       });
 
-      it('gets issue details', async () => {
+      it('gets issue details with node id parsing', async t => {
         await withBrowser(async (response, context) => {
           const page = await context.newPage();
           const issuePromise = new Promise<void>(resolve => {
@@ -169,6 +171,7 @@ describe('console', () => {
             });
           });
           await page.setContent('<input type="text" name="username" />');
+          await context.createTextSnapshot();
           await issuePromise;
           await listConsoleMessages.handler({params: {}}, response, context);
           const response2 = new McpResponse();
@@ -178,16 +181,64 @@ describe('console', () => {
             context,
           );
           const formattedResponse = await response2.handle('test', context);
-          const textContent = formattedResponse[0] as {text: string};
-          const learnMoreLinks =
-            '[HTML attribute: autocomplete](https://developer.mozilla.org/en-US/docs/Web/HTML/Attributes/autocomplete#values)';
-          const detailsDescription =
-            "A form field has an `id` or `name` attribute that the browser's autofill recognizes. However, it doesn't have an `autocomplete` attribute assigned. This might prevent the browser from correctly autofilling the form.\n\nTo fix this issue, provide an `autocomplete` attribute.";
-          const title =
-            "Message: issue> An element doesn't have an autocomplete attribute";
-          assert.ok(textContent.text.includes(title));
-          assert.ok(textContent.text.includes(detailsDescription));
-          assert.ok(textContent.text.includes(learnMoreLinks));
+          t.assert.snapshot?.(formattedResponse[0].text);
+        });
+      });
+      it('gets issue details with request id parsing', async t => {
+        server.addRoute('/data.json', (_req, res) => {
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          res.end(JSON.stringify({data: 'test data'}));
+        });
+
+        await withBrowser(async (response, context) => {
+          const page = await context.newPage();
+          const issuePromise = new Promise<void>(resolve => {
+            page.once('issue', () => {
+              resolve();
+            });
+          });
+
+          const url = server.getRoute('/data.json');
+          await page.setContent(`
+            <script>
+              fetch('${url}', {
+                  method: 'GET',
+                  headers: {
+                      'Content-Type': 'application/json',
+                      'X-Custom-Header': 'MyValue'
+                  }
+              });
+            </script>
+          `);
+          await context.createTextSnapshot();
+          await issuePromise;
+          const messages = context.getConsoleData();
+          let issueMsg;
+          for (const message of messages) {
+            if (message instanceof AggregatedIssue) {
+              issueMsg = message;
+              break;
+            }
+          }
+          assert.ok(issueMsg);
+          const id = context.getConsoleMessageStableId(issueMsg);
+          assert.ok(id);
+          await listConsoleMessages.handler(
+            {params: {types: ['issue']}},
+            response,
+            context,
+          );
+          const response2 = new McpResponse();
+          await getConsoleMessage.handler(
+            {params: {msgid: id}},
+            response2,
+            context,
+          );
+          const formattedResponse = await response2.handle('test', context);
+          const rawText = formattedResponse[0].text as string;
+          const sanitizedText = rawText.replaceAll(/ID: \d+/g, 'ID: <ID>');
+          t.assert.snapshot?.(sanitizedText);
         });
       });
     });

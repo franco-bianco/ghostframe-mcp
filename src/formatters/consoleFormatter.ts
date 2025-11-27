@@ -5,6 +5,7 @@
  */
 
 import type {AggregatedIssue} from '../../node_modules/chrome-devtools-frontend/mcp/mcp.js';
+import type {McpContext} from '../McpContext.js';
 
 export interface ConsoleMessageData {
   consoleMessageStableId: number;
@@ -36,11 +37,14 @@ function getArgs(msg: ConsoleMessageData) {
 }
 
 // The verbose format for a console message, including all details.
-export function formatConsoleEventVerbose(msg: ConsoleMessageData): string {
+export function formatConsoleEventVerbose(
+  msg: ConsoleMessageData,
+  context?: McpContext,
+): string {
   const aggregatedIssue = msg.item;
   const result = [
     `ID: ${msg.consoleMessageStableId}`,
-    `Message: ${msg.type}> ${aggregatedIssue ? formatIssue(aggregatedIssue, msg.description) : msg.message}`,
+    `Message: ${msg.type}> ${aggregatedIssue ? formatIssue(aggregatedIssue, msg.description, context) : msg.message}`,
     aggregatedIssue ? undefined : formatArgs(msg),
   ].filter(line => !!line);
   return result.join('\n');
@@ -65,10 +69,19 @@ function formatArgs(consoleData: ConsoleMessageData): string {
 
   return result.join('\n');
 }
-
+interface IssueDetailsWithResources {
+  violatingNodeId?: number;
+  nodeId?: number;
+  documentNodeId?: number;
+  request?: {
+    requestId?: string;
+    url: string;
+  };
+}
 export function formatIssue(
   issue: AggregatedIssue,
   description?: string,
+  context?: McpContext,
 ): string {
   const result: string[] = [];
 
@@ -87,6 +100,86 @@ export function formatIssue(
     }
   }
 
+  const issues: Array<{
+    details?: () => IssueDetailsWithResources;
+    getDetails?: () => IssueDetailsWithResources;
+  }> = [
+    ...issue.getCorsIssues(),
+    ...issue.getMixedContentIssues(),
+    ...issue.getGenericIssues(),
+    ...issue.getLowContrastIssues(),
+    ...issue.getElementAccessibilityIssues(),
+    ...issue.getQuirksModeIssues(),
+  ];
+  const affectedResources: Array<{
+    uid?: string;
+    data?: object;
+    request?: string | number;
+  }> = [];
+  for (const singleIssue of issues) {
+    if (!singleIssue.details && !singleIssue.getDetails) continue;
+
+    let details =
+      singleIssue.details?.() as unknown as IssueDetailsWithResources;
+    if (!details)
+      details =
+        singleIssue.getDetails?.() as unknown as IssueDetailsWithResources;
+    if (!details) continue;
+
+    let uid;
+    let request: number | string | undefined;
+    if (details.violatingNodeId && context) {
+      uid = context.resolveCdpElementId(details.violatingNodeId);
+    }
+    if (details.nodeId && context) {
+      uid = context.resolveCdpElementId(details.nodeId);
+    }
+    if (details.documentNodeId && context) {
+      uid = context.resolveCdpElementId(details.documentNodeId);
+    }
+
+    if (details.request) {
+      request = details.request.url;
+      if (details.request.requestId && context) {
+        const resolvedId = context.resolveCdpRequestId(
+          details.request.requestId,
+        );
+        if (resolvedId) {
+          request = resolvedId;
+        }
+      }
+    }
+
+    // eslint-disable-next-line
+    const data = structuredClone(details) as any;
+    delete data.violatingNodeId;
+    delete data.nodeId;
+    delete data.documentNodeId;
+    delete data.errorType;
+    delete data.frameId;
+    delete data.request;
+    affectedResources.push({
+      uid,
+      data: data,
+      request,
+    });
+  }
+  if (affectedResources.length) {
+    result.push('### Affected resources');
+  }
+  result.push(
+    ...affectedResources.map(item => {
+      const details = [];
+      if (item.uid) details.push(`uid=${item.uid}`);
+      if (item.request) {
+        details.push(
+          (typeof item.request === 'number' ? `reqid=` : 'url=') + item.request,
+        );
+      }
+      if (item.data) details.push(`data=${JSON.stringify(item.data)}`);
+      return details.join(' ');
+    }),
+  );
   if (result.length === 0)
     return 'No details provided for the issue ' + issue.code();
   return result.join('\n');
