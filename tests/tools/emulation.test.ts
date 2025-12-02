@@ -152,4 +152,86 @@ describe('emulation', () => {
       });
     });
   });
+
+  describe('geolocation', () => {
+    it('emulates geolocation with latitude and longitude', async () => {
+      await withMcpContext(async (response, context) => {
+        await emulate.handler(
+          {
+            params: {
+              geolocation: {
+                latitude: 48.137154,
+                longitude: 11.576124,
+              },
+            },
+          },
+          response,
+          context,
+        );
+
+        const geolocation = context.getGeolocation();
+        assert.strictEqual(geolocation?.latitude, 48.137154);
+        assert.strictEqual(geolocation?.longitude, 11.576124);
+      });
+    });
+
+    it('clears geolocation override when geolocation is set to null', async () => {
+      await withMcpContext(async (response, context) => {
+        // First set a geolocation
+        await emulate.handler(
+          {
+            params: {
+              geolocation: {
+                latitude: 48.137154,
+                longitude: 11.576124,
+              },
+            },
+          },
+          response,
+          context,
+        );
+
+        assert.notStrictEqual(context.getGeolocation(), null);
+
+        // Then clear it by setting geolocation to null
+        await emulate.handler(
+          {
+            params: {
+              geolocation: null,
+            },
+          },
+          response,
+          context,
+        );
+
+        assert.strictEqual(context.getGeolocation(), null);
+      });
+    });
+
+    it('reports correctly for the currently selected page', async () => {
+      await withMcpContext(async (response, context) => {
+        await emulate.handler(
+          {
+            params: {
+              geolocation: {
+                latitude: 48.137154,
+                longitude: 11.576124,
+              },
+            },
+          },
+          response,
+          context,
+        );
+
+        const geolocation = context.getGeolocation();
+        assert.strictEqual(geolocation?.latitude, 48.137154);
+        assert.strictEqual(geolocation?.longitude, 11.576124);
+
+        const page = await context.newPage();
+        context.selectPage(page);
+
+        assert.strictEqual(context.getGeolocation(), null);
+      });
+    });
+  });
 });
