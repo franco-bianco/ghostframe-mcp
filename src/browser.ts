@@ -48,7 +48,9 @@ export async function ensureBrowserConnected(options: {
   wsEndpoint?: string;
   wsHeaders?: Record<string, string>;
   devtools: boolean;
+  channel?: Channel;
 }) {
+  const {channel} = options;
   if (browser?.connected) {
     return browser;
   }
@@ -66,12 +68,29 @@ export async function ensureBrowserConnected(options: {
     }
   } else if (options.browserURL) {
     connectOptions.browserURL = options.browserURL;
+  } else if (channel) {
+    const puppeteerChannel =
+      channel !== 'stable'
+        ? (`chrome-${channel}` as ChromeReleaseChannel)
+        : 'chrome';
+    connectOptions.channel = puppeteerChannel;
   } else {
-    throw new Error('Either browserURL or wsEndpoint must be provided');
+    throw new Error(
+      'Either browserURL, wsEndpoint or channel must be provided',
+    );
   }
 
   logger('Connecting Puppeteer to ', JSON.stringify(connectOptions));
-  browser = await puppeteer.connect(connectOptions);
+  try {
+    browser = await puppeteer.connect(connectOptions);
+  } catch (err) {
+    throw new Error(
+      'Could not connect to Chrome. Check if Chrome is running and remote debugging is enabled.',
+      {
+        cause: err,
+      },
+    );
+  }
   logger('Connected Puppeteer');
   return browser;
 }

@@ -54,11 +54,13 @@ async function getContext(): Promise<McpContext> {
   }
   const devtools = args.experimentalDevtools ?? false;
   const browser =
-    args.browserUrl || args.wsEndpoint
+    args.browserUrl || args.wsEndpoint || args.autoConnect
       ? await ensureBrowserConnected({
           browserURL: args.browserUrl,
           wsEndpoint: args.wsEndpoint,
           wsHeaders: args.wsHeaders,
+          // Important: only pass channel, if autoConnect is true.
+          channel: args.autoConnect ? (args.channel as Channel) : undefined,
           devtools,
         })
       : await ensureBrowserLaunched({
@@ -140,7 +142,10 @@ function registerTool(tool: ToolDefinition): void {
         };
       } catch (err) {
         logger(`${tool.name} error:`, err, err?.stack);
-        const errorText = err && 'message' in err ? err.message : String(err);
+        let errorText = err && 'message' in err ? err.message : String(err);
+        if ('cause' in err && err.cause) {
+          errorText += `\nCause: ${err.cause.message}`;
+        }
         return {
           content: [
             {
