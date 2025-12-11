@@ -16,7 +16,7 @@ import {
   NetworkCollector,
   PageCollector,
 } from '../src/PageCollector.js';
-import {AggregatedIssue} from '../src/third_party/index.js';
+import {DevTools} from '../src/third_party/index.js';
 
 import {getMockRequest, getMockBrowser} from './utils.js';
 
@@ -314,7 +314,7 @@ describe('ConsoleCollector', () => {
     const collector = new ConsoleCollector(browser, collect => {
       return {
         issue: issue => {
-          collect(issue as AggregatedIssue);
+          collect(issue as DevTools.AggregatedIssue);
         },
       } as ListenerMap;
     });
@@ -323,7 +323,7 @@ describe('ConsoleCollector', () => {
     sinon.assert.calledOnce(onIssuesListener);
 
     const issueArgument = onIssuesListener.getCall(0).args[0];
-    assert(issueArgument instanceof AggregatedIssue);
+    assert(issueArgument instanceof DevTools.AggregatedIssue);
   });
 
   it('collects issues', async () => {
@@ -335,7 +335,7 @@ describe('ConsoleCollector', () => {
     const collector = new ConsoleCollector(browser, collect => {
       return {
         issue: issue => {
-          collect(issue as AggregatedIssue);
+          collect(issue as DevTools.AggregatedIssue);
         },
       } as ListenerMap;
     });
@@ -367,7 +367,7 @@ describe('ConsoleCollector', () => {
     const collector = new ConsoleCollector(browser, collect => {
       return {
         issue: issue => {
-          collect(issue as AggregatedIssue);
+          collect(issue as DevTools.AggregatedIssue);
         },
       } as ListenerMap;
     });
@@ -378,7 +378,7 @@ describe('ConsoleCollector', () => {
     const data = collector.getData(page);
     assert.equal(data.length, 1);
     const collectedIssue = data[0];
-    assert(collectedIssue instanceof AggregatedIssue);
+    assert(collectedIssue instanceof DevTools.AggregatedIssue);
     assert.equal(collectedIssue.code(), 'MixedContentIssue');
     assert.equal(collectedIssue.getAggregatedIssuesCount(), 1);
   });
