@@ -35,3 +35,27 @@ export {
   Browser as BrowserEnum,
   type ChromeReleaseChannel as BrowsersChromeReleaseChannel,
 } from '@puppeteer/browsers';
+
+export {
+  AgentFocus,
+  TraceEngine,
+  PerformanceTraceFormatter,
+  PerformanceInsightFormatter,
+  AggregatedIssue,
+  type Issue,
+  type IssuesManagerEventTypes,
+  type Target as SDKTarget,
+  type CDPConnection,
+  DebuggerModel,
+  Foundation,
+  TargetManager,
+  MarkdownIssueDescription,
+  Marked,
+  ProtocolClient,
+  Common,
+  I18n,
+  IssueAggregatorEvents,
+  IssuesManagerEvents,
+  createIssuesFromProtocolIssue,
+  IssueAggregator,
+} from '../../node_modules/chrome-devtools-frontend/mcp/mcp.js';
