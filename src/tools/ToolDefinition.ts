@@ -13,6 +13,7 @@ import type {
   Viewport,
 } from '../third_party/index.js';
 import type {InsightName, TraceResult} from '../trace-processing/parse.js';
+import type {InstalledExtension} from '../utils/ExtensionRegistry.js';
 import type {PaginationOptions} from '../utils/types.js';
 
 import type {ToolCategory} from './categories.js';
@@ -92,6 +93,7 @@ export interface Response {
     insightSetId: string,
     insightName: InsightName,
   ): void;
+  setListExtensions(): void;
 }
 
 /**
@@ -141,6 +143,7 @@ export type Context = Readonly<{
   resolveCdpElementId(cdpBackendNodeId: number): string | undefined;
   installExtension(path: string): Promise<string>;
   uninstallExtension(id: string): Promise<void>;
+  listExtensions(): InstalledExtension[];
 }>;
 
 export function defineTool<Schema extends zod.ZodRawShape>(

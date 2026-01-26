@@ -35,6 +35,10 @@ import {takeSnapshot} from './tools/snapshot.js';
 import {CLOSE_PAGE_ERROR} from './tools/ToolDefinition.js';
 import type {Context, DevToolsData} from './tools/ToolDefinition.js';
 import type {TraceResult} from './trace-processing/parse.js';
+import {
+  ExtensionRegistry,
+  type InstalledExtension,
+} from './utils/ExtensionRegistry.js';
 import {WaitForHelper} from './WaitForHelper.js';
 
 export interface TextSnapshotNode extends SerializedAXNode {
@@ -112,6 +116,7 @@ export class McpContext implements Context {
   #networkCollector: NetworkCollector;
   #consoleCollector: ConsoleCollector;
   #devtoolsUniverseManager: UniverseManager;
+  #extensionRegistry = new ExtensionRegistry();
 
   #isRunningTrace = false;
   #networkConditionsMap = new WeakMap<Page, string>();
@@ -753,11 +758,18 @@ export class McpContext implements Context {
     await this.#networkCollector.init(await this.browser.pages());
   }
 
-  async installExtension(path: string): Promise<string> {
-    return this.browser.installExtension(path);
+  async installExtension(extensionPath: string): Promise<string> {
+    const id = await this.browser.installExtension(extensionPath);
+    await this.#extensionRegistry.registerExtension(id, extensionPath);
+    return id;
   }
 
   async uninstallExtension(id: string): Promise<void> {
-    return this.browser.uninstallExtension(id);
+    await this.browser.uninstallExtension(id);
+    this.#extensionRegistry.remove(id);
+  }
+
+  listExtensions(): InstalledExtension[] {
+    return this.#extensionRegistry.list();
   }
 }

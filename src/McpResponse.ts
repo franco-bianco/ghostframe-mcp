@@ -25,6 +25,7 @@ import type {
 } from './tools/ToolDefinition.js';
 import type {InsightName, TraceResult} from './trace-processing/parse.js';
 import {getInsightOutput, getTraceSummary} from './trace-processing/parse.js';
+import type {InstalledExtension} from './utils/ExtensionRegistry.js';
 import {paginate} from './utils/pagination.js';
 import type {PaginationOptions} from './utils/types.js';
 
@@ -60,6 +61,7 @@ export class McpResponse implements Response {
     types?: string[];
     includePreservedMessages?: boolean;
   };
+  #listExtensions?: boolean;
   #devToolsData?: DevToolsData;
   #tabId?: string;
 
@@ -79,6 +81,10 @@ export class McpResponse implements Response {
     this.#snapshotParams = params ?? {
       verbose: false,
     };
+  }
+
+  setListExtensions(): void {
+    this.#listExtensions = true;
   }
 
   setIncludeNetworkRequests(
@@ -297,6 +303,11 @@ export class McpResponse implements Response {
       }
     }
 
+    let extensions: InstalledExtension[] | undefined;
+    if (this.#listExtensions) {
+      extensions = context.listExtensions();
+    }
+
     let consoleMessages: Array<ConsoleFormatter | IssueFormatter> | undefined;
     if (this.#consoleDataOptions?.include) {
       let messages = context.getConsoleData(
@@ -395,6 +406,7 @@ export class McpResponse implements Response {
       networkRequests,
       traceInsight: this.#attachedTraceInsight,
       traceSummary: this.#attachedTraceSummary,
+      extensions,
     });
   }
 
@@ -409,6 +421,7 @@ export class McpResponse implements Response {
       networkRequests?: NetworkFormatter[];
       traceSummary?: TraceResult;
       traceInsight?: TraceInsightData;
+      extensions?: InstalledExtension[];
     },
   ): {content: Array<TextContent | ImageContent>; structuredContent: object} {
     const response = [`# ${toolName} response`];
@@ -474,6 +487,7 @@ Call ${handleDialog.name} to handle it before continuing.`);
       consoleMessages?: object[];
       traceSummary?: string;
       traceInsights?: Array<{insightName: string; insightKey: string}>;
+      extensions?: object[];
     } = {};
 
     if (this.#tabId) {
@@ -529,6 +543,21 @@ Call ${handleDialog.name} to handle it before continuing.`);
       response.push(data.detailedConsoleMessage.toStringDetailed());
       structuredContent.consoleMessage =
         data.detailedConsoleMessage.toJSONDetailed();
+    }
+
+    if (data.extensions) {
+      structuredContent.extensions = data.extensions;
+      response.push('## Extensions');
+      if (data.extensions.length === 0) {
+        response.push('No extensions installed.');
+      } else {
+        const extensionsMessage = data.extensions
+          .map(extension => {
+            return `id=${extension.id} "${extension.name}" v${extension.version} ${extension.isEnabled ? 'Enabled' : 'Disabled'}`;
+          })
+          .join('\n');
+        response.push(extensionsMessage);
+      }
     }
 
     if (this.#networkRequestsOptions?.include) {

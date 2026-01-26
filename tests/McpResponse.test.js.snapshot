@@ -480,3 +480,31 @@ exports[`McpResponse network request filtering > shows no requests when filter m
 ## Network requests
 No requests found.
 `;
+
+exports[`extensions > lists extensions 1`] = `
+# test response
+## Extensions
+id=id1 "Extension 1" v1.0 Enabled
+id=id2 "Extension 2" v2.0 Disabled
+`;
+
+exports[`extensions > lists extensions 2`] = `
+{
+  "extensions": [
+    {
+      "id": "id1",
+      "name": "Extension 1",
+      "version": "1.0",
+      "isEnabled": true,
+      "path": "/path/to/ext1"
+    },
+    {
+      "id": "id2",
+      "name": "Extension 2",
+      "version": "2.0",
+      "isEnabled": false,
+      "path": "/path/to/ext2"
+    }
+  ]
+}
+`;
