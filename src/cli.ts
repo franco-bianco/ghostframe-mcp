@@ -209,7 +209,23 @@ export const cliOptions = {
     // Marked as `false` until the feature is ready to be enabled by default.
     default: false,
     hidden: true,
-    describe: 'Set to false to opt-out of usage statistics collection.',
+    describe:
+      'Set to false to opt-out of usage statistics collection. Google collects usage data to improve the tool, handled under the Google Privacy Policy (https://policies.google.com/privacy). This is independent from Chrome browser metrics.',
+  },
+  clearcutEndpoint: {
+    type: 'string',
+    hidden: true,
+    describe: 'Endpoint for Clearcut telemetry.',
+  },
+  clearcutForceFlushIntervalMs: {
+    type: 'number',
+    hidden: true,
+    describe: 'Force flush interval in milliseconds (for testing).',
+  },
+  clearcutIncludePidHeader: {
+    type: 'boolean',
+    hidden: true,
+    describe: 'Include watchdog PID in Clearcut request headers (for testing).',
   },
 } satisfies Record<string, YargsOptions>;
 
