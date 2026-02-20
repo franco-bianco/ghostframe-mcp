@@ -25,6 +25,7 @@ import type {
   ElementHandle,
   HTTPRequest,
   Page,
+  ScreenRecorder,
   SerializedAXNode,
   Viewport,
 } from './third_party/index.js';
@@ -130,6 +131,8 @@ export class McpContext implements Context {
   #extensionRegistry = new ExtensionRegistry();
 
   #isRunningTrace = false;
+  #screenRecorderData: {recorder: ScreenRecorder; filePath: string} | null =
+    null;
   #emulationSettingsMap = new WeakMap<Page, EmulationSettings>();
   #dialog?: Dialog;
 
@@ -434,6 +437,16 @@ export class McpContext implements Context {
 
   isRunningPerformanceTrace(): boolean {
     return this.#isRunningTrace;
+  }
+
+  getScreenRecorder(): {recorder: ScreenRecorder; filePath: string} | null {
+    return this.#screenRecorderData;
+  }
+
+  setScreenRecorder(
+    data: {recorder: ScreenRecorder; filePath: string} | null,
+  ): void {
+    this.#screenRecorderData = data;
   }
 
   isCruxEnabled(): boolean {
