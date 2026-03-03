@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 
 import {logger} from '../logger.js';
+import {START_INDICATOR} from '../server.js';
 import type {CallToolResult} from '../third_party/index.js';
 import {PipeTransport} from '../third_party/index.js';
 
@@ -56,7 +57,7 @@ export async function startDaemon(mcpArgs: string[] = []) {
   logger('Starting daemon...');
   const child = spawn(process.execPath, [DAEMON_SCRIPT_PATH, ...mcpArgs], {
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'pipe'],
     cwd: process.cwd(),
   });
 
@@ -72,8 +73,19 @@ export async function startDaemon(mcpArgs: string[] = []) {
     waitForFile(getPidFilePath()).then(resolve).catch(reject);
   });
 
-  child.unref();
   logger(`Pid file found ${getPidFilePath()}`);
+
+  child.stderr.pipe(process.stderr);
+  await new Promise<void>(resolve => {
+    child.stderr.on('data', data => {
+      if (data.toString().includes(START_INDICATOR)) {
+        child.stderr.unpipe(process.stderr);
+        child.stderr.destroy();
+        child.unref();
+        resolve();
+      }
+    });
+  });
 }
 
 const SEND_COMMAND_TIMEOUT = 60_000; // ms
