@@ -194,7 +194,6 @@ export type Context = Readonly<{
   triggerExtensionAction(id: string): Promise<void>;
   listExtensions(): InstalledExtension[];
   getExtension(id: string): InstalledExtension | undefined;
-  getInPageTools(): ToolGroup<InPageToolDefinition> | undefined;
   getSelectedMcpPage(): McpPage;
   getExtensionServiceWorkers(): ExtensionServiceWorker[];
   getExtensionServiceWorkerId(
@@ -213,6 +212,7 @@ export type ContextPage = Readonly<{
     action: () => Promise<unknown>,
     options?: {timeout?: number},
   ): Promise<void>;
+  getInPageTools(): ToolGroup<InPageToolDefinition> | undefined;
 }>;
 
 export function defineTool<Schema extends zod.ZodRawShape>(
