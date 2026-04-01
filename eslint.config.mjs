@@ -136,6 +136,13 @@ export default defineConfig([
     },
   },
   {
+    name: 'Tools definitions',
+    files: ['src/tools/**/*.ts'],
+    rules: {
+      '@local/enforce-zod-schema': 'error',
+    },
+  },
+  {
     name: 'Tests',
     files: ['**/*.test.ts'],
     rules: {
