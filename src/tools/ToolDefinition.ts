@@ -134,6 +134,7 @@ export interface Response {
   setListExtensions(): void;
   attachLighthouseResult(result: LighthouseData): void;
   setListInPageTools(): void;
+  setListWebMcpTools(): void;
 }
 
 export type SupportedExtensions =
