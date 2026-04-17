@@ -8,7 +8,7 @@ import {zod} from '../third_party/index.js';
 import {ensureExtension} from '../utils/files.js';
 
 import {ToolCategory} from './categories.js';
-import {definePageTool} from './ToolDefinition.js';
+import {definePageTool, defineTool} from './ToolDefinition.js';
 
 export const takeMemorySnapshot = definePageTool({
   name: 'take_memory_snapshot',
@@ -32,5 +32,27 @@ export const takeMemorySnapshot = definePageTool({
     response.appendResponseLine(
       `Heap snapshot saved to ${request.params.filePath}`,
     );
+  },
+});
+
+export const exploreMemorySnapshot = defineTool({
+  name: 'load_memory_snapshot',
+  description:
+    'Loads a memory heapsnapshot and returns snapshot summary stats.  ',
+  annotations: {
+    category: ToolCategory.MEMORY,
+    readOnlyHint: true,
+    conditions: ['experimentalMemory'],
+  },
+  schema: {
+    filePath: zod.string().describe('A path to a .heapsnapshot file to read.'),
+  },
+  handler: async (request, response, context) => {
+    const stats = await context.getHeapSnapshotStats(request.params.filePath);
+    const staticData = await context.getHeapSnapshotStaticData(
+      request.params.filePath,
+    );
+
+    response.setHeapSnapshotStats(stats, staticData);
   },
 });

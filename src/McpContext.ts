@@ -9,6 +9,7 @@ import path from 'node:path';
 
 import type {TargetUniverse} from './DevtoolsUtils.js';
 import {UniverseManager} from './DevtoolsUtils.js';
+import {HeapSnapshotManager} from './HeapSnapshotManager.js';
 import {McpPage} from './McpPage.js';
 import {
   NetworkCollector,
@@ -16,7 +17,6 @@ import {
   type ListenerMap,
   type UncaughtError,
 } from './PageCollector.js';
-import type {DevTools} from './third_party/index.js';
 import type {
   Browser,
   BrowserContext,
@@ -29,6 +29,7 @@ import type {
   Viewport,
   Target,
 } from './third_party/index.js';
+import type {DevTools} from './third_party/index.js';
 import {Locator} from './third_party/index.js';
 import {PredefinedNetworkConditions} from './third_party/index.js';
 import {listPages} from './tools/pages.js';
@@ -99,6 +100,7 @@ export class McpContext implements Context {
 
   #locatorClass: typeof Locator;
   #options: McpContextOptions;
+  #heapSnapshotManager = new HeapSnapshotManager();
 
   private constructor(
     browser: Browser,
@@ -912,5 +914,25 @@ export class McpContext implements Context {
 
   getExtension(id: string): InstalledExtension | undefined {
     return this.#extensionRegistry.getById(id);
+  }
+
+  async getHeapSnapshotAggregates(
+    filePath: string,
+  ): Promise<
+    Record<string, DevTools.HeapSnapshotModel.HeapSnapshotModel.AggregatedInfo>
+  > {
+    return await this.#heapSnapshotManager.getAggregates(filePath);
+  }
+
+  async getHeapSnapshotStats(
+    filePath: string,
+  ): Promise<DevTools.HeapSnapshotModel.HeapSnapshotModel.Statistics> {
+    return await this.#heapSnapshotManager.getStats(filePath);
+  }
+
+  async getHeapSnapshotStaticData(
+    filePath: string,
+  ): Promise<DevTools.HeapSnapshotModel.HeapSnapshotModel.StaticData | null> {
+    return await this.#heapSnapshotManager.getStaticData(filePath);
   }
 }
