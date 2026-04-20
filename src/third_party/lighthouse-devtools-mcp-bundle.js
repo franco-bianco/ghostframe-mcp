@@ -1,5 +1,5 @@
 /**
- * Lighthouse v13.0.3-24-g0248afea9 (Apr 07 2026)
+ * Lighthouse v13.0.3-36-gb32848263 (Apr 20 2026)
  *
  * Automated auditing, performance metrics, and best practices for the web.
  *
@@ -1375,9 +1375,10 @@ var init_trace_processor = __esm({
        *
        * @param {LH.TraceEvent[]} events
        * @param {LH.TraceEvent} timeOriginEvent
+       * @param {string|undefined} mainFrameId
        * @return {{lcp: LCPEvent | undefined, invalidated: boolean}}
        */
-      static computeValidLCPAllFrames(events, timeOriginEvent) {
+      static computeValidLCPAllFrames(events, timeOriginEvent, mainFrameId2) {
         const lcpEvents = events.filter(this.isLCPEvent).reverse();
         const finalLcpEventsByFrame = /* @__PURE__ */ new Map();
         for (const e of lcpEvents) {
@@ -1391,6 +1392,41 @@ var init_trace_processor = __esm({
           if (!this.isLCPCandidateEvent(lcp)) continue;
           if (!maxLcpAcrossFrames || lcp.args.data.size > maxLcpAcrossFrames.args.data.size) {
             maxLcpAcrossFrames = lcp;
+          }
+        }
+        if (!maxLcpAcrossFrames) {
+          const ukmEvents = events.filter(
+            (e) => e.name.includes("LargestContentfulPaint") && e.name.includes("UKM")
+          );
+          const targetEventName = "NavStartToLargestContentfulPaint::Invalidate::AllFrames::UKM";
+          const ukmInvalidates = ukmEvents.filter((e) => e.name === targetEventName);
+          if (ukmInvalidates.length > 0) {
+            ukmInvalidates.sort((a, b) => a.ts - b.ts);
+            const lastInvalidate = ukmInvalidates[ukmInvalidates.length - 1];
+            lighthouse_logger_default.warn(
+              "TraceProcessor",
+              "LCP candidate missing, falling back to UKM Invalidate event."
+            );
+            maxLcpAcrossFrames = /** @type {LCPCandidateEvent} */
+            /** @type {unknown} */
+            {
+              name: "largestContentfulPaint::Candidate",
+              cat: "loading",
+              ph: lastInvalidate.ph,
+              ts: lastInvalidate.ts,
+              pid: lastInvalidate.pid,
+              tid: lastInvalidate.tid,
+              args: {
+                frame: mainFrameId2 || "main_frame",
+                // Mocked frame ID
+                data: {
+                  size: 1,
+                  // Don't know the actuall size so we assign it 1
+                  isMainFrame: true,
+                  isOutermostMainFrame: true
+                }
+              }
+            };
           }
         }
         return {
@@ -1429,7 +1465,7 @@ var init_trace_processor = __esm({
        * @param {LH.Trace} trace
        * @param {{timeOriginDeterminationMethod?: TimeOriginDeterminationMethod}} [options]
        * @return {LH.Artifacts.ProcessedTrace}
-      */
+       */
       static processTrace(trace, options) {
         const { timeOriginDeterminationMethod = "auto" } = options || {};
         const keyEvents = this.filteredTraceSort(trace.traceEvents, (e) => {
@@ -1467,11 +1503,17 @@ var init_trace_processor = __esm({
         const frameIdToRootFrameId = this.resolveRootFrames(frames2);
         const inspectedTreeFrameIds = [...frameIdToRootFrameId.entries()].filter(([, rootFrameId]) => rootFrameId === mainFrameInfo.frameId).map(([child]) => child);
         function associatedToMainFrame(e) {
+          if (e.name === "NavStartToLargestContentfulPaint::Invalidate::AllFrames::UKM") {
+            return true;
+          }
           const frameId = _TraceProcessor.getFrameId(e);
           return frameId === mainFrameInfo.frameId;
         }
         __name(associatedToMainFrame, "associatedToMainFrame");
         function associatedToAllFrames(e) {
+          if (e.name.includes("LargestContentfulPaint") && e.name.includes("UKM")) {
+            return true;
+          }
           const frameId = _TraceProcessor.getFrameId(e);
           return frameId ? inspectedTreeFrameIds.includes(frameId) : false;
         }
@@ -1519,9 +1561,16 @@ var init_trace_processor = __esm({
        * origin in addition to the standard microsecond monotonic timestamps.
        * @param {LH.Artifacts.ProcessedTrace} processedTrace
        * @return {LH.Artifacts.ProcessedNavigation}
-      */
+       */
       static processNavigation(processedTrace) {
-        const { frameEvents, frameTreeEvents, timeOriginEvt, timings, timestamps } = processedTrace;
+        const {
+          frameEvents,
+          frameTreeEvents,
+          timeOriginEvt,
+          timings,
+          timestamps,
+          mainFrameInfo
+        } = processedTrace;
         const frameTimings = this.computeNavigationTimingsForFrame(frameEvents, { timeOriginEvt });
         const fcpAllFramesEvt = frameTreeEvents.find(
           (e) => e.name === "firstContentfulPaint" && e.ts > timeOriginEvt.ts
@@ -1529,7 +1578,11 @@ var init_trace_processor = __esm({
         if (!fcpAllFramesEvt) {
           throw this.createNoFirstContentfulPaintError();
         }
-        const lcpAllFramesEvt = this.computeValidLCPAllFrames(frameTreeEvents, timeOriginEvt).lcp;
+        const lcpAllFramesEvt = this.computeValidLCPAllFrames(
+          frameTreeEvents,
+          timeOriginEvt,
+          mainFrameInfo.frameId
+        ).lcp;
         const getTiming = /* @__PURE__ */ __name((ts) => (ts - timeOriginEvt.ts) / 1e3, "getTiming");
         const maybeGetTiming = /* @__PURE__ */ __name((ts) => ts === void 0 ? void 0 : getTiming(ts), "maybeGetTiming");
         return {
@@ -1643,7 +1696,7 @@ var init_trace_processor = __esm({
        * in addition to the standard microsecond monotonic timestamps.
        * @param {Array<LH.TraceEvent>} frameEvents
        * @param {{timeOriginEvt: LH.TraceEvent}} options
-      */
+       */
       static computeNavigationTimingsForFrame(frameEvents, options) {
         const { timeOriginEvt } = options;
         const firstPaint = frameEvents.find((e) => e.name === "firstPaint" && e.ts > timeOriginEvt.ts);
@@ -1653,7 +1706,8 @@ var init_trace_processor = __esm({
         if (!firstContentfulPaint) {
           throw this.createNoFirstContentfulPaintError();
         }
-        const lcpResult = this.computeValidLCPAllFrames(frameEvents, timeOriginEvt);
+        const frameId = frameEvents.map((e) => _TraceProcessor.getFrameId(e)).find(Boolean);
+        const lcpResult = this.computeValidLCPAllFrames(frameEvents, timeOriginEvt, frameId);
         const load = frameEvents.find((e) => e.name === "loadEventEnd" && e.ts > timeOriginEvt.ts);
         const domContentLoaded = frameEvents.find(
           (e) => e.name === "domContentLoadedEventEnd" && e.ts > timeOriginEvt.ts
@@ -9833,7 +9887,7 @@ var require_amp = __commonJS({
   "node_modules/lighthouse-stack-packs/packs/amp.js"(exports2, module2) {
     init_process_global();
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path fill="%230379c4" fill-rule="evenodd" d="m171.887 116.28-53.696 89.36h-9.728l9.617-58.227-30.2.047a4.852 4.852 0 0 1-4.855-4.855c0-1.152 1.07-3.102 1.07-3.102l53.52-89.254 9.9.043-9.86 58.317 30.413-.043a4.852 4.852 0 0 1 4.855 4.855c0 1.088-.427 2.044-1.033 2.854l.004.004zM128 0C57.306 0 0 57.3 0 128s57.306 128 128 128 128-57.306 128-128S198.7 0 128 0z"/></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user how they can improve image loading by using WebP in the context of AMP. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
       "modern-image-formats": "Consider displaying all [`amp-img`](https://amp.dev/documentation/components/amp-img/?format=websites) components in WebP formats while specifying an appropriate fallback for other browsers. [Learn more](https://amp.dev/documentation/components/amp-img/#example:-specifying-a-fallback-image).",
       /** Additional description of a Lighthouse audit that tells the user how images are automatically lazy loaded for the AMP framewok. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
@@ -9851,7 +9905,7 @@ var require_amp = __commonJS({
       id: "amp",
       title: "AMP",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -9861,7 +9915,7 @@ var require_angular = __commonJS({
   "node_modules/lighthouse-stack-packs/packs/angular.js"(exports2, module2) {
     init_process_global();
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 250"><path fill="%23dd0031" d="M125 30 31.9 63.2l14.2 123.1L125 230l78.9-43.7 14.2-123.1z"/><path fill="%23c3002f" d="M125 30v22.2-.1V230l78.9-43.7 14.2-123.1L125 30z"/><path fill="%23fff" d="M125 52.1 66.8 182.6h21.7l11.7-29.2h49.4l11.7 29.2H183L125 52.1zm17 83.3h-34l17-40.9 17 40.9z"/></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user how they can improve site loading performance by reducing the total bytes delivered by their page in the context of the Angular framework. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
       "total-byte-weight": "Apply [route-level code splitting](https://web.dev/route-level-code-splitting-in-angular/) to minimize the size of your JavaScript bundles. Also, consider precaching assets with the [Angular service worker](https://web.dev/precaching-with-the-angular-service-worker/).",
       /** Additional description of a Lighthouse audit that tells the user how they can improve performance by minifying their CSS and JS files in the context of the Angular framework. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
@@ -9879,7 +9933,7 @@ var require_angular = __commonJS({
       id: "angular",
       title: "Angular",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -9889,7 +9943,7 @@ var require_drupal = __commonJS({
   "node_modules/lighthouse-stack-packs/packs/drupal.js"(exports2, module2) {
     init_process_global();
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 186.525 243.713"><path fill="%23009cde" d="M131.64 51.91C114.491 34.769 98.13 18.429 93.26 0c-4.87 18.429-21.234 34.769-38.38 51.91C29.16 77.613 0 106.743 0 150.434a93.263 93.263 0 1 0 186.525 0c0-43.688-29.158-72.821-54.885-98.524m-92 120.256c-5.719-.194-26.824-36.571 12.329-75.303l25.909 28.3a2.215 2.215 0 0 1-.173 3.306c-6.183 6.34-32.534 32.765-35.81 41.902-.675 1.886-1.663 1.815-2.256 1.795m53.624 47.943a32.075 32.075 0 0 1-32.076-32.075 33.423 33.423 0 0 1 7.995-21.187c5.784-7.072 24.077-26.963 24.077-26.963s18.012 20.183 24.033 26.896a31.368 31.368 0 0 1 8.046 21.254 32.076 32.076 0 0 1-32.075 32.075m61.392-52.015c-.691 1.512-2.26 4.036-4.376 4.113-3.773.138-4.176-1.796-6.965-5.923-6.122-9.06-59.551-64.9-69.545-75.699-8.79-9.498-1.238-16.195 2.266-19.704 4.395-4.403 17.224-17.225 17.224-17.225s38.255 36.296 54.19 61.096 10.444 46.26 7.206 53.342"/></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user how they can improve performance by removing unused CSS, in the context of the `Drupal` CMS platform. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
       "unused-css-rules": "Consider removing unused CSS rules and only attach the needed `Drupal` libraries to the relevant page or component in a page. See the [`Drupal` documentation](https://www.drupal.org/docs/develop/theming-drupal/adding-assets-css-js-to-a-drupal-theme-via-librariesyml#define) for details. To identify attached libraries that are adding extraneous CSS, try running [code coverage](https://developer.chrome.com/docs/devtools/coverage) in Chrome DevTools. You can identify the theme/module responsible from the URL of the stylesheet when CSS aggregation is disabled in your `Drupal` site. Look out for themes/modules that have many stylesheets in the list which have a lot of red in code coverage. A theme/module should only attach a stylesheet library if it is actually used on the page.",
       /** Additional description of a Lighthouse audit that tells the user how they can improve image loading by using webp in the context of the `Drupal` CMS platform. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
@@ -9929,7 +9983,7 @@ var require_drupal = __commonJS({
       id: "drupal",
       title: "Drupal",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -9939,7 +9993,7 @@ var require_ezoic = __commonJS({
   "node_modules/lighthouse-stack-packs/packs/ezoic.js"(exports2, module2) {
     init_process_global();
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 82 82"><path fill="%235FA624" fill-rule="evenodd" d="M81.37 48.117C85.301 25.821 70.413 4.56 48.117.63 25.821-3.3 4.56 11.586.63 33.883-3.3 56.178 11.586 77.44 33.883 81.37 56.18 85.301 77.44 70.412 81.37 48.117Zm-8.935-14.17c2.77 12.357-1.942 25.721-12.96 33.436-14.57 10.203-34.656 6.662-44.859-7.909a32.434 32.434 0 0 1-2.869-4.98l28.7-20.097a6.53 6.53 0 1 0-3.744-5.347L9.564 48.054c-2.768-12.359 1.943-25.724 12.96-33.439 14.572-10.203 34.656-6.662 44.86 7.91a32.349 32.349 0 0 1 2.868 4.98L41.554 47.6a6.53 6.53 0 1 0 3.746 5.35l27.136-19.003Z"/></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit for a third-party framework called `Ezoic`. This is displayed after a user expands the section to see more. No character length limits. Ezoic Leap is Ezoic's site speed improvement toolset. Remove Unused CSS is a setting name. */
       "unused-css-rules": "Use [Ezoic Leap](https://pubdash.ezoic.com/leap) and enable `Remove Unused CSS` to help with this issue. It will identify the CSS classes that are actually used on each page of your site, and remove any others to keep the file size small.",
       /** Additional description of a Lighthouse audit for a third-party framework called `Ezoic`. This is displayed after a user expands the section to see more. No character length limits. Ezoic Leap is Ezoic's site speed improvement toolset. Next-Gen Formats is a setting name.*/
@@ -9971,7 +10025,7 @@ var require_ezoic = __commonJS({
       id: "ezoic",
       title: "Ezoic",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -9981,7 +10035,7 @@ var require_gatsby = __commonJS({
   "node_modules/lighthouse-stack-packs/packs/gatsby.js"(exports2, module2) {
     init_process_global();
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28"><circle cx="14" cy="14" r="14" fill="%23639"/><path fill="%23fff" d="M6.2 21.8C4.1 19.7 3 16.9 3 14.2L13.9 25c-2.8-.1-5.6-1.1-7.7-3.2zm10.2 2.9L3.3 11.6C4.4 6.7 8.8 3 14 3c3.7 0 6.9 1.8 8.9 4.5l-1.5 1.3C19.7 6.5 17 5 14 5c-3.9 0-7.2 2.5-8.5 6L17 22.5c2.9-1 5.1-3.5 5.8-6.5H18v-2h7c0 5.2-3.7 9.6-8.6 10.7z"/></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user how they can remove unused CSS rules by configuring the Gatsby plugin `gatsby-plugin-purgecss` which sets up PurgeCSS */
       "unused-css-rules": "Use the `PurgeCSS` `Gatsby` plugin to remove unused rules from stylesheets. [Learn more](https://purgecss.com/plugins/gatsby.html).",
       /** Additional description of a Lighthouse audit that tells the user to use the gatsby-plugin-image component to automatically optimize image format */
@@ -10005,7 +10059,7 @@ var require_gatsby = __commonJS({
       id: "gatsby",
       title: "Gatsby",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -10022,7 +10076,7 @@ var require_joomla = __commonJS({
      */
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid" viewBox="0 0 256 258"><path fill="%23F9AE41" d="M255.7 35.6a33.7 33.7 0 0 0-67-4.8l-.4-.2c-27.6-12.4-50.8 9.6-50.8 9.6l-61.4 61.7 24.3 23.4 49.4-48.6c23-23 35.6-7.4 35.6-7.4 17.4 14.6.6 32 .6 32l24.9 24c20.3-22 21.5-41.1 15.3-56.3a33.7 33.7 0 0 0 29.5-33.4"/><path fill="%23EE4035" d="m226.5 190.5.2-.3c12.4-27.6-9.6-50.8-9.6-50.8L155.4 78l-23.3 24.3 48.5 49.4c23 23 7.5 35.6 7.5 35.6-14.7 17.4-32 .6-32 .6l-24 24.9c21.9 20.3 41 21.5 56.2 15.3a33.7 33.7 0 1 0 38.2-37.6"/><path fill="%234F91CD" d="m156 133-49.5 48.6c-23 23-35.6 7.4-35.6 7.4-17.4-14.6-.6-32-.6-32l-24.9-24c-20.3 22-21.4 41.1-15.3 56.3a33.7 33.7 0 1 0 37.6 38.2l.3.2c27.6 12.4 50.8-9.6 50.8-9.6l61.4-61.7-24.3-23.4"/><path fill="%237AC043" d="M75.7 106.6c-23-23-7.4-35.6-7.4-35.6 14.6-17.4 32-.6 32-.6l24-24.9c-22-20.3-41-21.5-56.3-15.3a33.7 33.7 0 1 0-38.2 37.6l-.2.3C17.2 95.7 39.2 119 39.2 119l61.7 61.4 23.4-24.3-48.6-49.4"/\
 ></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user how they can improve performance by removing unused CSS, in the context of the Joomla CMS platform. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
       "unused-css-rules": "Consider reducing, or switching, the number of [Joomla extensions](https://extensions.joomla.org/) loading unused CSS in your page. To identify extensions that are adding extraneous CSS, try running [code coverage](https://developers.google.com/web/updates/2017/04/devtools-release-notes#coverage) in Chrome DevTools. You can identify the theme/plugin responsible from the URL of the stylesheet. Look out for plugins that have many stylesheets in the list which have a lot of red in code coverage. A plugin should only enqueue a stylesheet if it is actually used on the page.",
       /** Additional description of a Lighthouse audit that tells the user how they can improve image loading by using webp in the context of the Joomla CMS platform. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
@@ -10056,7 +10110,7 @@ var require_joomla = __commonJS({
       id: "joomla",
       title: "Joomla",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -10066,7 +10120,7 @@ var require_magento = __commonJS({
   "node_modules/lighthouse-stack-packs/packs/magento.js"(exports2, module2) {
     init_process_global();
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" fill="%23f26322" viewBox="0 0 1000 1000"><path d="M916.9 267.4v465.3l-111.3 67.4V331.4l-1.5-.9-303.9-189-304.6 189.2-1.2.8V799L83.1 732.6V267.4l.7-.4L500.3 10l416 257 .6.4zM560.7 468.5v383.3L500.3 890l-61-38.2V306.7l-136 84.3v476.6l197 122.5 196.4-122.5V391l-136-84.3v161.8z"/></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user how they can improve image loading by using webp in the context of the Magento platform. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
       "modern-image-formats": "Consider searching the [Magento Marketplace](https://marketplace.magento.com/catalogsearch/result/?q=webp) for a variety of third-party extensions to leverage newer image formats.",
       /** Additional description of a Lighthouse audit that tells the user how they can improve performance by lazy loading images that are initially offscreen in the context of the Magento platform. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
@@ -10096,7 +10150,7 @@ var require_magento = __commonJS({
       id: "magento",
       title: "Magento",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -10107,7 +10161,7 @@ var require_next = __commonJS({
     init_process_global();
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 207 124"><path fill="%23000" d="M48.942 32.632h38.96v3.082h-35.39v23.193H85.79v3.082H52.513v25.464h35.794v3.081H48.942V32.632Zm42.45 0h4.139l18.343 25.464 18.749-25.464L158.124.287l-41.896 60.485 21.59 29.762h-4.302l-19.642-27.086L94.15 90.534h-4.22l21.751-29.762-20.29-28.14Zm47.967 3.082v-3.082h44.397v3.082h-20.453v54.82h-3.571v-54.82h-20.373ZM.203 32.632h4.464l61.557 91.671-25.439-33.769L3.936 37.011l-.162 53.523H.203zm183.194 53.891c.738 0 1.276-.563 1.276-1.29 0-.727-.538-1.29-1.276-1.29-.73 0-1.277.563-1.277 1.29 0 .727.547 1.29 1.277 1.29Zm3.509-3.393c0 2.146 1.555 3.549 3.822 3.549 2.414 0 3.874-1.446 3.874-3.956v-8.837h-1.946v8.828c0 1.394-.704 2.138-1.946 2.138-1.112 0-1.867-.692-1.893-1.722h-1.911Zm10.24-.113c.14 2.233 2.007 3.662 4.787 3.662 2.97 0 4.83-1.498 4.83-3.887 0-1.878-1.06-2.917-3.632-3.514l-1.38-.338c-1.634-.38-2.294-.891-2.294-1.783 0-1.125 1.025-1.86 2.563-1.86 1.459 0 2.466.\
 718 2.649 1.869h1.893c-.113-2.103-1.971-3.583-4.516-3.583-2.737 0-4.56 1.48-4.56 3.704 0 1.835 1.033 2.926 3.3 3.454l1.616.39c1.659.389 2.388.96 2.388 1.912 0 1.108-1.146 1.913-2.71 1.913-1.676 0-2.84-.753-3.005-1.939h-1.928Z"/></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user how they can remove unusused CSS rules by configuring a plugin named PurgeCSS. */
       "unused-css-rules": "Consider setting up `PurgeCSS` in `Next.js` configuration to remove unused rules from stylesheets. [Learn more](https://purgecss.com/guides/next.html).",
       /** Additional description of a Lighthouse audit that tells the user to use the next/image component to automatically optimize image format. */
@@ -10137,7 +10191,7 @@ var require_next = __commonJS({
       id: "next.js",
       title: "Next.js",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -10149,7 +10203,7 @@ var require_nitropack = __commonJS({
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="142" height="54"><g fill="none" fill-rule="evenodd"><g fill="%231B004E"><path d="M19.486 53.24h-3.891L4.682 39.247v13.936H0V32.946h5.444l9.475 12.398V32.946h4.567zM21.346 32.94h4.647v3.57h-4.647v-3.57Zm0 5.477h4.647V53.18h-4.647V38.417ZM40.569 53.183H36c-3.408 0-4.991-1.625-4.991-4.697v-6.22h-3.777V38.42h3.777v-5.474h4.598v5.474h4.958v3.846h-4.958v4.588c0 1.597.477 2.252 2.197 2.252h2.764v4.077ZM46.688 53.183h-4.57V38.42h4.57v2.308c.31-.686 1.351-2.336 4.425-2.336h3.13v4.56h-4.004c-2.593 0-3.55.967-3.55 3.019v7.212ZM70.612 45.802c0 4.56-3.409 7.75-8.01 7.75s-8.006-3.19-8.006-7.75c0-4.56 3.408-7.755 8.006-7.755 4.598 0 8.01 3.195 8.01 7.755Zm-4.599 0c0-2.14-1.35-3.733-3.408-3.733-2.057 0-3.44 1.594-3.44 3.733 0 2.139 1.41 3.733 3.44 3.733 2.03 0 3.408-1.598 3.408-3.733ZM72.47 32.946h11.7c4.543 0 7.192 2.28 7.192 6.526 0 4.247-2.649 6.577-7.191 6.577h-6.935v7.125h-4.765V32.946Zm4.766 4.218v4.676h6.485c1.832\
  0 2.736-.883 2.736-2.34 0-1.565-.904-2.336-2.736-2.336h-6.485ZM102.662 51.016c-.254.485-1.636 2.48-4.71 2.48-3.665 0-6.627-2.906-6.627-7.694 0-4.789 2.962-7.667 6.656-7.667 2.962 0 4.372 1.851 4.626 2.336v-2.05h4.567v14.762h-4.512v-2.167Zm-3.327-8.932c-2.03 0-3.384 1.594-3.384 3.733 0 2.14 1.354 3.733 3.384 3.733s3.327-1.597 3.327-3.733-1.298-3.733-3.327-3.733ZM119.184 43.578a2.98 2.98 0 0 0-2.749-1.494c-1.918 0-3.13 1.594-3.13 3.733 0 2.14 1.24 3.758 3.158 3.758 1.807 0 2.625-1.168 2.764-1.51h4.4c-.143 2.052-2.116 5.5-7.275 5.5-4.286 0-7.641-3.078-7.641-7.75 0-4.673 3.328-7.755 7.585-7.755 5.159 0 7.105 3.392 7.33 5.53l-4.442-.012ZM129.712 46.6v6.577h-4.567V32.194h4.567v11.998l5.838-5.784h5.751l-6.994 6.811 7.362 7.952h-5.921z"/></g><g fill="%2325F5CE"><path d="M49.159 4.65c12.832 0 23.235 10.41 23.235 23.251h4.648C77.042 12.491 64.558 0 49.159 0c-15.4 0-27.883 12.492-27.883 27.901h4.647c0-12.841 10.403-23.25 23.236-23.25Z"/><path d="M44.852 25.793a3.632 3.632 0 0 1 2.6-5.097L63.8 16\
 .951 50.426 27.09a3.626 3.626 0 0 1-5.574-1.296Z"/></g></g></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit for a third-party framework called `NitroPack`. This is displayed after a user expands the section to see more. No character length limits. `Reduce Unused CSS` is the name of a feature and becomes link text to additional documentation.*/
       "unused-css-rules": "Enable [`Reduce Unused CSS`](https://support.nitropack.io/hc/en-us/articles/360020418457-Reduce-Unused-CSS) to remove CSS rules that are not applicable to this page.",
       /** Additional description of a Lighthouse audit for a third-party framework called `NitroPack`. This is displayed after a user expands the section to see more. No character length limits. `Image Optimization` is the name of a feature and becomes link text to additional documentation. `WebP` is the name of a standardized image format for the web.*/
@@ -10179,7 +10233,7 @@ var require_nitropack = __commonJS({
       id: "nitropack",
       title: "NitroPack",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -10189,7 +10243,7 @@ var require_nuxt = __commonJS({
   "node_modules/lighthouse-stack-packs/packs/nuxt.js"(exports2, module2) {
     init_process_global();
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 512 512"><path fill="%2300DC82" d="M281.44 397.667h156.88c5.006 0 9.798-1.759 14.133-4.244.336-2.481 8.805-5.596 11.307-9.894 2.502-4.297 4.242-9.173 4.24-14.134-.002-4.962-1.734-9.836-4.24-14.131l-106-182.321c-2.502-4.297-5.559-7.413-9.893-9.894-4.335-2.48-10.542-4.24-15.547-4.24-5.005 0-9.799 1.76-14.133 4.24-4.335 2.481-7.392 5.597-9.894 9.894l-26.853 46.64-53.707-90.457c-2.504-4.296-5.557-8.823-9.893-11.303-4.336-2.481-9.127-2.827-14.133-2.827-5.006 0-9.798.346-14.134 2.827-4.335 2.48-8.802 7.007-11.306 11.303L46.827 355.268c-2.506 4.295-2.8259.169-2.827 14.131-.002 4.961.325 9.836 2.827 14.134 2.502 4.297 6.97 7.413 11.306 9.894 4.336 2.481 9.127 4.24 14.134 4.24H171.2c39.201 0 67.734-17.585 87.627-50.88L306.88 263.4l25.44-43.813 77.733 132.853H306.88l-25.44 45.227ZM169.787 352.44h-69.254l103.174-178.08L256 263.4l-34.639 60.384c-13.21 21.603-28.272 28.656-51.574 28.656Z"/></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user to use the nuxt/image component to serve modern formats like WebP. */
       "modern-image-formats": 'Use the `nuxt/image` component and set `format="webp"`. [Learn more](https://image.nuxt.com/usage/nuxt-img#format).',
       /** Additional description of a Lighthouse audit that tells the user to use the nuxt/image component to defer loading images which are not shown on screen. */
@@ -10207,7 +10261,7 @@ var require_nuxt = __commonJS({
       id: "nuxt",
       title: "Nuxt",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -10217,7 +10271,7 @@ var require_octobercms = __commonJS({
   "node_modules/lighthouse-stack-packs/packs/octobercms.js"(exports2, module2) {
     init_process_global();
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 310 310"><path fill="none" d="M-1-1h802v602H-1z"/><path fill="%23de6c26" d="M135 6.9c-14.2 4.4-34.9 21.8-49.9 42C55.8 88.5 39.6 135.8 41.4 177c.8 20.2 4.9 35.5 14.4 54.5 13.6 27.4 40.8 55.1 65.5 66.9 14.1 6.7 13.4 6.9 14.1-2.8.3-4.4 1-32.4 1.6-62.1 2.7-137.3 4.4-176 8.2-191.3.6-2.3 1.4-4.2 1.9-4.2 1.2 0 3.6 9.1 4.9 18.3.5 4.3 1 17.7 1 29.8 0 12 .3 21.9.7 21.9.3 0 5.7-5 11.9-11 6.9-6.8 12-11 13.3-11 1.8 0 1.9.3 1 2.7-1.2 3.1-7.9 13.2-19.1 28.5L153 128l.1 31.2c.1 17.2.4 37.4.8 44.9l.6 13.7 11-12.6c14-16 35.1-37.1 39.5-39.6l3.3-1.9-.6 3.2c-2 9.8-9.5 20.7-37.4 54.3L154 240.8v31.1c0 18.3.4 31.1.9 31.1 2.8 0 19.3-6.4 26.8-10.5 13.8-7.3 23.8-15 38.3-29.5 15.7-15.7 24.4-27.4 33.4-45.2 20.5-40 21-80.3 1.6-119-17.8-35.6-54.6-72.1-87.8-86.9-11.7-5.3-24.6-7.3-32.2-5z"/></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user how they can improve performance by removing unused CSS, in the context of the October CMS platform. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
       "unused-css-rules": "Consider reviewing the [plugins](https://octobercms.com/plugins) loading unused CSS on the website. To identify plugins that add unnecessary CSS, run [code coverage](https://developers.google.com/web/updates/2017/04/devtools-release-notes#coverage) in Chrome DevTools. Identify the theme/plugin responsible from the stylesheet URL. Look for plugins with many stylesheets with lots of red in code coverage. A plugin should only add a stylesheet if it is actually used on the web page.",
       /** Additional description of a Lighthouse audit that tells the user how they can improve image loading by using webp in the context of the October CMS platform. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
@@ -10251,7 +10305,7 @@ var require_octobercms = __commonJS({
       id: "octobercms",
       title: "October CMS",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -10263,7 +10317,7 @@ var require_react = __commonJS({
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 841.9 595.3"><g fill="%2361DAFB"><path d="M666.3 296.5c0-32.5-40.7-63.3-103.1-82.4 14.4-63.6 8-114.2-20.2-130.4-6.5-3.8-14.1-5.6-22.4-5.6v22.3c4.6 0 8.3.9 11.4 2.6 13.6 7.8 19.5 37.5 14.9 75.7-1.1 9.4-2.9 19.3-5.1 29.4-19.6-4.8-41-8.5-63.5-10.9-13.5-18.5-27.5-35.3-41.6-50 32.6-30.3 63.2-46.9 84-46.9V78c-27.5 0-63.5 19.6-99.9 53.6-36.4-33.8-72.4-53.2-99.9-53.2v22.3c20.7 0 51.4 16.5 84 46.6-14 14.7-28 31.4-41.3 49.9-22.6 2.4-44 6.1-63.6 11-2.3-10-4-19.7-5.2-29-4.7-38.2 1.1-67.9 14.6-75.8 3-1.8 6.9-2.6 11.5-2.6V78.5c-8.4 0-16 1.8-22.6 5.6-28.1 16.2-34.4 66.7-19.9 130.1-62.2 19.2-102.7 49.9-102.7 82.3 0 32.5 40.7 63.3 103.1 82.4-14.4 63.6-8 114.2 20.2 130.4 6.5 3.8 14.1 5.6 22.5 5.6 27.5 0 63.5-19.6 99.9-53.6 36.4 33.8 72.4 53.2 99.9 53.2 8.4 0 16-1.8 22.6-5.6 28.1-16.2 34.4-66.7 19.9-130.1 62-19.1 102.5-49.9 102.5-82.3zm-130.2-66.7c-3.7 12.9-8.3 26.2-13.5 39.5-4.1-8-8.4-16-13.1-24-4.6-8-9.5-15.8-14.4-2\
 3.4 14.2 2.1 27.9 4.7 41 7.9zm-45.8 106.5c-7.8 13.5-15.8 26.3-24.1 38.2-14.9 1.3-30 2-45.2 2-15.1 0-30.2-.7-45-1.9-8.3-11.9-16.4-24.6-24.2-38-7.6-13.1-14.5-26.4-20.8-39.8 6.2-13.4 13.2-26.8 20.7-39.9 7.8-13.5 15.8-26.3 24.1-38.2 14.9-1.3 30-2 45.2-2 15.1 0 30.2.7 45 1.9 8.3 11.9 16.4 24.6 24.2 38 7.6 13.1 14.5 26.4 20.8 39.8-6.3 13.4-13.2 26.8-20.7 39.9zm32.3-13c5.4 13.4 10 26.8 13.8 39.8-13.1 3.2-26.9 5.9-41.2 8 4.9-7.7 9.8-15.6 14.4-23.7 4.6-8 8.9-16.1 13-24.1zM421.2 430c-9.3-9.6-18.6-20.3-27.8-32 9 .4 18.2.7 27.5.7 9.4 0 18.7-.2 27.8-.7-9 11.7-18.3 22.4-27.5 32zm-74.4-58.9c-14.2-2.1-27.9-4.7-41-7.9 3.7-12.9 8.3-26.2 13.5-39.5 4.1 8 8.4 16 13.1 24 4.7 8 9.5 15.8 14.4 23.4zM420.7 163c9.3 9.6 18.6 20.3 27.8 32-9-.4-18.2-.7-27.5-.7-9.4 0-18.7.2-27.8.7 9-11.7 18.3-22.4 27.5-32zm-74 58.9c-4.9 7.7-9.8 15.6-14.4 23.7-4.6 8-8.9 16-13 24-5.4-13.4-10-26.8-13.8-39.8 13.1-3.1 26.9-5.8 41.2-7.9zm-90.5 125.2c-35.4-15.1-58.3-34.9-58.3-50.6 0-15.7 22.9-35.6 58.3-50.6 8.6-3.7 18-7 27.7-10.1 5.7 19.6 \
 13.2 40 22.5 60.9-9.2 20.8-16.6 41.1-22.2 60.6-9.9-3.1-19.3-6.5-28-10.2zM310 490c-13.6-7.8-19.5-37.5-14.9-75.7 1.1-9.4 2.9-19.3 5.1-29.4 19.6 4.8 41 8.5 63.5 10.9 13.5 18.5 27.5 35.3 41.6 50-32.6 30.3-63.2 46.9-84 46.9-4.5-.1-8.3-1-11.3-2.7zm237.2-76.2c4.7 38.2-1.1 67.9-14.6 75.8-3 1.8-6.9 2.6-11.5 2.6-20.7 0-51.4-16.5-84-46.6 14-14.7 28-31.4 41.3-49.9 22.6-2.4 44-6.1 63.6-11 2.3 10.1 4.1 19.8 5.2 29.1zm38.5-66.7c-8.6 3.7-18 7-27.7 10.1-5.7-19.6-13.2-40-22.5-60.9 9.2-20.8 16.6-41.1 22.2-60.6 9.9 3.1 19.3 6.5 28.1 10.2 35.4 15.1 58.3 34.9 58.3 50.6-.1 15.7-23 35.6-58.4 50.6zM320.8 78.4z"/><circle cx="420.9" cy="296.5" r="45.7"/><path d="M520.5 78.1z"/></g></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user how they can improve performance by minifying their CSS files in the context of the React library. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
       "unminified-css": "If your build system minifies CSS files automatically, ensure that you are deploying the production build of your application. You can check this with the React Developer Tools extension. [Learn more](https://reactjs.org/docs/optimizing-performance.html#use-the-production-build).",
       /** Additional description of a Lighthouse audit that tells the user how they can improve performance by minifying their Javascript files in the context of the React library. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
@@ -10283,7 +10337,7 @@ var require_react = __commonJS({
       id: "react",
       title: "React",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -10294,7 +10348,7 @@ var require_wix = __commonJS({
     init_process_global();
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 71 28"><path fill-rule="evenodd" d="M0 .032s2.796-.356 4.66 1.31C5.81 2.37 6.145 4.008 6.145 4.008L9.952 18.96l3.165-12.239c.309-1.301.864-2.909 1.743-3.997 1.121-1.385 3.398-1.472 3.641-1.472.242 0 2.519.087 3.639 1.472.88 1.088 1.435 2.696 1.744 3.997l3.165 12.239 3.806-14.953s.336-1.638 1.486-2.666C34.205-.324 37 .032 37 .032l-7.289 27.945s-2.404.176-3.607-.446c-1.58-.816-2.332-1.447-3.289-5.249l-.099-.395c-.349-1.399-.883-3.59-1.424-5.813l-.162-.667-.162-.664c-.779-3.198-1.497-6.143-1.612-6.517-.108-.351-.236-1.187-.855-1.187-.607 0-.746.837-.857 1.187-.13.412-.99 3.955-1.856 7.514l-.162.667c-.512 2.107-1.01 4.151-1.341 5.48l-.1.395c-.956 3.802-1.708 4.433-3.288 5.249-1.204.622-3.608.446-3.608.446zM43.998 5v.995L44 5.994v16.628c-.014 3.413-.373 4.17-1.933 4.956-1.213.61-3.067.379-3.067.379V9.332c0-.935.315-1.548 1.477-2.098.693-.329 1.34-.58 2.012-.953C43.54 5.703 43.998 5 43.998 5zM46 .125s3.87\
 7-.673 5.797 1.107c1.228 1.14 2.602 3.19 2.602 3.19l3.38 4.965c.164.258.378.54.72.54.343 0 .558-.282.722-.54l3.38-4.965s1.374-2.05 2.602-3.19C67.123-.548 71 .125 71 .125l-9.186 13.923 9.161 13.881-.032.004c-.38.045-4.036.423-5.855-1.266-1.229-1.138-2.487-2.992-2.487-2.992l-3.38-4.964c-.164-.26-.379-.54-.721-.54-.343 0-.557.28-.721.54l-3.38 4.964s-1.19 1.854-2.418 2.992c-1.92 1.783-5.957 1.262-5.957 1.262l9.161-13.88zM43.96 0H44c0 1.91-.186 3.042-1.387 3.923-.384.28-1.048.71-1.826.992C39.719 5.304 39 6 39 6c0-3.476.53-4.734 1.95-5.48.865-.452 2.272-.514 2.82-.52z"></path></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user to optimize image formats, in the context of the Wix CMS platform. */
       "modern-image-formats": "Upload images using `Wix Media Manager` to ensure they are automatically served as WebP. Find [more ways to optimize](https://support.wix.com/en/article/site-performance-optimizing-your-media) your site's media.",
       /** Additional description of a Lighthouse audit that tells the user to defer loading of non-critical third-party libraries, in the context of the Wix CMS platform. */
@@ -10310,7 +10364,7 @@ var require_wix = __commonJS({
       id: "wix",
       title: "Wix",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -10320,7 +10374,7 @@ var require_wordpress = __commonJS({
   "node_modules/lighthouse-stack-packs/packs/wordpress.js"(exports2, module2) {
     init_process_global();
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 122.5 122.5"><g fill="%232f3439"><path d="M8.7 61.3c0 20.8 12.1 38.7 29.6 47.3l-25-68.7c-3 6.5-4.6 13.7-4.6 21.4zm88-2.7c0-6.5-2.3-11-4.3-14.5-2.7-4.3-5.2-8-5.2-12.3 0-4.8 3.7-9.3 8.9-9.3h.7a52.4 52.4 0 0 0-79.4 9.9h3.3c5.5 0 14-.6 14-.6 2.9-.2 3.2 4 .4 4.3 0 0-2.9.4-6 .5l19.1 57L59.7 59l-8.2-22.5c-2.8-.1-5.5-.5-5.5-.5-2.8-.1-2.5-4.5.3-4.3 0 0 8.7.7 13.9.7 5.5 0 14-.7 14-.7 2.8-.2 3.2 4 .3 4.3 0 0-2.8.4-6 .5l19 56.5 5.2-17.5c2.3-7.3 4-12.5 4-17z"/><path d="m62.2 65.9-15.8 45.8a52.6 52.6 0 0 0 32.3-.9l-.4-.7zM107.4 36a49.6 49.6 0 0 1-3.6 24.2l-16.1 46.5A52.5 52.5 0 0 0 107.4 36z"/><path d="M61.3 0a61.3 61.3 0 1 0 .1 122.7A61.3 61.3 0 0 0 61.3 0zm0 119.7a58.5 58.5 0 1 1 .1-117 58.5 58.5 0 0 1-.1 117z"/></g></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit that tells the user how they can improve performance by removing unused CSS, in the context of the Wordpress CMS platform. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
       "unused-css-rules": "Consider reducing, or switching, the number of [WordPress plugins](https://wordpress.org/plugins/) loading unused CSS in your page. To identify plugins that are adding extraneous CSS, try running [code coverage](https://developer.chrome.com/docs/devtools/coverage/) in Chrome DevTools. You can identify the theme/plugin responsible from the URL of the stylesheet. Look out for plugins that have many stylesheets in the list which have a lot of red in code coverage. A plugin should only enqueue a stylesheet if it is actually used on the page.",
       /** Additional description of a Lighthouse audit that tells the user how they can improve image loading by using webp in the context of the Wordpress CMS platform. This is displayed after a user expands the section to see more. No character length limits. */
@@ -10354,7 +10408,7 @@ var require_wordpress = __commonJS({
       id: "wordpress",
       title: "WordPress",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -10366,7 +10420,7 @@ var require_wp_rocket = __commonJS({
     var icon = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 294 524"><defs><linearGradient id="a" x1="36.742%" x2="37.116%" y1="100.518%" y2="-.001%"><stop offset="0%" stop-color="%23DD5F29"/><stop offset="26.042%" stop-color="%23F26B32"/><stop offset="100%" stop-color="%23FAC932"/></linearGradient><linearGradient id="b" x1="28.046%" x2="28.421%" y1="100.518%" y2="-.003%"><stop offset="0%" stop-color="%23DD5F29"/><stop offset="26.042%" stop-color="%23F26B32"/><stop offset="100%" stop-color="%23FAC932"/></linearGradient><linearGradient id="c" x1="38.215%" x2="38.589%" y1="100.518%" y2="0%"><stop offset="0%" stop-color="%23DD5F29"/><stop offset="26.042%" stop-color="%23F26B32"/><stop offset="100%" stop-color="%23FAC932"/></linearGradient></defs><g fill="none" fill-rule="evenodd"><path fill="url(%23a)" d="M218.617 270.615c-9.752 0-18.896-5.689-23.366-14.63l-7.72-17.27h-76.6l-7.722 17.27c-4.47 8.941-13.613 14.63-23.366 14.63H75.78l32.712 249.306c1.625 4.671 4.67\
 3 4.671 6.502 0l32.51-79.648 28.242 79.442c1.625 4.676 4.673 4.676 6.501 0L220.04 270.82l-1.423-.204Z" transform="translate(-1.58 -.2)"/><path fill="url(%23b)" d="M184.47 231.784h-70.3l-10.77 24.179c-3.657 7.314-10.768 12.597-18.489 14.02L109.7 423.791c1.625 2.844 4.673 2.844 6.501 0l31.697-48.155 29.055 47.951c1.829 2.845 4.673 2.845 6.502 0l28.039-154.012c-6.908-2.032-13.004-6.908-16.255-13.613l-10.768-24.18Z" transform="translate(-1.58 -.2)"/><path fill="url(%23c)" d="m195.259 255.988-46.123-103.014-45.92 103.014c-1.625 3.048-3.656 5.69-6.095 7.925l19.1 102.2c1.015 1.423 3.657 1.83 5.485 0l25.601-33.931 25.602 33.728c1.625 2.032 4.47 1.626 5.485 0l21.131-103.42c-1.625-2.032-3.047-4.064-4.266-6.502Z" transform="translate(-1.58 -.2)"/><path fill="%23F56F46" d="M.439 12.559c-1.422-4.877 1.422-8.33 6.299-8.33H47.17c2.845 0 5.486 2.437 6.299 4.876l29.665 116.83h1.422l53.437-121.3c1.016-2.032 3.048-3.86 5.892-3.86h6.299c3.047 0 5.08 1.625 5.892 3.86l53.437 121.3h1.423L240.6 9.105c.61-2.43\
 9 3.454-4.877 6.299-4.877h40.433c4.877 0 7.518 3.454 6.299 8.33l-65.221 231.63c-.61 2.845-3.454 4.876-6.298 4.876h-5.487c-2.438 0-4.876-1.625-5.892-3.86l-63.19-141.009h-1.015L83.744 245.203c-1.016 2.032-3.454 3.86-5.892 3.86h-5.486c-2.845 0-5.486-2.031-6.299-4.876L.44 12.559Z"/></g></svg>`;
-    var UIStrings126 = {
+    var UIStrings130 = {
       /** Additional description of a Lighthouse audit for a third-party framework called 'WP Rocket'. This is displayed after a user expands the section to see more. No character length limits. Remove Unused CSS is a name of the feature */
       "unused-css-rules": `Enable [Remove Unused CSS](https://docs.wp-rocket.me/article/1529-remove-unused-css) in 'WP Rocket' to fix this issue. It reduces page size by removing all CSS and stylesheets that are not used while keeping only the used CSS for each page.`,
       /** Additional description of a Lighthouse audit for a third-party framework called 'WP Rocket'. This is displayed after a user expands the section to see more. No character length limits. `Imagify` is an image optimization add-on */
@@ -10392,7 +10446,7 @@ var require_wp_rocket = __commonJS({
       id: "wp-rocket",
       title: "WP Rocket",
       icon,
-      UIStrings: UIStrings126
+      UIStrings: UIStrings130
     };
   }
 });
@@ -10639,7 +10693,7 @@ var init_root2 = __esm({
     "webtreemap-cdt": "^3.2.1"
   },
   "dependencies": {
-    "@paulirish/trace_engine": "0.0.61",
+    "@paulirish/trace_engine": "0.0.64",
     "@sentry/node": "^9.28.1",
     "axe-core": "^4.11.2",
     "chrome-launcher": "^1.2.1",
@@ -12398,7 +12452,7 @@ var init_FirstContentfulPaint = __esm({
       static getOptimisticGraph(dependencyGraph, processedNavigation) {
         return this.getFirstPaintBasedGraph(dependencyGraph, {
           cutoffTimestamp: processedNavigation.timestamps.firstContentfulPaint,
-          // In the optimistic graph we exclude resources that appeared to be render blocking but were
+          // In the optimistic graph we exclude resources that appeared to be render-blocking but were
           // initiated by a script. While they typically have a very high importance and tend to have a
           // significant impact on the page's content, these resources don't technically block rendering.
           treatNodeAsRenderBlocking: /* @__PURE__ */ __name((node) => node.hasRenderBlockingPriority() && node.initiatorType !== "script", "treatNodeAsRenderBlocking")
@@ -14275,15 +14329,14 @@ __export(Configuration_exports, {
   configToCacheKey: () => configToCacheKey,
   defaults: () => defaults
 });
-function configToCacheKey(config3) {
-  return JSON.stringify(config3);
+function configToCacheKey(config4) {
+  return JSON.stringify(config4);
 }
 var defaults;
 var init_Configuration = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/types/Configuration.js"() {
     init_process_global();
     defaults = /* @__PURE__ */ __name(() => ({
-      includeRuntimeCallStats: false,
       showAllEvents: false,
       debugMode: false,
       maxInvalidationEventsPerEvent: 20,
@@ -14486,6 +14539,7 @@ __export(TraceEvents_exports, {
   SelectorTimingsKey: () => SelectorTimingsKey,
   StyleRecalcInvalidationReason: () => StyleRecalcInvalidationReason,
   ThreadID: () => ThreadID,
+  VALID_PROFILE_SOURCES: () => VALID_PROFILE_SOURCES,
   WorkerId: () => WorkerId,
   eventIsPageLoadEvent: () => eventIsPageLoadEvent,
   isAbortPostTaskCallback: () => isAbortPostTaskCallback,
@@ -14494,6 +14548,7 @@ __export(TraceEvents_exports, {
   isAnimationFrameAsyncEnd: () => isAnimationFrameAsyncEnd,
   isAnimationFrameAsyncStart: () => isAnimationFrameAsyncStart,
   isAnimationFramePresentation: () => isAnimationFramePresentation,
+  isAnyLargestContentfulPaintCandidate: () => isAnyLargestContentfulPaintCandidate,
   isAnyScriptSourceEvent: () => isAnyScriptSourceEvent,
   isAuctionWorkletDoneWithProcess: () => isAuctionWorkletDoneWithProcess,
   isAuctionWorkletRunningInProcess: () => isAuctionWorkletRunningInProcess,
@@ -14540,7 +14595,7 @@ __export(TraceEvents_exports, {
   isInvalidateLayout: () => isInvalidateLayout,
   isInvalidationTracking: () => isInvalidationTracking,
   isJSInvocationEvent: () => isJSInvocationEvent,
-  isLargestContentfulPaintCandidate: () => isLargestContentfulPaintCandidate,
+  isJSSample: () => isJSSample,
   isLargestImagePaintCandidate: () => isLargestImagePaintCandidate,
   isLargestTextPaintCandidate: () => isLargestTextPaintCandidate,
   isLayerTreeHostImplSnapshot: () => isLayerTreeHostImplSnapshot,
@@ -14556,6 +14611,7 @@ __export(TraceEvents_exports, {
   isMarkDOMContent: () => isMarkDOMContent,
   isMarkLoad: () => isMarkLoad,
   isMarkerEvent: () => isMarkerEvent,
+  isMetaCharsetCheck: () => isMetaCharsetCheck,
   isNavigationStart: () => isNavigationStart,
   isNeedsBeginFrameChanged: () => isNeedsBeginFrameChanged,
   isNestableAsyncPhase: () => isNestableAsyncPhase,
@@ -14574,6 +14630,7 @@ __export(TraceEvents_exports, {
   isPhaseAsync: () => isPhaseAsync,
   isPipelineReporter: () => isPipelineReporter,
   isPrePaint: () => isPrePaint,
+  isPreloadRenderBlockingStatusChangeEvent: () => isPreloadRenderBlockingStatusChangeEvent,
   isProcessName: () => isProcessName,
   isProfile: () => isProfile,
   isProfileCall: () => isProfileCall,
@@ -14607,6 +14664,8 @@ __export(TraceEvents_exports, {
   isScrollLayer: () => isScrollLayer,
   isSelectorStats: () => isSelectorStats,
   isSetLayerId: () => isSetLayerId,
+  isSoftLargestContentfulPaintCandidate: () => isSoftLargestContentfulPaintCandidate,
+  isSoftNavigationStart: () => isSoftNavigationStart,
   isStyleInvalidatorInvalidationTracking: () => isStyleInvalidatorInvalidationTracking,
   isStyleRecalcInvalidationTracking: () => isStyleRecalcInvalidationTracking,
   isSyntheticAnimation: () => isSyntheticAnimation,
@@ -14637,7 +14696,8 @@ __export(TraceEvents_exports, {
   isWebSocketSendHandshakeRequest: () => isWebSocketSendHandshakeRequest,
   isWebSocketTraceEvent: () => isWebSocketTraceEvent,
   isWebSocketTransfer: () => isWebSocketTransfer,
-  objectIsCallFrame: () => objectIsCallFrame
+  objectIsCallFrame: () => objectIsCallFrame,
+  objectIsEvent: () => objectIsEvent
 });
 function isNestableAsyncPhase(phase) {
   return phase === Phase.ASYNC_NESTABLE_START || phase === Phase.ASYNC_NESTABLE_END || phase === Phase.ASYNC_NESTABLE_INSTANT;
@@ -14647,6 +14707,9 @@ function isPhaseAsync(phase) {
 }
 function isFlowPhase(phase) {
   return phase === Phase.FLOW_START || phase === Phase.FLOW_STEP || phase === Phase.FLOW_END;
+}
+function objectIsEvent(obj) {
+  return "cat" in obj && "name" in obj && "ts" in obj;
 }
 function objectIsCallFrame(object) {
   return "functionName" in object && typeof object.functionName === "string" && ("scriptId" in object && (typeof object.scriptId === "string" || typeof object.scriptId === "number")) && ("columnNumber" in object && typeof object.columnNumber === "number") && ("lineNumber" in object && typeof object.lineNumber === "number") && ("url" in object && typeof object.url === "string");
@@ -14669,14 +14732,17 @@ function isLegacySyntheticScreenshot(event) {
 function isScreenshot(event) {
   return event.name === Name.SCREENSHOT && "source_id" in (event.args ?? {});
 }
+function isSoftNavigationStart(event) {
+  return event.name === Name.SOFT_NAVIGATION_START;
+}
 function isMarkerEvent(event) {
-  if (event.ph === Phase.INSTANT || event.ph === Phase.MARK) {
+  if (event.ph === Phase.INSTANT || Phase.ASYNC_NESTABLE_INSTANT || event.ph === Phase.MARK) {
     return markerTypeGuards.some((fn) => fn(event));
   }
   return false;
 }
 function eventIsPageLoadEvent(event) {
-  if (event.ph === Phase.INSTANT || event.ph === Phase.MARK) {
+  if (event.ph === Phase.INSTANT || Phase.ASYNC_NESTABLE_INSTANT || event.ph === Phase.MARK) {
     return pageLoadEventTypeGuards.some((fn) => fn(event));
   }
   return false;
@@ -14698,6 +14764,9 @@ function isBeginCommitCompositorFrame(event) {
 }
 function isParseMetaViewport(event) {
   return event.name === Name.PARSE_META_VIEWPORT;
+}
+function isMetaCharsetCheck(event) {
+  return event.name === Name.META_CHARSET_CHECK;
 }
 function isLinkPreconnect(event) {
   return event.name === Name.LINK_PRECONNECT;
@@ -14734,6 +14803,9 @@ function isPipelineReporter(event) {
 }
 function isSyntheticBased(event) {
   return "rawSourceEvent" in event;
+}
+function isJSSample(event) {
+  return event.name === Name.JS_SAMPLE;
 }
 function isSyntheticInteraction(event) {
   return Boolean("interactionId" in event && event.args?.data && "beginEvent" in event.args.data && "endEvent" in event.args.data);
@@ -14884,10 +14956,13 @@ function isLayoutInvalidationTracking(event) {
   return event.name === Name.LAYOUT_INVALIDATION_TRACKING;
 }
 function isFirstContentfulPaint(event) {
-  return event.name === "firstContentfulPaint";
+  return event.name === Name.MARK_FCP;
 }
-function isLargestContentfulPaintCandidate(event) {
-  return event.name === Name.MARK_LCP_CANDIDATE;
+function isAnyLargestContentfulPaintCandidate(event) {
+  return event.name === Name.MARK_LCP_CANDIDATE || event.name === Name.MARK_LCP_CANDIDATE_FOR_SOFT_NAVIGATION;
+}
+function isSoftLargestContentfulPaintCandidate(event) {
+  return event.name === Name.MARK_LCP_CANDIDATE_FOR_SOFT_NAVIGATION;
 }
 function isLargestImagePaintCandidate(event) {
   return event.name === "LargestImagePaint::Candidate";
@@ -14896,13 +14971,13 @@ function isLargestTextPaintCandidate(event) {
   return event.name === "LargestTextPaint::Candidate";
 }
 function isMarkLoad(event) {
-  return event.name === "MarkLoad";
+  return event.name === Name.MARK_LOAD;
 }
 function isFirstPaint(event) {
-  return event.name === "firstPaint";
+  return event.name === Name.MARK_FIRST_PAINT;
 }
 function isMarkDOMContent(event) {
-  return event.name === "MarkDOMContent";
+  return event.name === Name.MARK_DOM_CONTENT;
 }
 function isInteractiveTime(event) {
   return event.name === "InteractiveTime";
@@ -14965,7 +15040,7 @@ function isPrePaint(event) {
   return event.name === "PrePaint";
 }
 function isNavigationStart(event) {
-  return event.name === "navigationStart" && event.args?.data?.documentLoaderURL !== "";
+  return event.name === Name.NAVIGATION_START && event.args?.data?.documentLoaderURL !== "";
 }
 function isDidCommitSameDocumentNavigation(event) {
   return event.name === "RenderFrameHostImpl::DidCommitSameDocumentNavigation" && event.ph === Phase.COMPLETE;
@@ -15154,7 +15229,10 @@ function isRundownScriptSourceLarge(event) {
 function isAnyScriptSourceEvent(event) {
   return event.cat === "disabled-by-default-devtools.v8-source-rundown-sources";
 }
-var Phase, Scope, AuctionWorkletType, markerTypeGuards, MarkerName, pageLoadEventTypeGuards, NO_NAVIGATION, LayoutInvalidationReason, StyleRecalcInvalidationReason, InvalidationEventType, SelectorTimingsKey, Name, Categories;
+function isPreloadRenderBlockingStatusChangeEvent(event) {
+  return event.name === Name.PRELOAD_RENDER_BLOCKING_STATUS_CHANGE;
+}
+var Phase, Scope, VALID_PROFILE_SOURCES, AuctionWorkletType, markerTypeGuards, pageLoadEventTypeGuards, NO_NAVIGATION, LayoutInvalidationReason, StyleRecalcInvalidationReason, InvalidationEventType, SelectorTimingsKey, Name, MarkerName, Categories;
 var init_TraceEvents = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/types/TraceEvents.js"() {
     init_process_global();
@@ -15192,7 +15270,9 @@ var init_TraceEvents = __esm({
       Scope2["PROCESS"] = "p";
       Scope2["GLOBAL"] = "g";
     })(Scope || (Scope = {}));
+    __name(objectIsEvent, "objectIsEvent");
     __name(objectIsCallFrame, "objectIsCallFrame");
+    VALID_PROFILE_SOURCES = ["Inspector", "SelfProfiling", "Internal"];
     __name(isRunTask, "isRunTask");
     (function(AuctionWorkletType2) {
       AuctionWorkletType2["BIDDER"] = "bidder";
@@ -15204,15 +15284,16 @@ var init_TraceEvents = __esm({
     __name(isLegacyScreenshot, "isLegacyScreenshot");
     __name(isLegacySyntheticScreenshot, "isLegacySyntheticScreenshot");
     __name(isScreenshot, "isScreenshot");
+    __name(isSoftNavigationStart, "isSoftNavigationStart");
     markerTypeGuards = [
       isMarkDOMContent,
       isMarkLoad,
       isFirstPaint,
       isFirstContentfulPaint,
-      isLargestContentfulPaintCandidate,
-      isNavigationStart
+      isAnyLargestContentfulPaintCandidate,
+      isNavigationStart,
+      isSoftNavigationStart
     ];
-    MarkerName = ["MarkDOMContent", "MarkLoad", "firstPaint", "firstContentfulPaint", "largestContentfulPaint::Candidate"];
     __name(isMarkerEvent, "isMarkerEvent");
     pageLoadEventTypeGuards = [
       ...markerTypeGuards,
@@ -15240,6 +15321,7 @@ var init_TraceEvents = __esm({
     __name(isStyleInvalidatorInvalidationTracking, "isStyleInvalidatorInvalidationTracking");
     __name(isBeginCommitCompositorFrame, "isBeginCommitCompositorFrame");
     __name(isParseMetaViewport, "isParseMetaViewport");
+    __name(isMetaCharsetCheck, "isMetaCharsetCheck");
     __name(isLinkPreconnect, "isLinkPreconnect");
     __name(isScheduleStyleRecalculation, "isScheduleStyleRecalculation");
     __name(isRenderFrameImplCreateChildFrame, "isRenderFrameImplCreateChildFrame");
@@ -15252,6 +15334,7 @@ var init_TraceEvents = __esm({
     __name(isAnimationFramePresentation, "isAnimationFramePresentation");
     __name(isPipelineReporter, "isPipelineReporter");
     __name(isSyntheticBased, "isSyntheticBased");
+    __name(isJSSample, "isJSSample");
     __name(isSyntheticInteraction, "isSyntheticInteraction");
     __name(isDrawFrame, "isDrawFrame");
     __name(isBeginFrame, "isBeginFrame");
@@ -15314,7 +15397,8 @@ var init_TraceEvents = __esm({
     __name(isLayoutShift, "isLayoutShift");
     __name(isLayoutInvalidationTracking, "isLayoutInvalidationTracking");
     __name(isFirstContentfulPaint, "isFirstContentfulPaint");
-    __name(isLargestContentfulPaintCandidate, "isLargestContentfulPaintCandidate");
+    __name(isAnyLargestContentfulPaintCandidate, "isAnyLargestContentfulPaintCandidate");
+    __name(isSoftLargestContentfulPaintCandidate, "isSoftLargestContentfulPaintCandidate");
     __name(isLargestImagePaintCandidate, "isLargestImagePaintCandidate");
     __name(isLargestTextPaintCandidate, "isLargestTextPaintCandidate");
     __name(isMarkLoad, "isMarkLoad");
@@ -15470,6 +15554,7 @@ var init_TraceEvents = __esm({
       Name2["SELECTOR_STATS"] = "SelectorStats";
       Name2["BEGIN_COMMIT_COMPOSITOR_FRAME"] = "BeginCommitCompositorFrame";
       Name2["PARSE_META_VIEWPORT"] = "ParseMetaViewport";
+      Name2["META_CHARSET_CHECK"] = "MetaCharsetCheck";
       Name2["SCROLL_LAYER"] = "ScrollLayer";
       Name2["UPDATE_LAYER"] = "UpdateLayer";
       Name2["PAINT_SETUP"] = "PaintSetup";
@@ -15503,8 +15588,10 @@ var init_TraceEvents = __esm({
       Name2["MARK_FIRST_PAINT"] = "firstPaint";
       Name2["MARK_FCP"] = "firstContentfulPaint";
       Name2["MARK_LCP_CANDIDATE"] = "largestContentfulPaint::Candidate";
+      Name2["MARK_LCP_CANDIDATE_FOR_SOFT_NAVIGATION"] = "largestContentfulPaint::CandidateForSoftNavigation";
       Name2["MARK_LCP_INVALIDATE"] = "largestContentfulPaint::Invalidate";
       Name2["NAVIGATION_START"] = "navigationStart";
+      Name2["SOFT_NAVIGATION_START"] = "SoftNavigationStart";
       Name2["CONSOLE_TIME"] = "ConsoleTime";
       Name2["USER_TIMING"] = "UserTiming";
       Name2["INTERACTIVE_TIME"] = "InteractiveTime";
@@ -15558,7 +15645,18 @@ var init_TraceEvents = __esm({
       Name2["SYNTHETIC_NETWORK_REQUEST"] = "SyntheticNetworkRequest";
       Name2["USER_TIMING_MEASURE"] = "UserTiming::Measure";
       Name2["LINK_PRECONNECT"] = "LinkPreconnect";
+      Name2["PRELOAD_RENDER_BLOCKING_STATUS_CHANGE"] = "PreloadRenderBlockingStatusChange";
     })(Name || (Name = {}));
+    MarkerName = [
+      Name.MARK_DOM_CONTENT,
+      Name.MARK_LOAD,
+      Name.MARK_FIRST_PAINT,
+      Name.MARK_FCP,
+      Name.MARK_LCP_CANDIDATE,
+      Name.MARK_LCP_CANDIDATE_FOR_SOFT_NAVIGATION,
+      Name.NAVIGATION_START,
+      Name.SOFT_NAVIGATION_START
+    ];
     Categories = {
       Console: "blink.console",
       UserTiming: "blink.user_timing",
@@ -15570,6 +15668,7 @@ var init_TraceEvents = __esm({
     __name(isRundownScriptSource, "isRundownScriptSource");
     __name(isRundownScriptSourceLarge, "isRundownScriptSourceLarge");
     __name(isAnyScriptSourceEvent, "isAnyScriptSourceEvent");
+    __name(isPreloadRenderBlockingStatusChangeEvent, "isPreloadRenderBlockingStatusChangeEvent");
   }
 });
 
@@ -15759,6 +15858,7 @@ var ArrayUtilities_exports = {};
 __export(ArrayUtilities_exports, {
   DEFAULT_COMPARATOR: () => DEFAULT_COMPARATOR,
   arrayDoesNotContainNullOrUndefined: () => arrayDoesNotContainNullOrUndefined,
+  assertArrayIsSorted: () => assertArrayIsSorted,
   binaryIndexOf: () => binaryIndexOf,
   intersectOrdered: () => intersectOrdered,
   lowerBound: () => lowerBound,
@@ -15767,6 +15867,7 @@ __export(ArrayUtilities_exports, {
   nearestIndexFromEnd: () => nearestIndexFromEnd,
   removeElement: () => removeElement,
   sortRange: () => sortRange,
+  swap: () => swap,
   upperBound: () => upperBound
 });
 function swap(array, i1, i2) {
@@ -15906,6 +16007,16 @@ function nearestIndexFromEnd(arr, predicate) {
 function arrayDoesNotContainNullOrUndefined(arr) {
   return !arr.includes(null) && !arr.includes(void 0);
 }
+function assertArrayIsSorted(arr, compareFn) {
+  const comparator = compareFn || DEFAULT_COMPARATOR;
+  for (let i = 0; i < arr.length - 1; i++) {
+    const current = arr[i];
+    const next = arr[i + 1];
+    if (comparator(current, next) > 0) {
+      throw new Error(`Array is not sorted at index ${i}: ${JSON.stringify(current)} > ${JSON.stringify(next)}`);
+    }
+  }
+}
 var removeElement, binaryIndexOf, intersectOrdered, mergeOrdered, DEFAULT_COMPARATOR;
 var init_ArrayUtilities = __esm({
   "node_modules/@paulirish/trace_engine/core/platform/ArrayUtilities.js"() {
@@ -15951,6 +16062,7 @@ var init_ArrayUtilities = __esm({
     __name(nearestIndexFromBeginning, "nearestIndexFromBeginning");
     __name(nearestIndexFromEnd, "nearestIndexFromEnd");
     __name(arrayDoesNotContainNullOrUndefined, "arrayDoesNotContainNullOrUndefined");
+    __name(assertArrayIsSorted, "assertArrayIsSorted");
   }
 });
 
@@ -15982,10 +16094,15 @@ var init_DevToolsPath = __esm({
   }
 });
 
-// node_modules/@paulirish/trace_engine/core/platform/DOMUtilities.js
-var init_DOMUtilities = __esm({
-  "node_modules/@paulirish/trace_engine/core/platform/DOMUtilities.js"() {
+// node_modules/@paulirish/trace_engine/core/platform/HostRuntime.js
+var IS_NODE, IS_BROWSER;
+var init_HostRuntime = __esm({
+  "node_modules/@paulirish/trace_engine/core/platform/HostRuntime.js"() {
     init_process_global();
+    IS_NODE = typeof process !== "undefined" && process.versions?.node !== null;
+    IS_BROWSER = // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore 'window' is not available when type-checking against node.js types.
+    typeof window !== "undefined" || typeof self !== "undefined" && typeof self.postMessage === "function";
   }
 });
 
@@ -16240,7 +16357,7 @@ var init_platform = __esm({
     init_Constructor();
     init_DateUtilities();
     init_DevToolsPath();
-    init_DOMUtilities();
+    init_HostRuntime();
     init_KeyboardUtilities();
     init_MapUtilities();
     init_MimeType();
@@ -16361,9 +16478,14 @@ __export(Timing_exports3, {
   windowFitsInsideBounds: () => windowFitsInsideBounds,
   windowsEqual: () => windowsEqual
 });
-function timeStampForEventAdjustedByClosestNavigation(event, traceBounds2, navigationsByNavigationId2, navigationsByFrameId2) {
+function timeStampForEventAdjustedByClosestNavigation(event, traceBounds2, navigationsByNavigationId2, softNavigationsById2, navigationsByFrameId2) {
   let eventTimeStamp = event.ts - traceBounds2.min;
-  if (event.args?.data?.navigationId) {
+  if (event.name === TraceEvents_exports.Name.MARK_LCP_CANDIDATE_FOR_SOFT_NAVIGATION && event.args?.data?.performanceTimelineNavigationId) {
+    const navigationForEvent = softNavigationsById2.get(event.args.data.performanceTimelineNavigationId);
+    if (navigationForEvent) {
+      eventTimeStamp = event.ts - navigationForEvent.ts;
+    }
+  } else if (event.args?.data?.navigationId) {
     const navigationForEvent = navigationsByNavigationId2.get(event.args.data.navigationId);
     if (navigationForEvent) {
       eventTimeStamp = event.ts - navigationForEvent.ts;
@@ -16572,6 +16694,7 @@ __export(Trace_exports, {
   makeZeroBasedCallFrame: () => makeZeroBasedCallFrame,
   mergeEventsInOrder: () => mergeEventsInOrder,
   parseDevtoolsDetails: () => parseDevtoolsDetails,
+  rawCallFrameForEntry: () => rawCallFrameForEntry,
   sortTraceEventsInPlace: () => sortTraceEventsInPlace,
   stackTraceInEvent: () => stackTraceInEvent
 });
@@ -16613,7 +16736,7 @@ function stackTraceInEvent(event) {
   return null;
 }
 function extractOriginFromTrace(firstNavigationURL) {
-  const url = new URL(firstNavigationURL);
+  const url = URL.parse(firstNavigationURL);
   if (url) {
     if (url.host.startsWith("www.")) {
       return url.host.slice(4);
@@ -16942,6 +17065,16 @@ function getStackTraceTopCallFrameInEventPayload(event) {
     }
   }
 }
+function rawCallFrameForEntry(entry) {
+  if (TraceEvents_exports.isProfileCall(entry)) {
+    return entry.callFrame;
+  }
+  const topCallFrame = getStackTraceTopCallFrameInEventPayload(entry);
+  if (topCallFrame) {
+    return topCallFrame;
+  }
+  return null;
+}
 function makeZeroBasedCallFrame(callFrame) {
   const normalizedCallFrame = { ...callFrame };
   normalizedCallFrame.lineNumber = callFrame.lineNumber && callFrame.lineNumber - 1;
@@ -16950,10 +17083,7 @@ function makeZeroBasedCallFrame(callFrame) {
 }
 function getRawLineAndColumnNumbersForEvent(event) {
   if (!event.args?.data) {
-    return {
-      lineNumber: void 0,
-      columnNumber: void 0
-    };
+    return {};
   }
   let lineNumber = void 0;
   let columnNumber = void 0;
@@ -17010,10 +17140,10 @@ function findPreviousEventBeforeTimestamp(candidates, ts) {
   const index = ArrayUtilities_exports.nearestIndexFromEnd(candidates, (candidate) => candidate.ts < ts);
   return index === null ? null : candidates[index];
 }
-function forEachEvent(events, config3) {
-  const globalStartTime = config3.startTime ?? Timing_exports.Micro(0);
-  const globalEndTime = config3.endTime || Timing_exports.Micro(Infinity);
-  const ignoreAsyncEvents = config3.ignoreAsyncEvents === false ? false : true;
+function forEachEvent(events, config4) {
+  const globalStartTime = config4.startTime ?? Timing_exports.Micro(0);
+  const globalEndTime = config4.endTime || Timing_exports.Micro(Infinity);
+  const ignoreAsyncEvents = config4.ignoreAsyncEvents === false ? false : true;
   const stack = [];
   const startEventIndex = topLevelEventIndexEndingAfter(events, globalStartTime);
   for (let i = startEventIndex; i < events.length; i++) {
@@ -17033,24 +17163,24 @@ function forEachEvent(events, config3) {
     let lastEventEndTime = lastEventOnStack ? eventTimingsMicroSeconds(lastEventOnStack).endTime : null;
     while (lastEventOnStack && lastEventEndTime && lastEventEndTime <= currentEventTimings.startTime) {
       stack.pop();
-      config3.onEndEvent(lastEventOnStack);
+      config4.onEndEvent(lastEventOnStack);
       lastEventOnStack = stack.at(-1);
       lastEventEndTime = lastEventOnStack ? eventTimingsMicroSeconds(lastEventOnStack).endTime : null;
     }
-    if (config3.eventFilter && !config3.eventFilter(currentEvent)) {
+    if (config4.eventFilter && !config4.eventFilter(currentEvent)) {
       continue;
     }
     if (currentEventTimings.duration) {
-      config3.onStartEvent(currentEvent);
+      config4.onStartEvent(currentEvent);
       stack.push(currentEvent);
-    } else if (config3.onInstantEvent) {
-      config3.onInstantEvent(currentEvent);
+    } else if (config4.onInstantEvent) {
+      config4.onInstantEvent(currentEvent);
     }
   }
   while (stack.length) {
     const last = stack.pop();
     if (last) {
-      config3.onEndEvent(last);
+      config4.onEndEvent(last);
     }
   }
 }
@@ -17104,6 +17234,7 @@ var init_Trace = __esm({
     __name(getZeroIndexedLineAndColumnForEvent, "getZeroIndexedLineAndColumnForEvent");
     __name(getZeroIndexedStackTraceInEventPayload, "getZeroIndexedStackTraceInEventPayload");
     __name(getStackTraceTopCallFrameInEventPayload, "getStackTraceTopCallFrameInEventPayload");
+    __name(rawCallFrameForEntry, "rawCallFrameForEntry");
     __name(makeZeroBasedCallFrame, "makeZeroBasedCallFrame");
     __name(getRawLineAndColumnNumbersForEvent, "getRawLineAndColumnNumbersForEvent");
     __name(frameIDForEvent, "frameIDForEvent");
@@ -17860,19 +17991,13 @@ var init_SamplesIntegrator = __esm({
         if (showAllEvents) {
           return;
         }
-        let previousNativeFrameName = null;
         let j = 0;
         for (let i = 0; i < stack.length; ++i) {
           const frame = stack[i].callFrame;
           const nativeRuntimeFrame = _a.isNativeRuntimeFrame(frame);
-          if (nativeRuntimeFrame && !_a.showNativeName(frame.functionName, engineConfig.includeRuntimeCallStats)) {
+          if (nativeRuntimeFrame) {
             continue;
           }
-          const nativeFrameName = nativeRuntimeFrame ? _a.nativeGroup(frame.functionName) : null;
-          if (previousNativeFrameName && previousNativeFrameName === nativeFrameName) {
-            continue;
-          }
-          previousNativeFrameName = nativeFrameName;
           stack[j++] = stack[i];
         }
         stack.length = j;
@@ -17955,8 +18080,8 @@ function reset() {
   animationFramePresentations = /* @__PURE__ */ new Map();
   isEnabled = false;
 }
-function handleUserConfig(config3) {
-  isEnabled = config3.enableAnimationsFrameHandler;
+function handleUserConfig(config4) {
+  isEnabled = config4.enableAnimationsFrameHandler;
 }
 function handleEvent(event) {
   if (!isEnabled) {
@@ -18340,6 +18465,7 @@ function makeNewTraceBounds() {
 function reset5() {
   navigationsByFrameId = /* @__PURE__ */ new Map();
   navigationsByNavigationId = /* @__PURE__ */ new Map();
+  softNavigationsById = /* @__PURE__ */ new Map();
   finalDisplayUrlByNavigationId = /* @__PURE__ */ new Map();
   processNames = /* @__PURE__ */ new Map();
   mainFrameNavigations = [];
@@ -18483,6 +18609,9 @@ function handleEvent5(event) {
     }
     return;
   }
+  if (TraceEvents_exports.isSoftNavigationStart(event)) {
+    softNavigationsById.set(event.args.context.performanceTimelineNavigationId, event);
+  }
   if (TraceEvents_exports.isResourceSendRequest(event)) {
     if (event.args.data.resourceType !== "Document") {
       return;
@@ -18505,7 +18634,8 @@ function handleEvent5(event) {
     return;
   }
 }
-async function finalize5() {
+async function finalize5(options) {
+  config = { showAllEvents: Boolean(options?.showAllEvents) };
   if (traceStartedTimeFromTracingStartedEvent >= 0) {
     traceBounds.min = traceStartedTimeFromTracingStartedEvent;
   }
@@ -18549,6 +18679,7 @@ async function finalize5() {
 }
 function data5() {
   return {
+    config,
     traceBounds,
     browserProcessId,
     browserThreadId,
@@ -18561,6 +18692,7 @@ function data5() {
     mainFrameURL,
     navigationsByFrameId,
     navigationsByNavigationId,
+    softNavigationsById,
     finalDisplayUrlByNavigationId,
     threadsInProcess,
     rendererProcessesByFrame: rendererProcessesByFrameId,
@@ -18570,7 +18702,7 @@ function data5() {
     traceIsGeneric
   };
 }
-var rendererProcessesByFrameId, mainFrameId, mainFrameURL, framesByProcessId, browserProcessId, browserThreadId, gpuProcessId, gpuThreadId, viewportRect, devicePixelRatio2, processNames, topLevelRendererIds, traceBounds, navigationsByFrameId, navigationsByNavigationId, finalDisplayUrlByNavigationId, mainFrameNavigations, threadsInProcess, traceStartedTimeFromTracingStartedEvent, eventPhasesOfInterestForTraceBounds, traceIsGeneric, CHROME_WEB_TRACE_EVENTS;
+var config, rendererProcessesByFrameId, mainFrameId, mainFrameURL, framesByProcessId, browserProcessId, browserThreadId, gpuProcessId, gpuThreadId, viewportRect, devicePixelRatio2, processNames, topLevelRendererIds, traceBounds, navigationsByFrameId, navigationsByNavigationId, softNavigationsById, finalDisplayUrlByNavigationId, mainFrameNavigations, threadsInProcess, traceStartedTimeFromTracingStartedEvent, eventPhasesOfInterestForTraceBounds, traceIsGeneric, CHROME_WEB_TRACE_EVENTS;
 var init_MetaHandler = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/handlers/MetaHandler.js"() {
     init_process_global();
@@ -18593,6 +18725,7 @@ var init_MetaHandler = __esm({
     traceBounds = makeNewTraceBounds();
     navigationsByFrameId = /* @__PURE__ */ new Map();
     navigationsByNavigationId = /* @__PURE__ */ new Map();
+    softNavigationsById = /* @__PURE__ */ new Map();
     finalDisplayUrlByNavigationId = /* @__PURE__ */ new Map();
     mainFrameNavigations = [];
     threadsInProcess = /* @__PURE__ */ new Map();
@@ -18658,6 +18791,7 @@ function reset6() {
   networkRequestEventByInitiatorUrl = /* @__PURE__ */ new Map();
   eventToInitiatorMap = /* @__PURE__ */ new Map();
   webSocketData = /* @__PURE__ */ new Map();
+  requestIdsByURL = /* @__PURE__ */ new Map();
   entityMappings = {
     eventsByEntity: /* @__PURE__ */ new Map(),
     entityByEvent: /* @__PURE__ */ new Map(),
@@ -18694,6 +18828,9 @@ function handleEvent6(event) {
   if (TraceEvents_exports.isResourceMarkAsCached(event)) {
     storeTraceEventWithRequestId(event.args.data.requestId, "resourceMarkAsCached", event);
     return;
+  }
+  if (TraceEvents_exports.isPreloadRenderBlockingStatusChangeEvent(event)) {
+    storeTraceEventWithRequestId(event.args.data.requestId, "preloadRenderBlockingStatusChange", [event]);
   }
   if (TraceEvents_exports.isWebSocketCreate(event) || TraceEvents_exports.isWebSocketInfo(event) || TraceEvents_exports.isWebSocketTransfer(event)) {
     const identifier = event.args.data.identifier;
@@ -18845,11 +18982,13 @@ async function finalize6() {
     const proxyNegotiation = timing ? Timing_exports.Micro((timing.proxyEnd - timing.proxyStart) * MILLISECONDS_TO_MICROSECONDS) : Timing_exports.Micro(0);
     const requestSent = timing ? Timing_exports.Micro((timing.sendEnd - timing.sendStart) * MILLISECONDS_TO_MICROSECONDS) : Timing_exports.Micro(0);
     const initialConnection = timing ? Timing_exports.Micro((timing.connectEnd - timing.connectStart) * MILLISECONDS_TO_MICROSECONDS) : Timing_exports.Micro(0);
-    const { frame, url, renderBlocking } = finalSendRequest.args.data;
+    const { frame, url, renderBlocking: sendRequestIsRenderBlocking } = finalSendRequest.args.data;
     const { encodedDataLength, decodedBodyLength } = request.resourceFinish ? request.resourceFinish.args.data : { encodedDataLength: 0, decodedBodyLength: 0 };
     const parsedUrl = new URL(url);
     const isHttps = parsedUrl.protocol === "https:";
     const requestingFrameUrl = Trace_exports.activeURLForFrameAtTime(frame, finalSendRequest.ts, rendererProcessesByFrame) || "";
+    const preloadRenderBlockingStatusChange = request.preloadRenderBlockingStatusChange?.at(-1)?.args.data.renderBlocking;
+    const isRenderBlocking = preloadRenderBlockingStatusChange ?? sendRequestIsRenderBlocking ?? "non_blocking";
     const networkEvent = SyntheticEvents_exports.SyntheticEventsManager.registerSyntheticEvent({
       rawSourceEvent: finalSendRequest,
       args: {
@@ -18889,8 +19028,7 @@ async function finalize6() {
           initialPriority,
           protocol: request.receiveResponse?.args.data.protocol ?? "unknown",
           redirects,
-          // In the event the property isn't set, assume non-blocking.
-          renderBlocking: renderBlocking ?? "non_blocking",
+          renderBlocking: isRenderBlocking,
           requestId,
           requestingFrameUrl,
           requestMethod: finalSendRequest.args.data.requestMethod,
@@ -18922,6 +19060,9 @@ async function finalize6() {
     });
     requestsByTime.push(networkEvent);
     requestsById.set(networkEvent.args.data.requestId, networkEvent);
+    const requestsForUrl = requestIdsByURL.get(networkEvent.args.data.url) ?? [];
+    requestsForUrl.push(networkEvent.args.data.requestId);
+    requestIdsByURL.set(networkEvent.args.data.url, requestsForUrl);
     addNetworkRequestToEntityMapping(networkEvent, entityMappings, request);
     const initiatorUrl = networkEvent.args.data.initiator?.url || Trace_exports.getStackTraceTopCallFrameInEventPayload(networkEvent)?.url;
     if (initiatorUrl) {
@@ -18944,7 +19085,8 @@ function data6() {
   return {
     byId: requestsById,
     byTime: requestsByTime,
-    eventToInitiator: eventToInitiatorMap,
+    requestIdsByURL,
+    incompleteInitiator: eventToInitiatorMap,
     webSocket: [...webSocketData.values()],
     entityMappings: {
       entityByEvent: entityMappings.entityByEvent,
@@ -18999,7 +19141,7 @@ function createSyntheticWebSocketConnection(startEvent, endEvent, firstRecordedE
     }
   };
 }
-var MILLISECONDS_TO_MICROSECONDS, SECONDS_TO_MICROSECONDS, webSocketData, linkPreconnectEvents, requestMap, requestsById, requestsByTime, networkRequestEventByInitiatorUrl, eventToInitiatorMap, entityMappings;
+var MILLISECONDS_TO_MICROSECONDS, SECONDS_TO_MICROSECONDS, webSocketData, linkPreconnectEvents, requestMap, requestsById, requestsByTime, requestIdsByURL, networkRequestEventByInitiatorUrl, eventToInitiatorMap, entityMappings;
 var init_NetworkRequestsHandler = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/handlers/NetworkRequestsHandler.js"() {
     init_process_global();
@@ -19015,6 +19157,7 @@ var init_NetworkRequestsHandler = __esm({
     requestMap = /* @__PURE__ */ new Map();
     requestsById = /* @__PURE__ */ new Map();
     requestsByTime = [];
+    requestIdsByURL = /* @__PURE__ */ new Map();
     networkRequestEventByInitiatorUrl = /* @__PURE__ */ new Map();
     eventToInitiatorMap = /* @__PURE__ */ new Map();
     entityMappings = {
@@ -19051,7 +19194,7 @@ var init_ProfileTreeModel = __esm({
       id;
       parent;
       children;
-      functionName;
+      originalFunctionName = null;
       depth;
       deoptReason;
       constructor(callFrame) {
@@ -19060,7 +19203,6 @@ var init_ProfileTreeModel = __esm({
         this.self = 0;
         this.total = 0;
         this.id = 0;
-        this.functionName = callFrame.functionName;
         this.parent = null;
         this.children = [];
       }
@@ -19076,11 +19218,11 @@ var init_ProfileTreeModel = __esm({
       get columnNumber() {
         return this.callFrame.columnNumber;
       }
-      setFunctionName(name) {
-        if (name === null) {
-          return;
-        }
-        this.functionName = name;
+      get functionName() {
+        return this.originalFunctionName ?? this.callFrame.functionName;
+      }
+      setOriginalFunctionName(name) {
+        this.originalFunctionName = name;
       }
     };
     ProfileTreeModel = class {
@@ -19200,7 +19342,15 @@ var init_CPUProfileDataModel = __esm({
        * for CPU profiles coming from traces.
        */
       traceIds;
+      /**
+       * Each item in the `lines` array contains the script line executing
+       * when the sample in that array position was taken.
+       */
       lines;
+      /**
+       * Same as `lines` above, but with the script column.
+       */
+      columns;
       totalHitCount;
       profileHead;
       /**
@@ -19230,6 +19380,7 @@ var init_CPUProfileDataModel = __esm({
         this.traceIds = profile.traceIds;
         this.samples = profile.samples;
         this.lines = profile.lines;
+        this.columns = profile.columns;
         this.totalHitCount = 0;
         this.profileHead = this.translateProfileTree(profile.nodes);
         this.initialize(this.profileHead);
@@ -19619,8 +19770,18 @@ __export(SamplesHandler_exports, {
   reset: () => reset7
 });
 function parseCPUProfileData(parseOptions) {
+  const priorityList = parseOptions.isCPUProfile ? PROFILE_SOURCES_BY_PRIORITY.cpuProfile : PROFILE_SOURCES_BY_PRIORITY.performanceTrace;
   for (const [processId, profiles] of preprocessedData) {
+    const profilesByThread = /* @__PURE__ */ new Map();
     for (const [profileId, preProcessedData] of profiles) {
+      const threadId = preProcessedData.threadId;
+      if (threadId === void 0) {
+        continue;
+      }
+      const listForThread = MapUtilities_exports.getWithDefault(profilesByThread, threadId, () => []);
+      listForThread.push({ id: profileId, data: preProcessedData });
+    }
+    for (const [threadId, candidates] of profilesByThread) {
       let buildProfileCallsForCPUProfile = function() {
         profileModel.forEachFrame(openFrameCallback, closeFrameCallback);
         function openFrameCallback(depth, node, sampleIndex, timeStampMilliseconds) {
@@ -19629,7 +19790,7 @@ function parseCPUProfileData(parseOptions) {
           }
           const ts = Timing_exports3.milliToMicro(Timing_exports.Milli(timeStampMilliseconds));
           const nodeId = node.id;
-          const profileCall = Trace_exports.makeProfileCall(node, profileId, sampleIndex, ts, processId, threadId);
+          const profileCall = Trace_exports.makeProfileCall(node, selectedProfileId, sampleIndex, ts, processId, threadId);
           finalizedData.profileCalls.push(profileCall);
           indexStack.push(finalizedData.profileCalls.length - 1);
           const traceEntryNode = TreeHelpers_exports.makeEmptyTraceEntryNode(profileCall, nodeId);
@@ -19648,7 +19809,7 @@ function parseCPUProfileData(parseOptions) {
           }
           const { callFrame, ts, pid, tid } = profileCall;
           const traceEntryNode = entryToNode.get(profileCall);
-          if (callFrame === void 0 || ts === void 0 || pid === void 0 || profileId === void 0 || tid === void 0 || traceEntryNode === void 0) {
+          if (callFrame === void 0 || ts === void 0 || pid === void 0 || selectedProfileId === void 0 || tid === void 0 || traceEntryNode === void 0) {
             return;
           }
           const dur = Timing_exports3.milliToMicro(Timing_exports.Milli(durMs));
@@ -19667,20 +19828,32 @@ function parseCPUProfileData(parseOptions) {
         __name(closeFrameCallback, "closeFrameCallback");
       };
       __name(buildProfileCallsForCPUProfile, "buildProfileCallsForCPUProfile");
-      const threadId = preProcessedData.threadId;
-      if (!preProcessedData.rawProfile.nodes.length || threadId === void 0) {
+      if (!candidates.length) {
+        continue;
+      }
+      let chosen = candidates[0];
+      for (const source of priorityList) {
+        const match = candidates.find((p) => p.data.source === source);
+        if (match) {
+          chosen = match;
+          break;
+        }
+      }
+      const chosenData = chosen.data;
+      if (!chosenData.rawProfile.nodes.length) {
         continue;
       }
       const indexStack = [];
-      const profileModel = new CPUProfileDataModel_exports.CPUProfileDataModel(preProcessedData.rawProfile);
+      const profileModel = new CPUProfileDataModel_exports.CPUProfileDataModel(chosenData.rawProfile);
       const profileTree = TreeHelpers_exports.makeEmptyTraceEntryTree();
       profileTree.maxDepth = profileModel.maxDepth;
+      const selectedProfileId = chosen.id;
       const finalizedData = {
-        rawProfile: preProcessedData.rawProfile,
+        rawProfile: chosenData.rawProfile,
         parsedProfile: profileModel,
         profileCalls: [],
         profileTree,
-        profileId
+        profileId: selectedProfileId
       };
       const dataByThread = MapUtilities_exports.getWithDefault(profilesInProcess, processId, () => /* @__PURE__ */ new Map());
       dataByThread.set(threadId, finalizedData);
@@ -19706,6 +19879,7 @@ function handleEvent7(event) {
     const profileData = getOrCreatePreProcessedData(event.pid, event.id);
     profileData.rawProfile.startTime = event.ts;
     profileData.threadId = event.tid;
+    assignProfileSourceIfKnown(profileData, event.args?.data?.source);
     return;
   }
   if (TraceEvents_exports.isProfileChunk(event)) {
@@ -19733,9 +19907,11 @@ function handleEvent7(event) {
     }
     const timeDeltas = event.args.data?.timeDeltas || [];
     const lines = event.args.data?.lines || Array(samples.length).fill(0);
+    const columns = event.args.data?.columns || Array(samples.length).fill(0);
     cdpProfile.samples?.push(...samples);
     cdpProfile.timeDeltas?.push(...timeDeltas);
     cdpProfile.lines?.push(...lines);
+    cdpProfile.columns?.push(...columns);
     if (traceIds) {
       cdpProfile.traceIds ??= {};
       for (const key in traceIds) {
@@ -19750,11 +19926,17 @@ function handleEvent7(event) {
       const timeDeltas2 = cdpProfile.timeDeltas;
       cdpProfile.endTime = timeDeltas2.reduce((x, y) => x + y, cdpProfile.startTime);
     }
+    assignProfileSourceIfKnown(profileData, event.args?.data?.source);
     return;
   }
 }
 async function finalize7(parseOptions = {}) {
   parseCPUProfileData(parseOptions);
+}
+function assignProfileSourceIfKnown(profileData, source) {
+  if (TraceEvents_exports.VALID_PROFILE_SOURCES.includes(source)) {
+    profileData.source = source;
+  }
 }
 function data7() {
   return {
@@ -19771,7 +19953,8 @@ function getOrCreatePreProcessedData(processId, profileId) {
       nodes: [],
       samples: [],
       timeDeltas: [],
-      lines: []
+      lines: [],
+      columns: []
     },
     profileId
   }));
@@ -19784,7 +19967,7 @@ function getProfileCallFunctionName(data31, entry) {
   }
   return entry.callFrame.functionName;
 }
-var profilesInProcess, entryToNode, preprocessedData;
+var profilesInProcess, entryToNode, preprocessedData, PROFILE_SOURCES_BY_PRIORITY;
 var init_SamplesHandler = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/handlers/SamplesHandler.js"() {
     init_process_global();
@@ -19795,10 +19978,15 @@ var init_SamplesHandler = __esm({
     profilesInProcess = /* @__PURE__ */ new Map();
     entryToNode = /* @__PURE__ */ new Map();
     preprocessedData = /* @__PURE__ */ new Map();
+    PROFILE_SOURCES_BY_PRIORITY = {
+      cpuProfile: ["Inspector"],
+      performanceTrace: ["Internal", "Inspector"]
+    };
     __name(parseCPUProfileData, "parseCPUProfileData");
     __name(reset7, "reset");
     __name(handleEvent7, "handleEvent");
     __name(finalize7, "finalize");
+    __name(assignProfileSourceIfKnown, "assignProfileSourceIfKnown");
     __name(data7, "data");
     __name(getOrCreatePreProcessedData, "getOrCreatePreProcessedData");
     __name(getProfileCallFunctionName, "getProfileCallFunctionName");
@@ -19824,7 +20012,7 @@ __export(RendererHandler_exports, {
   sanitizeThreads: () => sanitizeThreads
 });
 function handleUserConfig2(userConfig) {
-  config = userConfig;
+  config2 = userConfig;
 }
 function reset8() {
   processes = /* @__PURE__ */ new Map();
@@ -19980,7 +20168,7 @@ function buildHierarchy(processes2, options) {
       const samplesDataForThread = samplesData.profilesInProcess.get(pid)?.get(tid);
       if (samplesDataForThread) {
         const cpuProfile = samplesDataForThread.parsedProfile;
-        const samplesIntegrator = cpuProfile && new SamplesIntegrator_exports.SamplesIntegrator(cpuProfile, samplesDataForThread.profileId, pid, tid, config);
+        const samplesIntegrator = cpuProfile && new SamplesIntegrator_exports.SamplesIntegrator(cpuProfile, samplesDataForThread.profileId, pid, tid, config2);
         const profileCalls = samplesIntegrator?.buildProfileCalls(thread.entries);
         if (samplesIntegrator && profileCalls) {
           thread.entries = Trace_exports.mergeEventsInOrder(thread.entries, profileCalls);
@@ -20024,7 +20212,7 @@ function makeCompleteEvent(event) {
 function deps3() {
   return ["Meta", "Samples", "AuctionWorklets", "NetworkRequests"];
 }
-var processes, entityMappings2, compositorTileWorkers, entryToNode2, completeEventStack, config, makeRendererProcess, makeRendererThread, getOrCreateRendererProcess, getOrCreateRendererThread;
+var processes, entityMappings2, compositorTileWorkers, entryToNode2, completeEventStack, config2, makeRendererProcess, makeRendererThread, getOrCreateRendererProcess, getOrCreateRendererThread;
 var init_RendererHandler = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/handlers/RendererHandler.js"() {
     init_process_global();
@@ -20046,7 +20234,7 @@ var init_RendererHandler = __esm({
     compositorTileWorkers = Array();
     entryToNode2 = /* @__PURE__ */ new Map();
     completeEventStack = [];
-    config = Configuration_exports.defaults();
+    config2 = Configuration_exports.defaults();
     makeRendererProcess = /* @__PURE__ */ __name(() => ({
       url: null,
       isOnMainFrame: false,
@@ -21716,18 +21904,20 @@ function reset19() {
   pageLoadEventsArray = [];
   allMarkerEvents = [];
   selectedLCPCandidateEvents = /* @__PURE__ */ new Set();
+  metaCharsetCheckEventsByNavigation = /* @__PURE__ */ new Map();
+  metaCharsetCheckEventsArray = [];
 }
 function handleEvent19(event) {
+  if (TraceEvents_exports.isMetaCharsetCheck(event)) {
+    metaCharsetCheckEventsArray.push(event);
+    return;
+  }
   if (!TraceEvents_exports.eventIsPageLoadEvent(event)) {
     return;
   }
   pageLoadEventsArray.push(event);
 }
 function storePageLoadMetricAgainstNavigationId(navigation2, event) {
-  const navigationId = navigation2.args.data?.navigationId;
-  if (!navigationId) {
-    throw new Error("Navigation event unexpectedly had no navigation ID.");
-  }
   const frameId = getFrameIdForPageLoadEvent(event);
   const { rendererProcessesByFrame } = data5();
   const rendererProcessesInFrame = rendererProcessesByFrame.get(frameId);
@@ -21745,14 +21935,14 @@ function storePageLoadMetricAgainstNavigationId(navigation2, event) {
     const fcpTime = Timing_exports.Micro(event.ts - navigation2.ts);
     const classification = scoreClassificationForFirstContentfulPaint(fcpTime);
     const metricScore = { event, metricName: MetricName.FCP, classification, navigation: navigation2, timing: fcpTime };
-    storeMetricScore(frameId, navigationId, metricScore);
+    storeMetricScore(frameId, navigation2, metricScore);
     return;
   }
   if (TraceEvents_exports.isFirstPaint(event)) {
     const paintTime = Timing_exports.Micro(event.ts - navigation2.ts);
     const classification = ScoreClassification.UNCLASSIFIED;
     const metricScore = { event, metricName: MetricName.FP, classification, navigation: navigation2, timing: paintTime };
-    storeMetricScore(frameId, navigationId, metricScore);
+    storeMetricScore(frameId, navigation2, metricScore);
     return;
   }
   if (TraceEvents_exports.isMarkDOMContent(event)) {
@@ -21764,7 +21954,7 @@ function storePageLoadMetricAgainstNavigationId(navigation2, event) {
       navigation: navigation2,
       timing: dclTime
     };
-    storeMetricScore(frameId, navigationId, metricScore);
+    storeMetricScore(frameId, navigation2, metricScore);
     return;
   }
   if (TraceEvents_exports.isInteractiveTime(event)) {
@@ -21776,7 +21966,7 @@ function storePageLoadMetricAgainstNavigationId(navigation2, event) {
       navigation: navigation2,
       timing: ttiValue
     };
-    storeMetricScore(frameId, navigationId, tti);
+    storeMetricScore(frameId, navigation2, tti);
     const tbtValue = Timing_exports3.milliToMicro(Timing_exports.Milli(event.args.args.total_blocking_time_ms));
     const tbt = {
       event,
@@ -21785,7 +21975,7 @@ function storePageLoadMetricAgainstNavigationId(navigation2, event) {
       navigation: navigation2,
       timing: tbtValue
     };
-    storeMetricScore(frameId, navigationId, tbt);
+    storeMetricScore(frameId, navigation2, tbt);
     return;
   }
   if (TraceEvents_exports.isMarkLoad(event)) {
@@ -21797,10 +21987,10 @@ function storePageLoadMetricAgainstNavigationId(navigation2, event) {
       navigation: navigation2,
       timing: loadTime
     };
-    storeMetricScore(frameId, navigationId, metricScore);
+    storeMetricScore(frameId, navigation2, metricScore);
     return;
   }
-  if (TraceEvents_exports.isLargestContentfulPaintCandidate(event)) {
+  if (TraceEvents_exports.isAnyLargestContentfulPaintCandidate(event)) {
     const candidateIndex = event.args.data?.candidateIndex;
     if (!candidateIndex) {
       throw new Error("Largest Contentful Paint unexpectedly had no candidateIndex.");
@@ -21814,15 +22004,15 @@ function storePageLoadMetricAgainstNavigationId(navigation2, event) {
       timing: lcpTime
     };
     const metricsByNavigation = MapUtilities_exports.getWithDefault(metricScoresByFrameId, frameId, () => /* @__PURE__ */ new Map());
-    const metrics = MapUtilities_exports.getWithDefault(metricsByNavigation, navigationId, () => /* @__PURE__ */ new Map());
+    const metrics = MapUtilities_exports.getWithDefault(metricsByNavigation, navigation2, () => /* @__PURE__ */ new Map());
     const lastLCPCandidate = metrics.get(MetricName.LCP);
     if (lastLCPCandidate === void 0) {
       selectedLCPCandidateEvents.add(lcp.event);
-      storeMetricScore(frameId, navigationId, lcp);
+      storeMetricScore(frameId, navigation2, lcp);
       return;
     }
     const lastLCPCandidateEvent = lastLCPCandidate.event;
-    if (!TraceEvents_exports.isLargestContentfulPaintCandidate(lastLCPCandidateEvent)) {
+    if (!TraceEvents_exports.isAnyLargestContentfulPaintCandidate(lastLCPCandidateEvent)) {
       return;
     }
     const lastCandidateIndex = lastLCPCandidateEvent.args.data?.candidateIndex;
@@ -21832,23 +22022,26 @@ function storePageLoadMetricAgainstNavigationId(navigation2, event) {
     if (lastCandidateIndex < candidateIndex) {
       selectedLCPCandidateEvents.delete(lastLCPCandidateEvent);
       selectedLCPCandidateEvents.add(lcp.event);
-      storeMetricScore(frameId, navigationId, lcp);
+      storeMetricScore(frameId, navigation2, lcp);
     }
     return;
   }
   if (TraceEvents_exports.isLayoutShift(event)) {
     return;
   }
+  if (TraceEvents_exports.isSoftNavigationStart(event)) {
+    return;
+  }
   return assertNever(event, `Unexpected event type: ${event}`);
 }
-function storeMetricScore(frameId, navigationId, metricScore) {
+function storeMetricScore(frameId, navigation2, metricScore) {
   const metricsByNavigation = MapUtilities_exports.getWithDefault(metricScoresByFrameId, frameId, () => /* @__PURE__ */ new Map());
-  const metrics = MapUtilities_exports.getWithDefault(metricsByNavigation, navigationId, () => /* @__PURE__ */ new Map());
+  const metrics = MapUtilities_exports.getWithDefault(metricsByNavigation, navigation2, () => /* @__PURE__ */ new Map());
   metrics.delete(metricScore.metricName);
   metrics.set(metricScore.metricName, metricScore);
 }
 function getFrameIdForPageLoadEvent(event) {
-  if (TraceEvents_exports.isFirstContentfulPaint(event) || TraceEvents_exports.isInteractiveTime(event) || TraceEvents_exports.isLargestContentfulPaintCandidate(event) || TraceEvents_exports.isNavigationStart(event) || TraceEvents_exports.isLayoutShift(event) || TraceEvents_exports.isFirstPaint(event)) {
+  if (TraceEvents_exports.isFirstContentfulPaint(event) || TraceEvents_exports.isInteractiveTime(event) || TraceEvents_exports.isAnyLargestContentfulPaintCandidate(event) || TraceEvents_exports.isNavigationStart(event) || TraceEvents_exports.isSoftNavigationStart(event) || TraceEvents_exports.isLayoutShift(event) || TraceEvents_exports.isFirstPaint(event)) {
     return event.args.frame;
   }
   if (TraceEvents_exports.isMarkDOMContent(event) || TraceEvents_exports.isMarkLoad(event)) {
@@ -21861,17 +22054,29 @@ function getFrameIdForPageLoadEvent(event) {
   assertNever(event, `Unexpected event type: ${event}`);
 }
 function getNavigationForPageLoadEvent(event) {
-  if (TraceEvents_exports.isFirstContentfulPaint(event) || TraceEvents_exports.isLargestContentfulPaintCandidate(event) || TraceEvents_exports.isFirstPaint(event)) {
-    const navigationId = event.args.data?.navigationId;
-    if (!navigationId) {
-      throw new Error("Trace event unexpectedly had no navigation ID.");
+  if (TraceEvents_exports.isFirstContentfulPaint(event) || TraceEvents_exports.isAnyLargestContentfulPaintCandidate(event) || TraceEvents_exports.isFirstPaint(event)) {
+    const { navigationsByNavigationId: navigationsByNavigationId2, softNavigationsById: softNavigationsById2 } = data5();
+    let navigation2;
+    if (event.name === TraceEvents_exports.Name.MARK_LCP_CANDIDATE_FOR_SOFT_NAVIGATION && event.args.data?.performanceTimelineNavigationId) {
+      navigation2 = softNavigationsById2.get(event.args.data.performanceTimelineNavigationId);
+      if (!navigation2) {
+        return null;
+      }
+    } else {
+      const navigationId = event.args.data?.navigationId;
+      if (!navigationId) {
+        throw new Error(`Trace event unexpectedly had no navigation ID: ${JSON.stringify(event, null, 2)}`);
+      }
+      navigation2 = navigationsByNavigationId2.get(navigationId);
     }
-    const { navigationsByNavigationId: navigationsByNavigationId2 } = data5();
-    const navigation2 = navigationsByNavigationId2.get(navigationId);
     if (!navigation2) {
       return null;
     }
     return navigation2;
+  }
+  if (TraceEvents_exports.isSoftNavigationStart(event)) {
+    const { softNavigationsById: softNavigationsById2 } = data5();
+    return softNavigationsById2.get(event.args.context.performanceTimelineNavigationId) ?? null;
   }
   if (TraceEvents_exports.isMarkDOMContent(event) || TraceEvents_exports.isInteractiveTime(event) || TraceEvents_exports.isLayoutShift(event) || TraceEvents_exports.isMarkLoad(event)) {
     const frameId = getFrameIdForPageLoadEvent(event);
@@ -21956,16 +22161,31 @@ async function finalize19() {
       storePageLoadMetricAgainstNavigationId(navigation2, pageLoadEvent);
     }
   }
+  const { navigationsByFrameId: navigationsByFrameId2 } = data5();
+  metaCharsetCheckEventsArray.sort((a, b) => a.ts - b.ts);
+  for (const metaCharsetCheckEvent of metaCharsetCheckEventsArray) {
+    const frameId = metaCharsetCheckEvent.args.data?.frame;
+    if (!frameId) {
+      continue;
+    }
+    const navigation2 = Trace_exports.getNavigationForTraceEvent(metaCharsetCheckEvent, frameId, navigationsByFrameId2);
+    if (!navigation2) {
+      continue;
+    }
+    const eventsForNavigation = MapUtilities_exports.getWithDefault(metaCharsetCheckEventsByNavigation, navigation2, () => []);
+    eventsForNavigation.push(metaCharsetCheckEvent);
+  }
   const allFinalLCPEvents = gatherFinalLCPEvents();
   const mainFrame = data5().mainFrameId;
-  const allEventsButLCP = pageLoadEventsArray.filter((event) => !TraceEvents_exports.isLargestContentfulPaintCandidate(event));
+  const allEventsButLCP = pageLoadEventsArray.filter((event) => !TraceEvents_exports.isAnyLargestContentfulPaintCandidate(event));
   const markerEvents = [...allFinalLCPEvents, ...allEventsButLCP].filter(TraceEvents_exports.isMarkerEvent);
   allMarkerEvents = markerEvents.filter((event) => getFrameIdForPageLoadEvent(event) === mainFrame).sort((a, b) => a.ts - b.ts);
 }
 function data19() {
   return {
     metricScoresByFrameId,
-    allMarkerEvents
+    allMarkerEvents,
+    metaCharsetCheckEventsByNavigation
   };
 }
 function deps10() {
@@ -21974,7 +22194,7 @@ function deps10() {
 function metricIsLCP(metric) {
   return metric.metricName === MetricName.LCP;
 }
-var metricScoresByFrameId, allMarkerEvents, pageLoadEventsArray, selectedLCPCandidateEvents, ScoreClassification, MetricName;
+var metricScoresByFrameId, allMarkerEvents, metaCharsetCheckEventsByNavigation, metaCharsetCheckEventsArray, pageLoadEventsArray, selectedLCPCandidateEvents, ScoreClassification, MetricName;
 var init_PageLoadMetricsHandler = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/handlers/PageLoadMetricsHandler.js"() {
     init_process_global();
@@ -21984,6 +22204,8 @@ var init_PageLoadMetricsHandler = __esm({
     init_MetaHandler();
     metricScoresByFrameId = /* @__PURE__ */ new Map();
     allMarkerEvents = [];
+    metaCharsetCheckEventsByNavigation = /* @__PURE__ */ new Map();
+    metaCharsetCheckEventsArray = [];
     __name(reset19, "reset");
     pageLoadEventsArray = [];
     selectedLCPCandidateEvents = /* @__PURE__ */ new Set();
@@ -22017,6 +22239,8 @@ var init_PageLoadMetricsHandler = __esm({
       MetricName2["TBT"] = "TBT";
       MetricName2["CLS"] = "CLS";
       MetricName2["NAV"] = "Nav";
+      MetricName2["SOFT_NAV"] = "Nav*";
+      MetricName2["SOFT_LCP"] = "LCP*";
     })(MetricName || (MetricName = {}));
     __name(metricIsLCP, "metricIsLCP");
   }
@@ -22047,9 +22271,9 @@ async function finalize20() {
   const { traceBounds: traceBounds2, navigationsByNavigationId: navigationsByNavigationId2 } = data5();
   const metricScoresByFrameId2 = data19().metricScoresByFrameId;
   for (const [navigationId, navigation2] of navigationsByNavigationId2) {
-    const lcpMetric = metricScoresByFrameId2.get(navigation2.args.frame)?.get(navigationId)?.get(MetricName.LCP);
+    const lcpMetric = metricScoresByFrameId2.get(navigation2.args.frame)?.get(navigation2)?.get(MetricName.LCP);
     const lcpEvent = lcpMetric?.event;
-    if (!lcpEvent || !TraceEvents_exports.isLargestContentfulPaintCandidate(lcpEvent)) {
+    if (!lcpEvent || !TraceEvents_exports.isAnyLargestContentfulPaintCandidate(lcpEvent)) {
       continue;
     }
     const nodeId = lcpEvent.args.data?.nodeId;
@@ -22523,7 +22747,7 @@ async function buildLayoutShiftsClusters() {
     }
     if (worstShiftEvent) {
       cluster.worstShiftEvent = worstShiftEvent;
-      cluster.rawSourceEvent = worstShiftEvent;
+      cluster.rawSourceEvent = worstShiftEvent.rawSourceEvent;
     }
     cluster.ts = cluster.events[0].ts;
     const lastShiftTimings = Timing_exports3.eventTimingsMicroSeconds(cluster.events[cluster.events.length - 1]);
@@ -22736,6 +22960,7 @@ function deps14() {
 }
 function reset26() {
   scriptById = /* @__PURE__ */ new Map();
+  frameIdByIsolate = /* @__PURE__ */ new Map();
 }
 function handleEvent26(event) {
   const getOrMakeScript = /* @__PURE__ */ __name((isolate, scriptIdAsNumber) => {
@@ -22753,6 +22978,9 @@ function handleEvent26(event) {
   if (TraceEvents_exports.isRundownScript(event)) {
     const { isolate, scriptId, url, sourceUrl, sourceMapUrl, sourceMapUrlElided } = event.args.data;
     const script = getOrMakeScript(isolate, scriptId);
+    if (!script.frame) {
+      script.frame = frameIdByIsolate.get(String(isolate)) ?? "";
+    }
     script.url = url;
     script.ts = event.ts;
     if (sourceUrl) {
@@ -22776,6 +23004,18 @@ function handleEvent26(event) {
     const script = getOrMakeScript(isolate, scriptId);
     script.content = (script.content ?? "") + sourceText;
     return;
+  }
+  if (TraceEvents_exports.isFunctionCall(event) && event.args.data?.isolate && event.args.data.frame) {
+    const { isolate, frame } = event.args.data;
+    const existingValue = frameIdByIsolate.get(isolate);
+    if (existingValue !== frame) {
+      frameIdByIsolate.set(isolate, frame);
+      for (const script of scriptById.values()) {
+        if (!script.frame && script.isolate === isolate) {
+          script.frame = frame;
+        }
+      }
+    }
   }
 }
 function findFrame(meta, frameId) {
@@ -22946,7 +23186,7 @@ function data26() {
     scripts: [...scriptById.values()]
   };
 }
-var scriptById;
+var scriptById, frameIdByIsolate;
 var init_ScriptsHandler = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/handlers/ScriptsHandler.js"() {
     init_process_global();
@@ -22956,6 +23196,7 @@ var init_ScriptsHandler = __esm({
     init_NetworkRequestsHandler();
     __name(completeURL, "completeURL");
     scriptById = /* @__PURE__ */ new Map();
+    frameIdByIsolate = /* @__PURE__ */ new Map();
     __name(deps14, "deps");
     __name(reset26, "reset");
     __name(handleEvent26, "handleEvent");
@@ -23566,6 +23807,174 @@ var init_EventsSerializer = __esm({
   }
 });
 
+// node_modules/@paulirish/trace_engine/models/trace/extras/StackTraceForEvent.js
+var StackTraceForEvent_exports = {};
+__export(StackTraceForEvent_exports, {
+  clearCacheForTrace: () => clearCacheForTrace,
+  get: () => get,
+  stackTraceForEventInTrace: () => stackTraceForEventInTrace
+});
+function clearCacheForTrace(data31) {
+  stackTraceForEventInTrace.delete(data31);
+}
+function get(event, data31) {
+  let cacheForTrace = stackTraceForEventInTrace.get(data31);
+  if (!cacheForTrace) {
+    cacheForTrace = /* @__PURE__ */ new Map();
+    stackTraceForEventInTrace.set(data31, cacheForTrace);
+  }
+  const resultFromCache = cacheForTrace.get(event);
+  if (resultFromCache) {
+    return resultFromCache;
+  }
+  let result = null;
+  if (Extensions_exports.isSyntheticExtensionEntry(event)) {
+    result = getForExtensionEntry(event, data31);
+  } else if (TraceEvents_exports.isPerformanceMeasureBegin(event)) {
+    result = getForPerformanceMeasure(event, data31);
+  } else {
+    result = getForEvent(event, data31);
+    const payloadCallFrames = getTraceEventPayloadStackAsProtocolCallFrame(event).filter((callFrame) => !isNativeJSFunction(callFrame));
+    if (!result.callFrames.length) {
+      result.callFrames = payloadCallFrames;
+    } else {
+      for (let i = 0; i < payloadCallFrames.length && i < result.callFrames.length; i++) {
+        result.callFrames[i] = payloadCallFrames[i];
+      }
+    }
+  }
+  if (result) {
+    cacheForTrace.set(event, result);
+  }
+  return result;
+}
+function getForEvent(event, data31) {
+  const entryToNode4 = data31.Renderer.entryToNode.size > 0 ? data31.Renderer.entryToNode : data31.Samples.entryToNode;
+  const topStackTrace = { callFrames: [] };
+  let stackTrace = topStackTrace;
+  let currentEntry;
+  let node = entryToNode4.get(event);
+  const traceCache = stackTraceForEventInTrace.get(data31) || /* @__PURE__ */ new Map();
+  stackTraceForEventInTrace.set(data31, traceCache);
+  while (node) {
+    if (!TraceEvents_exports.isProfileCall(node.entry)) {
+      const maybeAsyncParent = data31.AsyncJSCalls.runEntryPointToScheduler.get(node.entry);
+      if (!maybeAsyncParent) {
+        node = node.parent;
+        continue;
+      }
+      const maybeAsyncParentNode2 = maybeAsyncParent && entryToNode4.get(maybeAsyncParent.scheduler);
+      if (maybeAsyncParentNode2) {
+        stackTrace = addAsyncParentToStack(stackTrace, maybeAsyncParent.taskName);
+        node = maybeAsyncParentNode2;
+      }
+      continue;
+    }
+    currentEntry = node.entry;
+    const stackTraceFromCache = traceCache.get(node.entry);
+    if (stackTraceFromCache) {
+      stackTrace.callFrames.push(...stackTraceFromCache.callFrames.filter((callFrame) => !isNativeJSFunction(callFrame)));
+      stackTrace.parent = stackTraceFromCache.parent;
+      stackTrace.description = stackTrace.description || stackTraceFromCache.description;
+      break;
+    }
+    if (!isNativeJSFunction(currentEntry.callFrame)) {
+      stackTrace.callFrames.push(currentEntry.callFrame);
+    }
+    const maybeAsyncParentEvent = data31.AsyncJSCalls.asyncCallToScheduler.get(currentEntry);
+    const maybeAsyncParentNode = maybeAsyncParentEvent && entryToNode4.get(maybeAsyncParentEvent.scheduler);
+    if (maybeAsyncParentNode) {
+      stackTrace = addAsyncParentToStack(stackTrace, maybeAsyncParentEvent.taskName);
+      node = maybeAsyncParentNode;
+      continue;
+    }
+    node = node.parent;
+  }
+  return topStackTrace;
+}
+function addAsyncParentToStack(stackTrace, taskName) {
+  const parent = { callFrames: [] };
+  stackTrace.parent = parent;
+  parent.description = taskName;
+  return parent;
+}
+function getForExtensionEntry(event, data31) {
+  const rawEvent = event.rawSourceEvent;
+  if (TraceEvents_exports.isPerformanceMeasureBegin(rawEvent)) {
+    return getForPerformanceMeasure(rawEvent, data31);
+  }
+  if (!rawEvent) {
+    return null;
+  }
+  return get(rawEvent, data31);
+}
+function getForPerformanceMeasure(event, data31) {
+  let rawEvent = event;
+  if (event.args.traceId === void 0) {
+    return null;
+  }
+  rawEvent = data31.UserTimings.measureTraceByTraceId.get(event.args.traceId);
+  if (!rawEvent) {
+    return null;
+  }
+  return get(rawEvent, data31);
+}
+function isNativeJSFunction({ columnNumber, lineNumber, url, scriptId }) {
+  return lineNumber === -1 && columnNumber === -1 && url === "" && scriptId === "0";
+}
+function getTraceEventPayloadStackAsProtocolCallFrame(event) {
+  const payloadCallStack = Trace_exports.getZeroIndexedStackTraceInEventPayload(event) || [];
+  const callFrames = [];
+  for (const frame of payloadCallStack) {
+    callFrames.push({ ...frame, scriptId: String(frame.scriptId) });
+  }
+  return callFrames;
+}
+var stackTraceForEventInTrace;
+var init_StackTraceForEvent = __esm({
+  "node_modules/@paulirish/trace_engine/models/trace/extras/StackTraceForEvent.js"() {
+    init_process_global();
+    init_helpers2();
+    init_types2();
+    stackTraceForEventInTrace = /* @__PURE__ */ new Map();
+    __name(clearCacheForTrace, "clearCacheForTrace");
+    __name(get, "get");
+    __name(getForEvent, "getForEvent");
+    __name(addAsyncParentToStack, "addAsyncParentToStack");
+    __name(getForExtensionEntry, "getForExtensionEntry");
+    __name(getForPerformanceMeasure, "getForPerformanceMeasure");
+    __name(isNativeJSFunction, "isNativeJSFunction");
+    __name(getTraceEventPayloadStackAsProtocolCallFrame, "getTraceEventPayloadStackAsProtocolCallFrame");
+  }
+});
+
+// node_modules/@paulirish/trace_engine/models/trace/extras/Initiators.js
+var Initiators_exports = {};
+__export(Initiators_exports, {
+  getNetworkInitiator: () => getNetworkInitiator
+});
+function getNetworkInitiator(data31, event) {
+  const networkHandlerInitiator = data31.NetworkRequests.incompleteInitiator.get(event);
+  if (networkHandlerInitiator?.args.data.mimeType === "text/css") {
+    return networkHandlerInitiator;
+  }
+  const stack = get(event.rawSourceEvent, data31);
+  const initiatorCallFrame = stack?.parent?.callFrames.at(0);
+  if (!initiatorCallFrame) {
+    return networkHandlerInitiator;
+  }
+  const matchingRequestIds = data31.NetworkRequests.requestIdsByURL.get(initiatorCallFrame.url) ?? [];
+  const matchingRequests = matchingRequestIds.map((id) => data31.NetworkRequests.byId.get(id)).filter((req) => req !== void 0).filter((req) => req.ts < event.ts);
+  return matchingRequests.at(-1);
+}
+var init_Initiators = __esm({
+  "node_modules/@paulirish/trace_engine/models/trace/extras/Initiators.js"() {
+    init_process_global();
+    init_StackTraceForEvent();
+    __name(getNetworkInitiator, "getNetworkInitiator");
+  }
+});
+
 // node_modules/@paulirish/trace_engine/models/trace/extras/ScriptDuplication.js
 var ScriptDuplication_exports = {};
 __export(ScriptDuplication_exports, {
@@ -23723,147 +24132,6 @@ var init_ScriptDuplication = __esm({
   }
 });
 
-// node_modules/@paulirish/trace_engine/models/trace/extras/StackTraceForEvent.js
-var StackTraceForEvent_exports = {};
-__export(StackTraceForEvent_exports, {
-  clearCacheForTrace: () => clearCacheForTrace,
-  get: () => get,
-  stackTraceForEventInTrace: () => stackTraceForEventInTrace
-});
-function clearCacheForTrace(data31) {
-  stackTraceForEventInTrace.delete(data31);
-}
-function get(event, data31) {
-  let cacheForTrace = stackTraceForEventInTrace.get(data31);
-  if (!cacheForTrace) {
-    cacheForTrace = /* @__PURE__ */ new Map();
-    stackTraceForEventInTrace.set(data31, cacheForTrace);
-  }
-  const resultFromCache = cacheForTrace.get(event);
-  if (resultFromCache) {
-    return resultFromCache;
-  }
-  let result = null;
-  if (Extensions_exports.isSyntheticExtensionEntry(event)) {
-    result = getForExtensionEntry(event, data31);
-  } else if (TraceEvents_exports.isPerformanceMeasureBegin(event)) {
-    result = getForPerformanceMeasure(event, data31);
-  } else {
-    result = getForEvent(event, data31);
-    const payloadCallFrames = getTraceEventPayloadStackAsProtocolCallFrame(event).filter((callFrame) => !isNativeJSFunction(callFrame));
-    if (!result.callFrames.length) {
-      result.callFrames = payloadCallFrames;
-    } else {
-      for (let i = 0; i < payloadCallFrames.length && i < result.callFrames.length; i++) {
-        result.callFrames[i] = payloadCallFrames[i];
-      }
-    }
-  }
-  if (result) {
-    cacheForTrace.set(event, result);
-  }
-  return result;
-}
-function getForEvent(event, data31) {
-  const entryToNode4 = data31.Renderer.entryToNode.size > 0 ? data31.Renderer.entryToNode : data31.Samples.entryToNode;
-  const topStackTrace = { callFrames: [] };
-  let stackTrace = topStackTrace;
-  let currentEntry;
-  let node = entryToNode4.get(event);
-  const traceCache = stackTraceForEventInTrace.get(data31) || /* @__PURE__ */ new Map();
-  stackTraceForEventInTrace.set(data31, traceCache);
-  while (node) {
-    if (!TraceEvents_exports.isProfileCall(node.entry)) {
-      const maybeAsyncParent = data31.AsyncJSCalls.runEntryPointToScheduler.get(node.entry);
-      if (!maybeAsyncParent) {
-        node = node.parent;
-        continue;
-      }
-      const maybeAsyncParentNode2 = maybeAsyncParent && entryToNode4.get(maybeAsyncParent.scheduler);
-      if (maybeAsyncParentNode2) {
-        stackTrace = addAsyncParentToStack(stackTrace, maybeAsyncParent.taskName);
-        node = maybeAsyncParentNode2;
-      }
-      continue;
-    }
-    currentEntry = node.entry;
-    const stackTraceFromCache = traceCache.get(node.entry);
-    if (stackTraceFromCache) {
-      stackTrace.callFrames.push(...stackTraceFromCache.callFrames.filter((callFrame) => !isNativeJSFunction(callFrame)));
-      stackTrace.parent = stackTraceFromCache.parent;
-      stackTrace.description = stackTrace.description || stackTraceFromCache.description;
-      break;
-    }
-    if (!isNativeJSFunction(currentEntry.callFrame)) {
-      stackTrace.callFrames.push(currentEntry.callFrame);
-    }
-    const maybeAsyncParentEvent = data31.AsyncJSCalls.asyncCallToScheduler.get(currentEntry);
-    const maybeAsyncParentNode = maybeAsyncParentEvent && entryToNode4.get(maybeAsyncParentEvent.scheduler);
-    if (maybeAsyncParentNode) {
-      stackTrace = addAsyncParentToStack(stackTrace, maybeAsyncParentEvent.taskName);
-      node = maybeAsyncParentNode;
-      continue;
-    }
-    node = node.parent;
-  }
-  return topStackTrace;
-}
-function addAsyncParentToStack(stackTrace, taskName) {
-  const parent = { callFrames: [] };
-  stackTrace.parent = parent;
-  parent.description = taskName;
-  return parent;
-}
-function getForExtensionEntry(event, data31) {
-  const rawEvent = event.rawSourceEvent;
-  if (TraceEvents_exports.isPerformanceMeasureBegin(rawEvent)) {
-    return getForPerformanceMeasure(rawEvent, data31);
-  }
-  if (!rawEvent) {
-    return null;
-  }
-  return get(rawEvent, data31);
-}
-function getForPerformanceMeasure(event, data31) {
-  let rawEvent = event;
-  if (event.args.traceId === void 0) {
-    return null;
-  }
-  rawEvent = data31.UserTimings.measureTraceByTraceId.get(event.args.traceId);
-  if (!rawEvent) {
-    return null;
-  }
-  return get(rawEvent, data31);
-}
-function isNativeJSFunction({ columnNumber, lineNumber, url, scriptId }) {
-  return lineNumber === -1 && columnNumber === -1 && url === "" && scriptId === "0";
-}
-function getTraceEventPayloadStackAsProtocolCallFrame(event) {
-  const payloadCallStack = Trace_exports.getZeroIndexedStackTraceInEventPayload(event) || [];
-  const callFrames = [];
-  for (const frame of payloadCallStack) {
-    callFrames.push({ ...frame, scriptId: String(frame.scriptId) });
-  }
-  return callFrames;
-}
-var stackTraceForEventInTrace;
-var init_StackTraceForEvent = __esm({
-  "node_modules/@paulirish/trace_engine/models/trace/extras/StackTraceForEvent.js"() {
-    init_process_global();
-    init_helpers2();
-    init_types2();
-    stackTraceForEventInTrace = /* @__PURE__ */ new Map();
-    __name(clearCacheForTrace, "clearCacheForTrace");
-    __name(get, "get");
-    __name(getForEvent, "getForEvent");
-    __name(addAsyncParentToStack, "addAsyncParentToStack");
-    __name(getForExtensionEntry, "getForExtensionEntry");
-    __name(getForPerformanceMeasure, "getForPerformanceMeasure");
-    __name(isNativeJSFunction, "isNativeJSFunction");
-    __name(getTraceEventPayloadStackAsProtocolCallFrame, "getTraceEventPayloadStackAsProtocolCallFrame");
-  }
-});
-
 // node_modules/@paulirish/trace_engine/models/trace/extras/TraceFilter.js
 var TraceFilter, VisibleEventsFilter, ExclusiveNameFilter;
 var init_TraceFilter = __esm({
@@ -23921,7 +24189,7 @@ function generateEventID(event) {
   if (TraceEvents_exports.isProfileCall(event)) {
     const name = SamplesIntegrator.isNativeRuntimeFrame(event.callFrame) ? SamplesIntegrator.nativeGroup(event.callFrame.functionName) : event.callFrame.functionName;
     const location = event.callFrame.scriptId || event.callFrame.url || "";
-    return `f:${name}@${location}`;
+    return `f:${name}@${location}:${event.callFrame.lineNumber}:${event.callFrame.columnNumber}`;
   }
   if (TraceEvents_exports.isConsoleTimeStamp(event) && event.args.data) {
     return `${event.name}:${event.args.data.name}`;
@@ -24047,6 +24315,7 @@ var init_TraceTree = __esm({
         const root2 = this;
         const startTime = this.startTime;
         const endTime = this.endTime;
+        const idStack = [];
         const nodeById = /* @__PURE__ */ new Map();
         const selfTimeStack = [endTime - startTime];
         const firstNodeStack = [];
@@ -24092,6 +24361,7 @@ var init_TraceTree = __esm({
           if (forceGroupIdCallback && eventGroupIdCallback) {
             id = `${id}-${eventGroupIdCallback(e)}`;
           }
+          idStack.push(id);
           const noNodeOnStack = !totalTimeById.has(id);
           if (noNodeOnStack) {
             totalTimeById.set(id, duration);
@@ -24100,9 +24370,9 @@ var init_TraceTree = __esm({
         }
         __name(onStartEvent, "onStartEvent");
         function onEndEvent(event) {
-          let id = generateEventID(event);
-          if (forceGroupIdCallback && eventGroupIdCallback) {
-            id = `${id}-${eventGroupIdCallback(event)}`;
+          const id = idStack.pop();
+          if (!id) {
+            return;
           }
           let node = nodeById.get(id);
           if (!node) {
@@ -24116,7 +24386,7 @@ var init_TraceTree = __esm({
             node.totalTime += totalTimeById.get(id) || 0;
             totalTimeById.delete(id);
           }
-          if (firstNodeStack.length) {
+          if (idStack.length > 0) {
             node.setHasChildren(true);
           }
         }
@@ -24400,6 +24670,7 @@ var init_ThirdParties = __esm({
 var init_extras = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/extras/extras.js"() {
     init_process_global();
+    init_Initiators();
     init_ScriptDuplication();
     init_StackTraceForEvent();
     init_ThirdParties();
@@ -24511,6 +24782,7 @@ var init_types4 = __esm({
       InsightKeys2["VIEWPORT"] = "Viewport";
       InsightKeys2["MODERN_HTTP"] = "ModernHTTP";
       InsightKeys2["CACHE"] = "Cache";
+      InsightKeys2["CHARACTER_SET"] = "CharacterSet";
     })(InsightKeys || (InsightKeys = {}));
   }
 });
@@ -24536,11 +24808,7 @@ __export(Common_exports, {
   metricSavingsForWastedBytes: () => metricSavingsForWastedBytes
 });
 function getInsight(insightName, insightSet) {
-  const insight = insightSet.model[insightName];
-  if (insight instanceof Error) {
-    return null;
-  }
-  return insight;
+  return insightSet.model[insightName];
 }
 function getLCP(insightSet) {
   const insight = getInsight(InsightKeys.LCP_BREAKDOWN, insightSet);
@@ -25036,16 +25304,163 @@ var init_Cache = __esm({
   }
 });
 
+// node_modules/@paulirish/trace_engine/models/trace/insights/CharacterSet.js
+var CharacterSet_exports = {};
+__export(CharacterSet_exports, {
+  UIStrings: () => UIStrings3,
+  createOverlays: () => createOverlays2,
+  generateInsight: () => generateInsight2,
+  i18nString: () => i18nString2,
+  isCharacterSetInsight: () => isCharacterSetInsight
+});
+function isCharacterSetInsight(model2) {
+  return model2.insightKey === InsightKeys.CHARACTER_SET;
+}
+function finalize32(partialModel) {
+  let hasFailure = false;
+  if (partialModel.data) {
+    hasFailure = !partialModel.data.checklist.httpCharset.value && !partialModel.data.checklist.metaCharset.value;
+  }
+  return {
+    insightKey: InsightKeys.CHARACTER_SET,
+    strings: UIStrings3,
+    title: i18nString2(UIStrings3.title),
+    description: i18nString2(UIStrings3.description),
+    docs: "https://developer.chrome.com/docs/insights/charset/",
+    category: InsightCategory.ALL,
+    state: hasFailure ? "fail" : "pass",
+    ...partialModel
+  };
+}
+function hasCharsetInContentType(request) {
+  if (!request.args.data.responseHeaders) {
+    return false;
+  }
+  for (const header of request.args.data.responseHeaders) {
+    if (header.name.toLowerCase() === "content-type") {
+      return CHARSET_HTTP_REGEX.test(header.value);
+    }
+  }
+  return false;
+}
+function findMetaCharsetDisposition(data31, context) {
+  if (!context.navigation) {
+    return void 0;
+  }
+  return data31.PageLoadMetrics.metaCharsetCheckEventsByNavigation.get(context.navigation)?.at(-1)?.args.data?.disposition;
+}
+function metaCharsetLabel(disposition) {
+  switch (disposition) {
+    case "found-in-first-1024-bytes":
+      return i18nString2(UIStrings3.passingMetaCharsetEarly);
+    case "found-after-first-1024-bytes":
+      return i18nString2(UIStrings3.failedMetaCharsetLate);
+    case "not-found":
+      return i18nString2(UIStrings3.failedMetaCharsetMissing);
+    default:
+      return i18nString2(UIStrings3.failedMetaCharsetUnknown);
+  }
+}
+function generateInsight2(data31, context) {
+  if (!context.navigation) {
+    return finalize32({});
+  }
+  const documentRequest = data31.NetworkRequests.byId.get(context.navigationId);
+  if (!documentRequest) {
+    return finalize32({ warnings: [InsightWarning.NO_DOCUMENT_REQUEST] });
+  }
+  const hasHttpCharset = hasCharsetInContentType(documentRequest);
+  const metaCharsetDisposition = findMetaCharsetDisposition(data31, context);
+  const hasMetaCharsetInFirst1024Bytes = metaCharsetDisposition === "found-in-first-1024-bytes";
+  return finalize32({
+    relatedEvents: [documentRequest],
+    data: {
+      hasHttpCharset,
+      metaCharsetDisposition,
+      documentRequest,
+      checklist: {
+        httpCharset: {
+          label: hasHttpCharset ? i18nString2(UIStrings3.passingHttpHeader) : i18nString2(UIStrings3.failedHttpHeader),
+          value: hasHttpCharset
+        },
+        metaCharset: {
+          label: metaCharsetLabel(metaCharsetDisposition),
+          value: hasMetaCharsetInFirst1024Bytes
+        }
+      }
+    }
+  });
+}
+function createOverlays2(model2) {
+  if (!model2.data?.documentRequest) {
+    return [];
+  }
+  return [{
+    type: "ENTRY_SELECTED",
+    entry: model2.data.documentRequest
+  }];
+}
+var UIStrings3, i18nString2, CHARSET_HTTP_REGEX;
+var init_CharacterSet = __esm({
+  "node_modules/@paulirish/trace_engine/models/trace/insights/CharacterSet.js"() {
+    init_process_global();
+    init_types4();
+    UIStrings3 = {
+      /**
+       * @description Title of an insight that checks whether the page declares a character encoding early enough.
+       */
+      title: "Declare a character encoding",
+      /**
+       * @description Description of an insight that checks whether the page has a proper character encoding declaration via HTTP header or early meta tag.
+       */
+      description: "A character encoding declaration is required. It can be done with a meta charset tag in the first 1024 bytes of the HTML or in the Content-Type HTTP response header. [Learn more about declaring the character encoding](https://developer.chrome.com/docs/insights/charset/).",
+      /**
+       * @description Text to tell the user that the charset is declared in the Content-Type HTTP response header.
+       */
+      passingHttpHeader: "Declares charset in HTTP header",
+      /**
+       * @description Text to tell the user that the charset is NOT declared in the Content-Type HTTP response header.
+       */
+      failedHttpHeader: "Does not declare charset in HTTP header",
+      /**
+       * @description Text to tell the user that a meta charset tag was found in the first 1024 bytes of the HTML.
+       */
+      passingMetaCharsetEarly: "Declares charset using a meta tag in the first 1024 bytes",
+      /**
+       * @description Text to tell the user that a meta charset tag was found, but too late in the HTML.
+       */
+      failedMetaCharsetLate: "Declares charset using a meta tag after the first 1024 bytes",
+      /**
+       * @description Text to tell the user that no meta charset tag was found in the HTML.
+       */
+      failedMetaCharsetMissing: "Does not declare charset using a meta tag",
+      /**
+       * @description Text to tell the user that trace data did not include the Blink signal for meta charset.
+       */
+      failedMetaCharsetUnknown: "Could not determine meta charset declaration from trace"
+    };
+    i18nString2 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    CHARSET_HTTP_REGEX = /charset\s*=\s*[a-zA-Z0-9\-_:.()]{2,}/i;
+    __name(isCharacterSetInsight, "isCharacterSetInsight");
+    __name(finalize32, "finalize");
+    __name(hasCharsetInContentType, "hasCharsetInContentType");
+    __name(findMetaCharsetDisposition, "findMetaCharsetDisposition");
+    __name(metaCharsetLabel, "metaCharsetLabel");
+    __name(generateInsight2, "generateInsight");
+    __name(createOverlays2, "createOverlays");
+  }
+});
+
 // node_modules/@paulirish/trace_engine/models/trace/insights/CLSCulprits.js
 var CLSCulprits_exports = {};
 __export(CLSCulprits_exports, {
   AnimationFailureReasons: () => AnimationFailureReasons,
   LayoutShiftType: () => LayoutShiftType,
-  UIStrings: () => UIStrings3,
-  createOverlays: () => createOverlays2,
-  generateInsight: () => generateInsight2,
+  UIStrings: () => UIStrings4,
+  createOverlays: () => createOverlays3,
+  generateInsight: () => generateInsight3,
   getNonCompositedFailure: () => getNonCompositedFailure,
-  i18nString: () => i18nString2,
+  i18nString: () => i18nString3,
   isCLSCulpritsInsight: () => isCLSCulpritsInsight
 });
 function isInRootCauseWindow(event, targetEvent) {
@@ -25225,18 +25640,18 @@ function getTopCulprits(cluster, culpritsByShift) {
     const animations2 = culprits.nonCompositedAnimations;
     const unsizedImages = culprits.unsizedImages;
     for (let i = 0; i < fontReq.length && causes.length < MAX_TOP_CULPRITS; i++) {
-      causes.push({ type: LayoutShiftType.WEB_FONT, description: i18nString2(UIStrings3.webFont) });
+      causes.push({ type: LayoutShiftType.WEB_FONT, description: i18nString3(UIStrings4.webFont) });
     }
     for (let i = 0; i < iframes.length && causes.length < MAX_TOP_CULPRITS; i++) {
-      causes.push({ type: LayoutShiftType.IFRAMES, description: i18nString2(UIStrings3.injectedIframe) });
+      causes.push({ type: LayoutShiftType.IFRAMES, description: i18nString3(UIStrings4.injectedIframe) });
     }
     for (let i = 0; i < animations2.length && causes.length < MAX_TOP_CULPRITS; i++) {
-      causes.push({ type: LayoutShiftType.ANIMATIONS, description: i18nString2(UIStrings3.animation) });
+      causes.push({ type: LayoutShiftType.ANIMATIONS, description: i18nString3(UIStrings4.animation) });
     }
     for (let i = 0; i < unsizedImages.length && causes.length < MAX_TOP_CULPRITS; i++) {
       causes.push({
         type: LayoutShiftType.UNSIZED_IMAGE,
-        description: i18nString2(UIStrings3.unsizedImage),
+        description: i18nString3(UIStrings4.unsizedImage),
         url: unsizedImages[i].paintImageEvent.args.data.url || "",
         backendNodeId: unsizedImages[i].backendNodeId,
         frame: unsizedImages[i].paintImageEvent.args.data.frame || ""
@@ -25248,7 +25663,7 @@ function getTopCulprits(cluster, culpritsByShift) {
   }
   return causes.slice(0, MAX_TOP_CULPRITS);
 }
-function finalize32(partialModel) {
+function finalize33(partialModel) {
   let state = "pass";
   if (partialModel.worstCluster) {
     const classification = ModelHandlers_exports.LayoutShifts.scoreClassificationForLayoutShift(partialModel.worstCluster.clusterCumulativeScore);
@@ -25260,16 +25675,16 @@ function finalize32(partialModel) {
   }
   return {
     insightKey: InsightKeys.CLS_CULPRITS,
-    strings: UIStrings3,
-    title: i18nString2(UIStrings3.title),
-    description: i18nString2(UIStrings3.description),
+    strings: UIStrings4,
+    title: i18nString3(UIStrings4.title),
+    description: i18nString3(UIStrings4.description),
     docs: "https://developer.chrome.com/docs/performance/insights/cls-culprit",
     category: InsightCategory.CLS,
     state,
     ...partialModel
   };
 }
-function generateInsight2(data31, context) {
+function generateInsight3(data31, context) {
   const isWithinContext = /* @__PURE__ */ __name((event) => Timing_exports3.eventIsInBounds(event, context.bounds), "isWithinContext");
   const compositeAnimationEvents = data31.Animations.animations.filter(isWithinContext);
   const iframeEvents = data31.LayoutShifts.renderFrameImplCreateChildFrameEvents.filter(isWithinContext);
@@ -25300,7 +25715,7 @@ function generateInsight2(data31, context) {
   for (const cluster of clusters2) {
     topCulpritsByCluster.set(cluster, getTopCulprits(cluster, rootCausesByShift));
   }
-  return finalize32({
+  return finalize33({
     relatedEvents,
     animationFailures,
     shifts: rootCausesByShift,
@@ -25309,7 +25724,7 @@ function generateInsight2(data31, context) {
     topCulpritsByCluster
   });
 }
-function createOverlays2(model2) {
+function createOverlays3(model2) {
   const clustersByScore = model2.clusters.toSorted((a, b) => b.clusterCumulativeScore - a.clusterCumulativeScore) ?? [];
   const worstCluster = clustersByScore[0];
   if (!worstCluster) {
@@ -25322,7 +25737,7 @@ function createOverlays2(model2) {
     sections: [
       {
         bounds: { min: worstCluster.ts, range, max },
-        label: i18nString2(UIStrings3.worstLayoutShiftCluster),
+        label: i18nString3(UIStrings4.worstLayoutShiftCluster),
         showDuration: false
       }
     ],
@@ -25331,7 +25746,7 @@ function createOverlays2(model2) {
     renderLocation: "ABOVE_EVENT"
   }];
 }
-var UIStrings3, i18nString2, AnimationFailureReasons, LayoutShiftType, ACTIONABLE_FAILURE_REASONS, ROOT_CAUSE_WINDOW;
+var UIStrings4, i18nString3, AnimationFailureReasons, LayoutShiftType, ACTIONABLE_FAILURE_REASONS, ROOT_CAUSE_WINDOW;
 var init_CLSCulprits = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/CLSCulprits.js"() {
     init_process_global();
@@ -25340,7 +25755,7 @@ var init_CLSCulprits = __esm({
     init_helpers2();
     init_types2();
     init_types4();
-    UIStrings3 = {
+    UIStrings4 = {
       /** Title of an insight that provides details about why elements shift/move on the page. The causes for these shifts are referred to as culprits ("reasons"). */
       title: "Layout shift culprits",
       /**
@@ -25390,7 +25805,7 @@ var init_CLSCulprits = __esm({
        */
       noCulprits: "Could not detect any layout shift culprits"
     };
-    i18nString2 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString3 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     (function(AnimationFailureReasons2) {
       AnimationFailureReasons2["ACCELERATED_ANIMATIONS_DISABLED"] = "ACCELERATED_ANIMATIONS_DISABLED";
       AnimationFailureReasons2["EFFECT_SUPPRESSED_BY_DEVTOOLS"] = "EFFECT_SUPPRESSED_BY_DEVTOOLS";
@@ -25504,19 +25919,19 @@ var init_CLSCulprits = __esm({
     __name(isCLSCulpritsInsight, "isCLSCulpritsInsight");
     __name(getFontRootCauses, "getFontRootCauses");
     __name(getTopCulprits, "getTopCulprits");
-    __name(finalize32, "finalize");
-    __name(generateInsight2, "generateInsight");
-    __name(createOverlays2, "createOverlays");
+    __name(finalize33, "finalize");
+    __name(generateInsight3, "generateInsight");
+    __name(createOverlays3, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/DocumentLatency.js
 var DocumentLatency_exports = {};
 __export(DocumentLatency_exports, {
-  UIStrings: () => UIStrings4,
-  createOverlays: () => createOverlays3,
-  generateInsight: () => generateInsight3,
-  i18nString: () => i18nString3,
+  UIStrings: () => UIStrings5,
+  createOverlays: () => createOverlays4,
+  generateInsight: () => generateInsight4,
+  i18nString: () => i18nString4,
   isDocumentLatencyInsight: () => isDocumentLatencyInsight
 });
 function isDocumentLatencyInsight(x) {
@@ -25577,30 +25992,30 @@ function getCompressionSavings(request) {
   }
   return estimatedSavings < IGNORE_THRESHOLD_IN_BYTES ? 0 : estimatedSavings;
 }
-function finalize33(partialModel) {
+function finalize34(partialModel) {
   let hasFailure = false;
   if (partialModel.data) {
     hasFailure = !partialModel.data.checklist.usesCompression.value || !partialModel.data.checklist.serverResponseIsFast.value || !partialModel.data.checklist.noRedirects.value;
   }
   return {
     insightKey: InsightKeys.DOCUMENT_LATENCY,
-    strings: UIStrings4,
-    title: i18nString3(UIStrings4.title),
-    description: i18nString3(UIStrings4.description),
+    strings: UIStrings5,
+    title: i18nString4(UIStrings5.title),
+    description: i18nString4(UIStrings5.description),
     docs: "https://developer.chrome.com/docs/performance/insights/document-latency",
     category: InsightCategory.ALL,
     state: hasFailure ? "fail" : "pass",
     ...partialModel
   };
 }
-function generateInsight3(data31, context) {
+function generateInsight4(data31, context) {
   if (!context.navigation) {
-    return finalize33({});
+    return finalize34({});
   }
   const millisToString = context.options.insightTimeFormatters?.milli ?? ((bytes) => ({ __i18nMillis: bytes }));
   const documentRequest = data31.NetworkRequests.byId.get(context.navigationId);
   if (!documentRequest) {
-    return finalize33({ warnings: [InsightWarning.NO_DOCUMENT_REQUEST] });
+    return finalize34({ warnings: [InsightWarning.NO_DOCUMENT_REQUEST] });
   }
   const serverResponseTime = getServerResponseTime(documentRequest);
   if (serverResponseTime === null) {
@@ -25621,7 +26036,7 @@ function generateInsight3(data31, context) {
   const noRedirects = redirectDuration === 0;
   const serverResponseIsFast = !serverResponseTooSlow;
   const usesCompression = uncompressedResponseBytes === 0;
-  return finalize33({
+  return finalize34({
     relatedEvents: [documentRequest],
     data: {
       serverResponseTime,
@@ -25630,18 +26045,18 @@ function generateInsight3(data31, context) {
       documentRequest,
       checklist: {
         noRedirects: {
-          label: noRedirects ? i18nString3(UIStrings4.passingRedirects) : i18nString3(UIStrings4.failedRedirects, {
+          label: noRedirects ? i18nString4(UIStrings5.passingRedirects) : i18nString4(UIStrings5.failedRedirects, {
             PH1: documentRequest.args.data.redirects.length,
             PH2: millisToString(redirectDuration)
           }),
           value: noRedirects
         },
         serverResponseIsFast: {
-          label: serverResponseIsFast ? i18nString3(UIStrings4.passingServerResponseTime, { PH1: millisToString(serverResponseTime) }) : i18nString3(UIStrings4.failedServerResponseTime, { PH1: millisToString(serverResponseTime) }),
+          label: serverResponseIsFast ? i18nString4(UIStrings5.passingServerResponseTime, { PH1: millisToString(serverResponseTime) }) : i18nString4(UIStrings5.failedServerResponseTime, { PH1: millisToString(serverResponseTime) }),
           value: serverResponseIsFast
         },
         usesCompression: {
-          label: usesCompression ? i18nString3(UIStrings4.passingTextCompression) : i18nString3(UIStrings4.failedTextCompression),
+          label: usesCompression ? i18nString4(UIStrings5.passingTextCompression) : i18nString4(UIStrings5.failedTextCompression),
           value: usesCompression
         }
       }
@@ -25650,7 +26065,7 @@ function generateInsight3(data31, context) {
     wastedBytes: uncompressedResponseBytes
   });
 }
-function createOverlays3(model2) {
+function createOverlays4(model2) {
   if (!model2.data?.documentRequest) {
     return [];
   }
@@ -25660,7 +26075,7 @@ function createOverlays3(model2) {
   const sections = [];
   if (model2.data.redirectDuration) {
     const bounds = Timing_exports3.traceWindowFromMicroSeconds(event.ts, event.ts + redirectDurationMicro);
-    sections.push({ bounds, label: i18nString3(UIStrings4.redirectsLabel), showDuration: true });
+    sections.push({ bounds, label: i18nString4(UIStrings5.redirectsLabel), showDuration: true });
     overlays.push({ type: "CANDY_STRIPED_TIME_RANGE", bounds, entry: event });
   }
   if (!model2.data.checklist.serverResponseIsFast.value) {
@@ -25668,11 +26083,11 @@ function createOverlays3(model2) {
     const sendEnd = event.args.data.timing?.sendEnd ?? Timing_exports.Milli(0);
     const sendEndMicro = Timing_exports3.milliToMicro(sendEnd);
     const bounds = Timing_exports3.traceWindowFromMicroSeconds(sendEndMicro, sendEndMicro + serverResponseTimeMicro);
-    sections.push({ bounds, label: i18nString3(UIStrings4.serverResponseTimeLabel), showDuration: true });
+    sections.push({ bounds, label: i18nString4(UIStrings5.serverResponseTimeLabel), showDuration: true });
   }
   if (model2.data.uncompressedResponseBytes) {
     const bounds = Timing_exports3.traceWindowFromMicroSeconds(event.args.data.syntheticData.downloadStart, event.args.data.syntheticData.downloadStart + event.args.data.syntheticData.download);
-    sections.push({ bounds, label: i18nString3(UIStrings4.uncompressedDownload), showDuration: true });
+    sections.push({ bounds, label: i18nString4(UIStrings5.uncompressedDownload), showDuration: true });
     overlays.push({ type: "CANDY_STRIPED_TIME_RANGE", bounds, entry: event });
   }
   if (sections.length) {
@@ -25691,7 +26106,7 @@ function createOverlays3(model2) {
   });
   return overlays;
 }
-var UIStrings4, i18nString3, TOO_SLOW_THRESHOLD_MS, TARGET_MS, IGNORE_THRESHOLD_IN_BYTES;
+var UIStrings5, i18nString4, TOO_SLOW_THRESHOLD_MS, TARGET_MS, IGNORE_THRESHOLD_IN_BYTES;
 var init_DocumentLatency = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/DocumentLatency.js"() {
     init_process_global();
@@ -25699,7 +26114,7 @@ var init_DocumentLatency = __esm({
     init_types2();
     init_Common();
     init_types4();
-    UIStrings4 = {
+    UIStrings5 = {
       /**
        * @description Title of an insight that provides a breakdown for how long it took to download the main document.
        */
@@ -25749,35 +26164,35 @@ var init_DocumentLatency = __esm({
        */
       uncompressedDownload: "Uncompressed download"
     };
-    i18nString3 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString4 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     TOO_SLOW_THRESHOLD_MS = 600;
     TARGET_MS = 100;
     IGNORE_THRESHOLD_IN_BYTES = 1400;
     __name(isDocumentLatencyInsight, "isDocumentLatencyInsight");
     __name(getServerResponseTime, "getServerResponseTime");
     __name(getCompressionSavings, "getCompressionSavings");
-    __name(finalize33, "finalize");
-    __name(generateInsight3, "generateInsight");
-    __name(createOverlays3, "createOverlays");
+    __name(finalize34, "finalize");
+    __name(generateInsight4, "generateInsight");
+    __name(createOverlays4, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/DOMSize.js
 var DOMSize_exports = {};
 __export(DOMSize_exports, {
-  UIStrings: () => UIStrings5,
-  createOverlays: () => createOverlays4,
-  generateInsight: () => generateInsight4,
-  i18nString: () => i18nString4,
+  UIStrings: () => UIStrings6,
+  createOverlays: () => createOverlays5,
+  generateInsight: () => generateInsight5,
+  i18nString: () => i18nString5,
   isDomSizeInsight: () => isDomSizeInsight
 });
-function finalize34(partialModel) {
+function finalize35(partialModel) {
   const relatedEvents = [...partialModel.largeLayoutUpdates, ...partialModel.largeStyleRecalcs];
   return {
     insightKey: InsightKeys.DOM_SIZE,
-    strings: UIStrings5,
-    title: i18nString4(UIStrings5.title),
-    description: i18nString4(UIStrings5.description),
+    strings: UIStrings6,
+    title: i18nString5(UIStrings6.title),
+    description: i18nString5(UIStrings6.description),
     docs: "https://developer.chrome.com/docs/performance/insights/dom-size",
     category: InsightCategory.INP,
     state: relatedEvents.length > 0 ? "informative" : "pass",
@@ -25788,7 +26203,7 @@ function finalize34(partialModel) {
 function isDomSizeInsight(model2) {
   return model2.insightKey === InsightKeys.DOM_SIZE;
 }
-function generateInsight4(data31, context) {
+function generateInsight5(data31, context) {
   const isWithinContext = /* @__PURE__ */ __name((event) => Timing_exports3.eventIsInBounds(event, context.bounds), "isWithinContext");
   const mainTid = context.navigation?.tid;
   const largeLayoutUpdates = [];
@@ -25842,13 +26257,13 @@ function generateInsight4(data31, context) {
     ...largeLayoutUpdates.map((event) => {
       const duration = event.dur / 1e3;
       const size = event.args.beginData.dirtyObjects;
-      const label = i18nString4(UIStrings5.largeLayout, { PH1: size });
+      const label = i18nString5(UIStrings6.largeLayout, { PH1: size });
       return { label, duration, size, event };
     }),
     ...largeStyleRecalcs.map((event) => {
       const duration = event.dur / 1e3;
       const size = event.args.elementCount;
-      const label = i18nString4(UIStrings5.largeStyleRecalc, { PH1: size });
+      const label = i18nString5(UIStrings6.largeStyleRecalc, { PH1: size });
       return { label, duration, size, event };
     })
   ].sort((a, b) => b.duration - a.duration).slice(0, 5);
@@ -25863,14 +26278,14 @@ function generateInsight4(data31, context) {
       maxDOMStats = domStats;
     }
   }
-  return finalize34({
+  return finalize35({
     largeLayoutUpdates,
     largeStyleRecalcs,
     largeUpdates,
     maxDOMStats
   });
 }
-function createOverlays4(model2) {
+function createOverlays5(model2) {
   const entries = [...model2.largeStyleRecalcs, ...model2.largeLayoutUpdates];
   return entries.map((entry) => ({
     type: "ENTRY_OUTLINE",
@@ -25878,7 +26293,7 @@ function createOverlays4(model2) {
     outlineReason: "ERROR"
   }));
 }
-var UIStrings5, i18nString4, DOM_SIZE_DURATION_THRESHOLD, LAYOUT_OBJECTS_THRESHOLD, STYLE_RECALC_ELEMENTS_THRESHOLD;
+var UIStrings6, i18nString5, DOM_SIZE_DURATION_THRESHOLD, LAYOUT_OBJECTS_THRESHOLD, STYLE_RECALC_ELEMENTS_THRESHOLD;
 var init_DOMSize = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/DOMSize.js"() {
     init_process_global();
@@ -25886,7 +26301,7 @@ var init_DOMSize = __esm({
     init_helpers2();
     init_types2();
     init_types4();
-    UIStrings5 = {
+    UIStrings6 = {
       /**
        * @description Title of an insight that recommends reducing the size of the DOM tree as a means to improve page responsiveness. "DOM" is an acronym and should not be translated.
        */
@@ -25938,33 +26353,33 @@ var init_DOMSize = __esm({
        */
       largeStyleRecalc: "Style recalculation ({PH1} elements)"
     };
-    i18nString4 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString5 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     DOM_SIZE_DURATION_THRESHOLD = Timing_exports3.milliToMicro(Timing_exports.Milli(40));
     LAYOUT_OBJECTS_THRESHOLD = 100;
     STYLE_RECALC_ELEMENTS_THRESHOLD = 300;
-    __name(finalize34, "finalize");
+    __name(finalize35, "finalize");
     __name(isDomSizeInsight, "isDomSizeInsight");
-    __name(generateInsight4, "generateInsight");
-    __name(createOverlays4, "createOverlays");
+    __name(generateInsight5, "generateInsight");
+    __name(createOverlays5, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/DuplicatedJavaScript.js
 var DuplicatedJavaScript_exports = {};
 __export(DuplicatedJavaScript_exports, {
-  UIStrings: () => UIStrings6,
-  createOverlays: () => createOverlays5,
-  generateInsight: () => generateInsight5,
-  i18nString: () => i18nString5,
+  UIStrings: () => UIStrings7,
+  createOverlays: () => createOverlays6,
+  generateInsight: () => generateInsight6,
+  i18nString: () => i18nString6,
   isDuplicatedJavaScriptInsight: () => isDuplicatedJavaScriptInsight
 });
-function finalize35(partialModel) {
+function finalize36(partialModel) {
   const requests = partialModel.scriptsWithDuplication.map((script) => script.request).filter((e) => !!e);
   return {
     insightKey: InsightKeys.DUPLICATE_JAVASCRIPT,
-    strings: UIStrings6,
-    title: i18nString5(UIStrings6.title),
-    description: i18nString5(UIStrings6.description),
+    strings: UIStrings7,
+    title: i18nString6(UIStrings7.title),
+    description: i18nString6(UIStrings7.description),
     docs: "https://developer.chrome.com/docs/performance/insights/duplicated-javascript",
     category: InsightCategory.LCP,
     state: Boolean(partialModel.duplication.values().next().value) ? "fail" : "pass",
@@ -25975,7 +26390,7 @@ function finalize35(partialModel) {
 function isDuplicatedJavaScriptInsight(model2) {
   return model2.insightKey === InsightKeys.DUPLICATE_JAVASCRIPT;
 }
-function generateInsight5(data31, context) {
+function generateInsight6(data31, context) {
   const scripts = data31.Scripts.scripts.filter((script) => {
     if (script.frame !== context.frameId) {
       return false;
@@ -26005,7 +26420,7 @@ function generateInsight5(data31, context) {
       wastedBytesByRequestId.set(requestId, (wastedBytesByRequestId.get(requestId) || 0) + transferSize);
     }
   }
-  return finalize35({
+  return finalize36({
     duplication,
     duplicationGroupedByNodeModules,
     scriptsWithDuplication: [...new Set(scriptsWithDuplication)],
@@ -26015,7 +26430,7 @@ function generateInsight5(data31, context) {
     wastedBytes: wastedBytesByRequestId.values().reduce((acc, cur) => acc + cur, 0)
   });
 }
-function createOverlays5(model2) {
+function createOverlays6(model2) {
   return model2.scriptsWithDuplication.map((script) => script.request).filter((e) => !!e).map((request) => {
     return {
       type: "ENTRY_OUTLINE",
@@ -26024,7 +26439,7 @@ function createOverlays5(model2) {
     };
   });
 }
-var UIStrings6, i18nString5;
+var UIStrings7, i18nString6;
 var init_DuplicatedJavaScript = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/DuplicatedJavaScript.js"() {
     init_process_global();
@@ -26032,7 +26447,7 @@ var init_DuplicatedJavaScript = __esm({
     init_helpers2();
     init_Common();
     init_types4();
-    UIStrings6 = {
+    UIStrings7 = {
       /**
        * @description Title of an insight that identifies multiple copies of the same JavaScript sources, and recommends removing the duplication.
        */
@@ -26046,29 +26461,29 @@ var init_DuplicatedJavaScript = __esm({
       /** Label for a column in a data table; entries will be the number of wasted bytes due to duplication of a web resource. */
       columnDuplicatedBytes: "Duplicated bytes"
     };
-    i18nString5 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
-    __name(finalize35, "finalize");
+    i18nString6 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    __name(finalize36, "finalize");
     __name(isDuplicatedJavaScriptInsight, "isDuplicatedJavaScriptInsight");
-    __name(generateInsight5, "generateInsight");
-    __name(createOverlays5, "createOverlays");
+    __name(generateInsight6, "generateInsight");
+    __name(createOverlays6, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/FontDisplay.js
 var FontDisplay_exports = {};
 __export(FontDisplay_exports, {
-  UIStrings: () => UIStrings7,
-  createOverlays: () => createOverlays6,
-  generateInsight: () => generateInsight6,
-  i18nString: () => i18nString6,
+  UIStrings: () => UIStrings8,
+  createOverlays: () => createOverlays7,
+  generateInsight: () => generateInsight7,
+  i18nString: () => i18nString7,
   isFontDisplayInsight: () => isFontDisplayInsight
 });
-function finalize36(partialModel) {
+function finalize37(partialModel) {
   return {
     insightKey: InsightKeys.FONT_DISPLAY,
-    strings: UIStrings7,
-    title: i18nString6(UIStrings7.title),
-    description: i18nString6(UIStrings7.description),
+    strings: UIStrings8,
+    title: i18nString7(UIStrings8.title),
+    description: i18nString7(UIStrings8.description),
     docs: "https://developer.chrome.com/docs/performance/insights/font-display",
     category: InsightCategory.INP,
     state: partialModel.fonts.find((font) => font.wastedTime > 0) ? "fail" : "pass",
@@ -26078,7 +26493,7 @@ function finalize36(partialModel) {
 function isFontDisplayInsight(model2) {
   return model2.insightKey === InsightKeys.FONT_DISPLAY;
 }
-function generateInsight6(data31, context) {
+function generateInsight7(data31, context) {
   const fonts = [];
   for (const remoteFont of data31.LayoutShifts.remoteFonts) {
     const event = remoteFont.beginRemoteFontLoadEvent;
@@ -26108,20 +26523,20 @@ function generateInsight6(data31, context) {
   }
   fonts.sort((a, b) => b.wastedTime - a.wastedTime);
   const savings = Math.max(...fonts.map((f) => f.wastedTime));
-  return finalize36({
+  return finalize37({
     relatedEvents: fonts.map((f) => f.request),
     fonts,
     metricSavings: { FCP: savings }
   });
 }
-function createOverlays6(model2) {
+function createOverlays7(model2) {
   return model2.fonts.map((font) => ({
     type: "ENTRY_OUTLINE",
     entry: font.request,
     outlineReason: font.wastedTime ? "ERROR" : "INFO"
   }));
 }
-var UIStrings7, i18nString6;
+var UIStrings8, i18nString7;
 var init_FontDisplay = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/FontDisplay.js"() {
     init_process_global();
@@ -26129,7 +26544,7 @@ var init_FontDisplay = __esm({
     init_helpers2();
     init_types2();
     init_types4();
-    UIStrings7 = {
+    UIStrings8 = {
       /** Title of an insight that provides details about the fonts used on the page, and the value of their `font-display` properties. */
       title: "Font display",
       /**
@@ -26141,22 +26556,22 @@ var init_FontDisplay = __esm({
       /** Column for the amount of time wasted. */
       wastedTimeColumn: "Wasted time"
     };
-    i18nString6 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
-    __name(finalize36, "finalize");
+    i18nString7 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    __name(finalize37, "finalize");
     __name(isFontDisplayInsight, "isFontDisplayInsight");
-    __name(generateInsight6, "generateInsight");
-    __name(createOverlays6, "createOverlays");
+    __name(generateInsight7, "generateInsight");
+    __name(createOverlays7, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/ForcedReflow.js
 var ForcedReflow_exports = {};
 __export(ForcedReflow_exports, {
-  UIStrings: () => UIStrings8,
+  UIStrings: () => UIStrings9,
   createOverlayForEvents: () => createOverlayForEvents,
-  createOverlays: () => createOverlays7,
-  generateInsight: () => generateInsight7,
-  i18nString: () => i18nString7,
+  createOverlays: () => createOverlays8,
+  generateInsight: () => generateInsight8,
+  i18nString: () => i18nString8,
   isForcedReflowInsight: () => isForcedReflowInsight
 });
 function getCallFrameId(callFrame) {
@@ -26210,12 +26625,12 @@ function getLargestTopLevelFunctionData(forcedReflowEvents, traceParsedData) {
   });
   return topTimeConsumingData;
 }
-function finalize37(partialModel) {
+function finalize38(partialModel) {
   return {
     insightKey: InsightKeys.FORCED_REFLOW,
-    strings: UIStrings8,
-    title: i18nString7(UIStrings8.title),
-    description: i18nString7(UIStrings8.description),
+    strings: UIStrings9,
+    title: i18nString8(UIStrings9.title),
+    description: i18nString8(UIStrings9.description),
     docs: "https://developer.chrome.com/docs/performance/insights/forced-reflow",
     category: InsightCategory.ALL,
     state: partialModel.aggregatedBottomUpData.length !== 0 ? "fail" : "pass",
@@ -26230,7 +26645,7 @@ function getBottomCallFrameForEvent(event, traceParsedData) {
 function isForcedReflowInsight(model2) {
   return model2.insightKey === InsightKeys.FORCED_REFLOW;
 }
-function generateInsight7(traceParsedData, context) {
+function generateInsight8(traceParsedData, context) {
   const isWithinContext = /* @__PURE__ */ __name((event) => {
     const frameId = Trace_exports.frameIDForEvent(event);
     if (frameId !== context.frameId) {
@@ -26252,13 +26667,13 @@ function generateInsight7(traceParsedData, context) {
     bottomUpData.relatedEvents.push(event);
   }
   const topLevelFunctionCallData = getLargestTopLevelFunctionData(events, traceParsedData);
-  return finalize37({
+  return finalize38({
     relatedEvents: events,
     topLevelFunctionCallData,
     aggregatedBottomUpData: [...bottomUpDataMap.values()]
   });
 }
-function createOverlays7(model2) {
+function createOverlays8(model2) {
   if (!model2.topLevelFunctionCallData) {
     return [];
   }
@@ -26275,7 +26690,7 @@ function createOverlayForEvents(events, outlineReason = "ERROR") {
     outlineReason
   }));
 }
-var UIStrings8, i18nString7;
+var UIStrings9, i18nString8;
 var init_ForcedReflow = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/ForcedReflow.js"() {
     init_process_global();
@@ -26284,7 +26699,7 @@ var init_ForcedReflow = __esm({
     init_helpers2();
     init_types2();
     init_types4();
-    UIStrings8 = {
+    UIStrings9 = {
       /**
        * @description Title of an insight that provides details about Forced reflow.
        */
@@ -26296,7 +26711,7 @@ var init_ForcedReflow = __esm({
       /**
        * @description Title of a list to provide related stack trace data
        */
-      relatedStackTrace: "Stack trace",
+      reflowCallFrames: "Call frames that trigger reflow",
       /**
        * @description Text to describe the top time-consuming function call
        */
@@ -26314,14 +26729,14 @@ var init_ForcedReflow = __esm({
        */
       anonymous: "(anonymous)"
     };
-    i18nString7 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString8 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     __name(getCallFrameId, "getCallFrameId");
     __name(getLargestTopLevelFunctionData, "getLargestTopLevelFunctionData");
-    __name(finalize37, "finalize");
+    __name(finalize38, "finalize");
     __name(getBottomCallFrameForEvent, "getBottomCallFrameForEvent");
     __name(isForcedReflowInsight, "isForcedReflowInsight");
-    __name(generateInsight7, "generateInsight");
-    __name(createOverlays7, "createOverlays");
+    __name(generateInsight8, "generateInsight");
+    __name(createOverlays8, "createOverlays");
     __name(createOverlayForEvents, "createOverlayForEvents");
   }
 });
@@ -26330,13 +26745,13 @@ var init_ForcedReflow = __esm({
 var ImageDelivery_exports = {};
 __export(ImageDelivery_exports, {
   ImageOptimizationType: () => ImageOptimizationType,
-  UIStrings: () => UIStrings9,
+  UIStrings: () => UIStrings10,
   createOverlayForRequest: () => createOverlayForRequest2,
-  createOverlays: () => createOverlays8,
-  generateInsight: () => generateInsight8,
+  createOverlays: () => createOverlays9,
+  generateInsight: () => generateInsight9,
   getOptimizationMessage: () => getOptimizationMessage,
   getOptimizationMessageWithBytes: () => getOptimizationMessageWithBytes,
-  i18nString: () => i18nString8,
+  i18nString: () => i18nString9,
   isImageDeliveryInsight: () => isImageDeliveryInsight
 });
 function isImageDeliveryInsight(model2) {
@@ -26345,13 +26760,13 @@ function isImageDeliveryInsight(model2) {
 function getOptimizationMessage(optimization) {
   switch (optimization.type) {
     case ImageOptimizationType.ADJUST_COMPRESSION:
-      return i18nString8(UIStrings9.useCompression);
+      return i18nString9(UIStrings10.useCompression);
     case ImageOptimizationType.MODERN_FORMAT_OR_COMPRESSION:
-      return i18nString8(UIStrings9.useModernFormat);
+      return i18nString9(UIStrings10.useModernFormat);
     case ImageOptimizationType.VIDEO_FORMAT:
-      return i18nString8(UIStrings9.useVideoFormat);
+      return i18nString9(UIStrings10.useVideoFormat);
     case ImageOptimizationType.RESPONSIVE_SIZE:
-      return i18nString8(UIStrings9.useResponsiveSize, {
+      return i18nString9(UIStrings10.useResponsiveSize, {
         PH1: `${optimization.fileDimensions.width}x${optimization.fileDimensions.height}`,
         PH2: `${optimization.displayDimensions.width}x${optimization.displayDimensions.height}`
       });
@@ -26360,14 +26775,14 @@ function getOptimizationMessage(optimization) {
 function getOptimizationMessageWithBytes(optimization) {
   const byteSavingsText = /* @__PURE__ */ ((bytes) => ({ __i18nBytes: bytes }))(optimization.byteSavings);
   const optimizationMessage = getOptimizationMessage(optimization);
-  return i18nString8(UIStrings9.estimatedSavings, { PH1: optimizationMessage, PH2: byteSavingsText });
+  return i18nString9(UIStrings10.estimatedSavings, { PH1: optimizationMessage, PH2: byteSavingsText });
 }
-function finalize38(partialModel) {
+function finalize39(partialModel) {
   return {
     insightKey: InsightKeys.IMAGE_DELIVERY,
-    strings: UIStrings9,
-    title: i18nString8(UIStrings9.title),
-    description: i18nString8(UIStrings9.description),
+    strings: UIStrings10,
+    title: i18nString9(UIStrings10.title),
+    description: i18nString9(UIStrings10.description),
     docs: "https://developer.chrome.com/docs/performance/insights/image-delivery",
     category: InsightCategory.LCP,
     state: partialModel.optimizableImages.length > 0 ? "fail" : "pass",
@@ -26391,7 +26806,7 @@ function getPixelCounts(data31, paintImage) {
     displayedPixels: width * height
   };
 }
-function generateInsight8(data31, context) {
+function generateInsight9(data31, context) {
   const isWithinContext = /* @__PURE__ */ __name((event) => Timing_exports3.eventIsInBounds(event, context.bounds), "isWithinContext");
   const contextRequests = data31.NetworkRequests.byTime.filter(isWithinContext);
   const optimizableImages = [];
@@ -26474,7 +26889,7 @@ function generateInsight8(data31, context) {
     }
     return b.request.args.data.decodedBodyLength - a.request.args.data.decodedBodyLength;
   });
-  return finalize38({
+  return finalize39({
     optimizableImages,
     metricSavings: metricSavingsForWastedBytes(wastedBytesByRequestId, context),
     wastedBytes: optimizableImages.reduce((total, img) => total + img.byteSavings, 0)
@@ -26487,17 +26902,17 @@ function createOverlayForRequest2(request) {
     outlineReason: "ERROR"
   };
 }
-function createOverlays8(model2) {
+function createOverlays9(model2) {
   return model2.optimizableImages.map((image) => createOverlayForRequest2(image.request));
 }
-var UIStrings9, i18nString8, TARGET_BYTES_PER_PIXEL_AVIF, GIF_SIZE_THRESHOLD, BYTE_SAVINGS_THRESHOLD, BYTE_SAVINGS_THRESHOLD_RESPONSIVE_BREAKPOINTS, ImageOptimizationType;
+var UIStrings10, i18nString9, TARGET_BYTES_PER_PIXEL_AVIF, GIF_SIZE_THRESHOLD, BYTE_SAVINGS_THRESHOLD, BYTE_SAVINGS_THRESHOLD_RESPONSIVE_BREAKPOINTS, ImageOptimizationType;
 var init_ImageDelivery = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/ImageDelivery.js"() {
     init_process_global();
     init_helpers2();
     init_Common();
     init_types4();
-    UIStrings9 = {
+    UIStrings10 = {
       /**
        * @description Title of an insight that recommends ways to reduce the size of images downloaded and used on the page.
        */
@@ -26544,7 +26959,7 @@ var init_ImageDelivery = __esm({
        */
       estimatedSavings: "{PH1} (Est {PH2})"
     };
-    i18nString8 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString9 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     TARGET_BYTES_PER_PIXEL_AVIF = 2 * 1 / 12;
     GIF_SIZE_THRESHOLD = 100 * 1024;
     BYTE_SAVINGS_THRESHOLD = 4096;
@@ -26558,30 +26973,30 @@ var init_ImageDelivery = __esm({
     __name(isImageDeliveryInsight, "isImageDeliveryInsight");
     __name(getOptimizationMessage, "getOptimizationMessage");
     __name(getOptimizationMessageWithBytes, "getOptimizationMessageWithBytes");
-    __name(finalize38, "finalize");
+    __name(finalize39, "finalize");
     __name(estimateGIFPercentSavings, "estimateGIFPercentSavings");
     __name(getDisplayedSize, "getDisplayedSize");
     __name(getPixelCounts, "getPixelCounts");
-    __name(generateInsight8, "generateInsight");
+    __name(generateInsight9, "generateInsight");
     __name(createOverlayForRequest2, "createOverlayForRequest");
-    __name(createOverlays8, "createOverlays");
+    __name(createOverlays9, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/INPBreakdown.js
 var INPBreakdown_exports = {};
 __export(INPBreakdown_exports, {
-  UIStrings: () => UIStrings10,
-  createOverlays: () => createOverlays9,
+  UIStrings: () => UIStrings11,
+  createOverlays: () => createOverlays10,
   createOverlaysForSubpart: () => createOverlaysForSubpart,
-  generateInsight: () => generateInsight9,
-  i18nString: () => i18nString9,
+  generateInsight: () => generateInsight10,
+  i18nString: () => i18nString10,
   isINPBreakdownInsight: () => isINPBreakdownInsight
 });
 function isINPBreakdownInsight(insight) {
   return insight.insightKey === InsightKeys.INP_BREAKDOWN;
 }
-function finalize39(partialModel) {
+function finalize40(partialModel) {
   let state = "pass";
   if (partialModel.longestInteractionEvent) {
     const classification = ModelHandlers_exports.UserInteractions.scoreClassificationForInteractionToNextPaint(partialModel.longestInteractionEvent.dur);
@@ -26593,21 +27008,21 @@ function finalize39(partialModel) {
   }
   return {
     insightKey: InsightKeys.INP_BREAKDOWN,
-    strings: UIStrings10,
-    title: i18nString9(UIStrings10.title),
-    description: i18nString9(UIStrings10.description),
+    strings: UIStrings11,
+    title: i18nString10(UIStrings11.title),
+    description: i18nString10(UIStrings11.description),
     docs: "https://developer.chrome.com/docs/performance/insights/inp-breakdown",
     category: InsightCategory.INP,
     state,
     ...partialModel
   };
 }
-function generateInsight9(data31, context) {
+function generateInsight10(data31, context) {
   const interactionEvents2 = data31.UserInteractions.interactionEventsWithNoNesting.filter((event) => {
     return Timing_exports3.eventIsInBounds(event, context.bounds);
   });
   if (!interactionEvents2.length) {
-    return finalize39({});
+    return finalize40({});
   }
   const longestByInteractionId = /* @__PURE__ */ new Map();
   for (const event of interactionEvents2) {
@@ -26620,7 +27035,7 @@ function generateInsight9(data31, context) {
   const normalizedInteractionEvents = [...longestByInteractionId.values()];
   normalizedInteractionEvents.sort((a, b) => b.dur - a.dur);
   const highPercentileIndex = Math.min(9, Math.floor(normalizedInteractionEvents.length / 50));
-  return finalize39({
+  return finalize40({
     relatedEvents: [normalizedInteractionEvents[0]],
     longestInteractionEvent: normalizedInteractionEvents[0],
     highPercentileInteractionEvent: normalizedInteractionEvents[highPercentileIndex]
@@ -26631,9 +27046,9 @@ function createOverlaysForSubpart(event, subpartIndex = -1) {
   const p2 = Timing_exports3.traceWindowFromMicroSeconds(p1.max, p1.max + event.mainThreadHandling);
   const p3 = Timing_exports3.traceWindowFromMicroSeconds(p2.max, p2.max + event.presentationDelay);
   let sections = [
-    { bounds: p1, label: i18nString9(UIStrings10.inputDelay), showDuration: true },
-    { bounds: p2, label: i18nString9(UIStrings10.processingDuration), showDuration: true },
-    { bounds: p3, label: i18nString9(UIStrings10.presentationDelay), showDuration: true }
+    { bounds: p1, label: i18nString10(UIStrings11.inputDelay), showDuration: true },
+    { bounds: p2, label: i18nString10(UIStrings11.processingDuration), showDuration: true },
+    { bounds: p3, label: i18nString10(UIStrings11.presentationDelay), showDuration: true }
   ];
   if (subpartIndex !== -1) {
     sections = [sections[subpartIndex]];
@@ -26647,21 +27062,21 @@ function createOverlaysForSubpart(event, subpartIndex = -1) {
     }
   ];
 }
-function createOverlays9(model2) {
+function createOverlays10(model2) {
   const event = model2.longestInteractionEvent;
   if (!event) {
     return [];
   }
   return createOverlaysForSubpart(event);
 }
-var UIStrings10, i18nString9;
+var UIStrings11, i18nString10;
 var init_INPBreakdown = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/INPBreakdown.js"() {
     init_process_global();
     init_handlers();
     init_helpers2();
     init_types4();
-    UIStrings10 = {
+    UIStrings11 = {
       /**
        * @description Text to tell the user about the longest user interaction.
        */
@@ -26696,22 +27111,22 @@ var init_INPBreakdown = __esm({
        */
       noInteractions: "No interactions detected"
     };
-    i18nString9 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString10 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     __name(isINPBreakdownInsight, "isINPBreakdownInsight");
-    __name(finalize39, "finalize");
-    __name(generateInsight9, "generateInsight");
+    __name(finalize40, "finalize");
+    __name(generateInsight10, "generateInsight");
     __name(createOverlaysForSubpart, "createOverlaysForSubpart");
-    __name(createOverlays9, "createOverlays");
+    __name(createOverlays10, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/LCPBreakdown.js
 var LCPBreakdown_exports = {};
 __export(LCPBreakdown_exports, {
-  UIStrings: () => UIStrings11,
-  createOverlays: () => createOverlays10,
-  generateInsight: () => generateInsight10,
-  i18nString: () => i18nString10,
+  UIStrings: () => UIStrings12,
+  createOverlays: () => createOverlays11,
+  generateInsight: () => generateInsight11,
+  i18nString: () => i18nString11,
   isLCPBreakdownInsight: () => isLCPBreakdownInsight
 });
 function isLCPBreakdownInsight(model2) {
@@ -26726,9 +27141,9 @@ function determineSubparts(nav, docRequest, lcpEvent, lcpRequest) {
     return null;
   }
   const ttfb = Timing_exports3.traceWindowFromMicroSeconds(nav.ts, firstDocByteTs);
-  ttfb.label = i18nString10(UIStrings11.timeToFirstByte);
+  ttfb.label = i18nString11(UIStrings12.timeToFirstByte);
   let renderDelay = Timing_exports3.traceWindowFromMicroSeconds(ttfb.max, lcpEvent.ts);
-  renderDelay.label = i18nString10(UIStrings11.elementRenderDelay);
+  renderDelay.label = i18nString11(UIStrings12.elementRenderDelay);
   if (!lcpRequest) {
     if (anyValuesNaN(ttfb.range, renderDelay.range)) {
       return null;
@@ -26740,9 +27155,9 @@ function determineSubparts(nav, docRequest, lcpEvent, lcpRequest) {
   const loadDelay = Timing_exports3.traceWindowFromMicroSeconds(ttfb.max, lcpStartTs);
   const loadDuration = Timing_exports3.traceWindowFromMicroSeconds(lcpStartTs, lcpReqEndTs);
   renderDelay = Timing_exports3.traceWindowFromMicroSeconds(lcpReqEndTs, lcpEvent.ts);
-  loadDelay.label = i18nString10(UIStrings11.resourceLoadDelay);
-  loadDuration.label = i18nString10(UIStrings11.resourceLoadDuration);
-  renderDelay.label = i18nString10(UIStrings11.elementRenderDelay);
+  loadDelay.label = i18nString11(UIStrings12.resourceLoadDelay);
+  loadDuration.label = i18nString11(UIStrings12.resourceLoadDuration);
+  renderDelay.label = i18nString11(UIStrings12.elementRenderDelay);
   if (anyValuesNaN(ttfb.range, loadDelay.range, loadDuration.range, renderDelay.range)) {
     return null;
   }
@@ -26753,7 +27168,7 @@ function determineSubparts(nav, docRequest, lcpEvent, lcpRequest) {
     renderDelay
   };
 }
-function finalize40(partialModel) {
+function finalize41(partialModel) {
   const relatedEvents = [];
   if (partialModel.lcpEvent) {
     relatedEvents.push(partialModel.lcpEvent);
@@ -26772,9 +27187,9 @@ function finalize40(partialModel) {
   }
   return {
     insightKey: InsightKeys.LCP_BREAKDOWN,
-    strings: UIStrings11,
-    title: i18nString10(UIStrings11.title),
-    description: i18nString10(UIStrings11.description),
+    strings: UIStrings12,
+    title: i18nString11(UIStrings12.title),
+    description: i18nString11(UIStrings12.description),
     docs: "https://developer.chrome.com/docs/performance/insights/lcp-breakdown",
     category: InsightCategory.LCP,
     state,
@@ -26782,32 +27197,32 @@ function finalize40(partialModel) {
     relatedEvents
   };
 }
-function generateInsight10(data31, context) {
+function generateInsight11(data31, context) {
   if (!context.navigation) {
-    return finalize40({});
+    return finalize41({});
   }
   const networkRequests = data31.NetworkRequests;
   const frameMetrics = data31.PageLoadMetrics.metricScoresByFrameId.get(context.frameId);
   if (!frameMetrics) {
     throw new Error("no frame metrics");
   }
-  const navMetrics = frameMetrics.get(context.navigationId);
+  const navMetrics = frameMetrics.get(context.navigation);
   if (!navMetrics) {
     throw new Error("no navigation metrics");
   }
   const metricScore = navMetrics.get(ModelHandlers_exports.PageLoadMetrics.MetricName.LCP);
   const lcpEvent = metricScore?.event;
-  if (!lcpEvent || !TraceEvents_exports.isLargestContentfulPaintCandidate(lcpEvent)) {
-    return finalize40({ warnings: [InsightWarning.NO_LCP] });
+  if (!lcpEvent || !TraceEvents_exports.isAnyLargestContentfulPaintCandidate(lcpEvent)) {
+    return finalize41({ warnings: [InsightWarning.NO_LCP] });
   }
   const lcpMs = Timing_exports3.microToMilli(metricScore.timing);
   const lcpTs = metricScore.event?.ts ? Timing_exports3.microToMilli(metricScore.event?.ts) : void 0;
   const lcpRequest = data31.LargestImagePaint.lcpRequestByNavigationId.get(context.navigationId);
   const docRequest = networkRequests.byId.get(context.navigationId);
   if (!docRequest) {
-    return finalize40({ lcpMs, lcpTs, lcpEvent, lcpRequest, warnings: [InsightWarning.NO_DOCUMENT_REQUEST] });
+    return finalize41({ lcpMs, lcpTs, lcpEvent, lcpRequest, warnings: [InsightWarning.NO_DOCUMENT_REQUEST] });
   }
-  return finalize40({
+  return finalize41({
     lcpMs,
     lcpTs,
     lcpEvent,
@@ -26815,7 +27230,7 @@ function generateInsight10(data31, context) {
     subparts: determineSubparts(context.navigation, docRequest, lcpEvent, lcpRequest) ?? void 0
   });
 }
-function createOverlays10(model2) {
+function createOverlays11(model2) {
   if (!model2.subparts || !model2.lcpTs) {
     return [];
   }
@@ -26830,7 +27245,7 @@ function createOverlays10(model2) {
   }
   return overlays;
 }
-var UIStrings11, i18nString10;
+var UIStrings12, i18nString11;
 var init_LCPBreakdown = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/LCPBreakdown.js"() {
     init_process_global();
@@ -26839,7 +27254,7 @@ var init_LCPBreakdown = __esm({
     init_types2();
     init_Common();
     init_types4();
-    UIStrings11 = {
+    UIStrings12 = {
       /**
        * @description Title of an insight that provides details about the LCP metric, broken down by parts.
        */
@@ -26882,39 +27297,39 @@ var init_LCPBreakdown = __esm({
        */
       noLcp: "No LCP detected"
     };
-    i18nString10 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString11 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     __name(isLCPBreakdownInsight, "isLCPBreakdownInsight");
     __name(anyValuesNaN, "anyValuesNaN");
     __name(determineSubparts, "determineSubparts");
-    __name(finalize40, "finalize");
-    __name(generateInsight10, "generateInsight");
-    __name(createOverlays10, "createOverlays");
+    __name(finalize41, "finalize");
+    __name(generateInsight11, "generateInsight");
+    __name(createOverlays11, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/LCPDiscovery.js
 var LCPDiscovery_exports = {};
 __export(LCPDiscovery_exports, {
-  UIStrings: () => UIStrings12,
-  createOverlays: () => createOverlays11,
-  generateInsight: () => generateInsight11,
+  UIStrings: () => UIStrings13,
+  createOverlays: () => createOverlays12,
+  generateInsight: () => generateInsight12,
   getImageData: () => getImageData,
-  i18nString: () => i18nString11,
+  i18nString: () => i18nString12,
   isLCPDiscoveryInsight: () => isLCPDiscoveryInsight
 });
 function isLCPDiscoveryInsight(model2) {
   return model2.insightKey === "LCPDiscovery";
 }
-function finalize41(partialModel) {
+function finalize42(partialModel) {
   const relatedEvents = partialModel.lcpEvent && partialModel.lcpRequest ? (
     // TODO: add entire request initiator chain?
     [partialModel.lcpEvent, partialModel.lcpRequest]
   ) : [];
   return {
     insightKey: InsightKeys.LCP_DISCOVERY,
-    strings: UIStrings12,
-    title: i18nString11(UIStrings12.title),
-    description: i18nString11(UIStrings12.description),
+    strings: UIStrings13,
+    title: i18nString12(UIStrings13.title),
+    description: i18nString12(UIStrings13.description),
     docs: "https://developer.chrome.com/docs/performance/insights/lcp-discovery",
     category: InsightCategory.LCP,
     state: partialModel.lcpRequest && partialModel.checklist && (!partialModel.checklist.eagerlyLoaded.value || !partialModel.checklist.requestDiscoverable.value || !partialModel.checklist.priorityHinted.value) ? "fail" : "pass",
@@ -26922,50 +27337,51 @@ function finalize41(partialModel) {
     relatedEvents
   };
 }
-function generateInsight11(data31, context) {
+function generateInsight12(data31, context) {
   if (!context.navigation) {
-    return finalize41({});
+    return finalize42({});
   }
   const networkRequests = data31.NetworkRequests;
   const frameMetrics = data31.PageLoadMetrics.metricScoresByFrameId.get(context.frameId);
   if (!frameMetrics) {
     throw new Error("no frame metrics");
   }
-  const navMetrics = frameMetrics.get(context.navigationId);
+  const navMetrics = frameMetrics.get(context.navigation);
   if (!navMetrics) {
     throw new Error("no navigation metrics");
   }
   const metricScore = navMetrics.get(ModelHandlers_exports.PageLoadMetrics.MetricName.LCP);
   const lcpEvent = metricScore?.event;
-  if (!lcpEvent || !TraceEvents_exports.isLargestContentfulPaintCandidate(lcpEvent)) {
-    return finalize41({ warnings: [InsightWarning.NO_LCP] });
+  if (!lcpEvent || !TraceEvents_exports.isAnyLargestContentfulPaintCandidate(lcpEvent)) {
+    return finalize42({ warnings: [InsightWarning.NO_LCP] });
   }
   const docRequest = networkRequests.byId.get(context.navigationId);
   if (!docRequest) {
-    return finalize41({ warnings: [InsightWarning.NO_DOCUMENT_REQUEST] });
+    return finalize42({ warnings: [InsightWarning.NO_DOCUMENT_REQUEST] });
   }
   const lcpRequest = data31.LargestImagePaint.lcpRequestByNavigationId.get(context.navigationId);
   if (!lcpRequest) {
-    return finalize41({ lcpEvent });
+    return finalize42({ lcpEvent });
   }
   const initiatorUrl = lcpRequest.args.data.initiator?.url;
   const initiatedByMainDoc = lcpRequest?.args.data.initiator?.type === "parser" && docRequest.args.data.url === initiatorUrl;
   const imgPreloadedOrFoundInHTML = lcpRequest?.args.data.isLinkPreload || initiatedByMainDoc;
-  const imageLoadingAttr = lcpEvent.args.data?.loadingAttr;
   const imageFetchPriorityHint = lcpRequest?.args.data.fetchPriorityHint;
   const earliestDiscoveryTime = calculateDocFirstByteTs(docRequest);
   const priorityHintFound = imageFetchPriorityHint === "high";
-  return finalize41({
+  const missingPriorityHintLabel = lcpRequest.args.data.isLinkPreload ? i18nString12(UIStrings13.fetchPriorityShouldBeAppliedToImagePreload) : i18nString12(UIStrings13.fetchPriorityShouldBeApplied);
+  const lcpNotLazyLoaded = lcpEvent.args.data?.loadingAttr !== "lazy" || lcpRequest.args.data.isLinkPreload;
+  return finalize42({
     lcpEvent,
     lcpRequest,
     earliestDiscoveryTimeTs: earliestDiscoveryTime ? Timing_exports.Micro(earliestDiscoveryTime) : void 0,
     checklist: {
       priorityHinted: {
-        label: priorityHintFound ? i18nString11(UIStrings12.fetchPriorityApplied) : i18nString11(UIStrings12.fetchPriorityShouldBeApplied),
+        label: priorityHintFound ? i18nString12(UIStrings13.fetchPriorityApplied) : missingPriorityHintLabel,
         value: priorityHintFound
       },
-      requestDiscoverable: { label: i18nString11(UIStrings12.requestDiscoverable), value: imgPreloadedOrFoundInHTML },
-      eagerlyLoaded: { label: i18nString11(UIStrings12.lazyLoadNotApplied), value: imageLoadingAttr !== "lazy" }
+      requestDiscoverable: { label: i18nString12(UIStrings13.requestDiscoverable), value: imgPreloadedOrFoundInHTML },
+      eagerlyLoaded: { label: i18nString12(UIStrings13.lazyLoadNotApplied), value: lcpNotLazyLoaded }
     }
   });
 }
@@ -26992,7 +27408,7 @@ function getImageData(model2) {
   }
   return data31;
 }
-function createOverlays11(model2) {
+function createOverlays12(model2) {
   const imageResults = getImageData(model2);
   if (!imageResults?.discoveryDelay) {
     return [];
@@ -27022,7 +27438,7 @@ function createOverlays11(model2) {
     }
   ];
 }
-var UIStrings12, i18nString11;
+var UIStrings13, i18nString12;
 var init_LCPDiscovery = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/LCPDiscovery.js"() {
     init_process_global();
@@ -27031,7 +27447,7 @@ var init_LCPDiscovery = __esm({
     init_types2();
     init_Common();
     init_types4();
-    UIStrings12 = {
+    UIStrings13 = {
       /**
        * @description Title of an insight that provides details about the LCP metric, and the network requests necessary to load it. Details how the LCP request was discoverable - in other words, the path necessary to load it (ex: network requests, JavaScript)
        */
@@ -27054,13 +27470,17 @@ var init_LCPDiscovery = __esm({
        */
       fetchPriorityShouldBeApplied: "fetchpriority=high should be applied",
       /**
+       * @description Text to tell the user that a fetchpriority property value of "high" should be applied to the preload request that loads the LCP image.
+       */
+      fetchPriorityShouldBeAppliedToImagePreload: "fetchpriority=high should be applied to the image preload request",
+      /**
        * @description Text to tell the user that the LCP request is discoverable in the initial document.
        */
       requestDiscoverable: "Request is discoverable in initial document",
       /**
-       * @description Text to tell the user that the LCP request does not have the lazy load property applied.
+       * @description Text to tell the user that LCP resources should avoid using loading=lazy.
        */
-      lazyLoadNotApplied: "lazy load not applied",
+      lazyLoadNotApplied: "LCP resources should not use loading=lazy",
       /**
        * @description Text status indicating that the the Largest Contentful Paint (LCP) metric timing was not found. "LCP" is an acronym and should not be translated.
        */
@@ -27070,12 +27490,12 @@ var init_LCPDiscovery = __esm({
        */
       noLcpResource: "No LCP resource detected because the LCP is not an image"
     };
-    i18nString11 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString12 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     __name(isLCPDiscoveryInsight, "isLCPDiscoveryInsight");
-    __name(finalize41, "finalize");
-    __name(generateInsight11, "generateInsight");
+    __name(finalize42, "finalize");
+    __name(generateInsight12, "generateInsight");
     __name(getImageData, "getImageData");
-    __name(createOverlays11, "createOverlays");
+    __name(createOverlays12, "createOverlays");
   }
 });
 
@@ -28047,19 +28467,19 @@ var init_legacy_javascript2 = __esm({
 // node_modules/@paulirish/trace_engine/models/trace/insights/LegacyJavaScript.js
 var LegacyJavaScript_exports = {};
 __export(LegacyJavaScript_exports, {
-  UIStrings: () => UIStrings13,
-  createOverlays: () => createOverlays12,
-  generateInsight: () => generateInsight12,
-  i18nString: () => i18nString12,
+  UIStrings: () => UIStrings14,
+  createOverlays: () => createOverlays13,
+  generateInsight: () => generateInsight13,
+  i18nString: () => i18nString13,
   isLegacyJavaScript: () => isLegacyJavaScript
 });
-function finalize42(partialModel) {
+function finalize43(partialModel) {
   const requests = [...partialModel.legacyJavaScriptResults.keys()].map((script) => script.request).filter((e) => !!e);
   return {
     insightKey: InsightKeys.LEGACY_JAVASCRIPT,
-    strings: UIStrings13,
-    title: i18nString12(UIStrings13.title),
-    description: i18nString12(UIStrings13.description),
+    strings: UIStrings14,
+    title: i18nString13(UIStrings14.title),
+    description: i18nString13(UIStrings14.description),
     docs: "https://developer.chrome.com/docs/performance/insights/legacy-javascript",
     category: InsightCategory.ALL,
     state: requests.length ? "fail" : "pass",
@@ -28070,7 +28490,7 @@ function finalize42(partialModel) {
 function isLegacyJavaScript(model2) {
   return model2.insightKey === InsightKeys.LEGACY_JAVASCRIPT;
 }
-function generateInsight12(data31, context) {
+function generateInsight13(data31, context) {
   const scripts = data31.Scripts.scripts.filter((script) => {
     if (script.frame !== context.frameId) {
       return false;
@@ -28100,13 +28520,13 @@ function generateInsight12(data31, context) {
     }
   }
   const sorted2 = new Map([...legacyJavaScriptResults].sort((a, b) => b[1].estimatedByteSavings - a[1].estimatedByteSavings));
-  return finalize42({
+  return finalize43({
     legacyJavaScriptResults: sorted2,
     metricSavings: metricSavingsForWastedBytes(wastedBytesByRequestId, context),
     wastedBytes: wastedBytesByRequestId.values().reduce((acc, cur) => acc + cur, 0)
   });
 }
-function createOverlays12(model2) {
+function createOverlays13(model2) {
   return [...model2.legacyJavaScriptResults.keys()].map((script) => script.request).filter((e) => !!e).map((request) => {
     return {
       type: "ENTRY_OUTLINE",
@@ -28115,7 +28535,7 @@ function createOverlays12(model2) {
     };
   });
 }
-var detectLegacyJavaScript2, UIStrings13, i18nString12, BYTE_THRESHOLD;
+var detectLegacyJavaScript2, UIStrings14, i18nString13, BYTE_THRESHOLD;
 var init_LegacyJavaScript = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/LegacyJavaScript.js"() {
     init_process_global();
@@ -28124,7 +28544,7 @@ var init_LegacyJavaScript = __esm({
     init_Common();
     init_types4();
     ({ detectLegacyJavaScript: detectLegacyJavaScript2 } = legacy_javascript_exports);
-    UIStrings13 = {
+    UIStrings14 = {
       /**
        * @description Title of an insight that identifies polyfills for modern JavaScript features, and recommends their removal.
        */
@@ -28138,24 +28558,24 @@ var init_LegacyJavaScript = __esm({
       /** Label for a column in a data table; entries will be the number of wasted bytes (aka the estimated savings in terms of bytes). */
       columnWastedBytes: "Wasted bytes"
     };
-    i18nString12 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString13 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     BYTE_THRESHOLD = 5e3;
-    __name(finalize42, "finalize");
+    __name(finalize43, "finalize");
     __name(isLegacyJavaScript, "isLegacyJavaScript");
-    __name(generateInsight12, "generateInsight");
-    __name(createOverlays12, "createOverlays");
+    __name(generateInsight13, "generateInsight");
+    __name(createOverlays13, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/ModernHTTP.js
 var ModernHTTP_exports = {};
 __export(ModernHTTP_exports, {
-  UIStrings: () => UIStrings14,
+  UIStrings: () => UIStrings15,
   createOverlayForRequest: () => createOverlayForRequest3,
-  createOverlays: () => createOverlays13,
+  createOverlays: () => createOverlays14,
   determineHttp1Requests: () => determineHttp1Requests,
-  generateInsight: () => generateInsight13,
-  i18nString: () => i18nString13,
+  generateInsight: () => generateInsight14,
+  i18nString: () => i18nString14,
   isModernHTTPInsight: () => isModernHTTPInsight
 });
 function isModernHTTPInsight(model2) {
@@ -28253,12 +28673,12 @@ function computeMetricSavings(http1Requests, context) {
     LCP: computeWasteWithGraph(urlsToChange, lcpGraph, context.lantern.simulator)
   };
 }
-function finalize43(partialModel) {
+function finalize44(partialModel) {
   return {
     insightKey: InsightKeys.MODERN_HTTP,
-    strings: UIStrings14,
-    title: i18nString13(UIStrings14.title),
-    description: i18nString13(UIStrings14.description),
+    strings: UIStrings15,
+    title: i18nString14(UIStrings15.title),
+    description: i18nString14(UIStrings15.description),
     docs: "https://developer.chrome.com/docs/performance/insights/modern-http",
     category: InsightCategory.LCP,
     state: partialModel.http1Requests.length > 0 ? "fail" : "pass",
@@ -28266,14 +28686,14 @@ function finalize43(partialModel) {
     relatedEvents: partialModel.http1Requests
   };
 }
-function generateInsight13(data31, context) {
+function generateInsight14(data31, context) {
   const isWithinContext = /* @__PURE__ */ __name((event) => Timing_exports3.eventIsInBounds(event, context.bounds), "isWithinContext");
   const contextRequests = data31.NetworkRequests.byTime.filter(isWithinContext);
   const entityMappings3 = data31.NetworkRequests.entityMappings;
   const firstPartyUrl = context.navigation?.args.data?.documentLoaderURL ?? data31.Meta.mainFrameURL;
   const firstPartyEntity = helpers_exports.getEntityForUrl(firstPartyUrl, entityMappings3);
   const http1Requests = determineHttp1Requests(contextRequests, entityMappings3, firstPartyEntity ?? null);
-  return finalize43({
+  return finalize44({
     http1Requests,
     metricSavings: computeMetricSavings(http1Requests, context)
   });
@@ -28285,10 +28705,10 @@ function createOverlayForRequest3(request) {
     outlineReason: "ERROR"
   };
 }
-function createOverlays13(model2) {
+function createOverlays14(model2) {
   return model2.http1Requests.map((req) => createOverlayForRequest3(req)) ?? [];
 }
-var UIStrings14, i18nString13;
+var UIStrings15, i18nString14;
 var init_ModernHTTP = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/ModernHTTP.js"() {
     init_process_global();
@@ -28296,7 +28716,7 @@ var init_ModernHTTP = __esm({
     init_handlers();
     init_helpers2();
     init_types4();
-    UIStrings14 = {
+    UIStrings15 = {
       /**
        * @description Title of an insight that recommends using HTTP/2 over HTTP/1.1 because of the performance benefits. "HTTP" should not be translated.
        */
@@ -28318,16 +28738,16 @@ var init_ModernHTTP = __esm({
        */
       noOldProtocolRequests: "No requests used HTTP/1.1, or its current use of HTTP/1.1 does not present a significant optimization opportunity. HTTP/1.1 requests are only flagged if six or more static assets originate from the same origin, and they are not served from a local development environment or a third-party source."
     };
-    i18nString13 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString14 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     __name(isModernHTTPInsight, "isModernHTTPInsight");
     __name(isMultiplexableStaticAsset, "isMultiplexableStaticAsset");
     __name(determineHttp1Requests, "determineHttp1Requests");
     __name(computeWasteWithGraph, "computeWasteWithGraph");
     __name(computeMetricSavings, "computeMetricSavings");
-    __name(finalize43, "finalize");
-    __name(generateInsight13, "generateInsight");
+    __name(finalize44, "finalize");
+    __name(generateInsight14, "generateInsight");
     __name(createOverlayForRequest3, "createOverlayForRequest");
-    __name(createOverlays13, "createOverlays");
+    __name(createOverlays14, "createOverlays");
   }
 });
 
@@ -28336,23 +28756,23 @@ var NetworkDependencyTree_exports = {};
 __export(NetworkDependencyTree_exports, {
   ParsedURL: () => ParsedURL,
   TOO_MANY_PRECONNECTS_THRESHOLD: () => TOO_MANY_PRECONNECTS_THRESHOLD,
-  UIStrings: () => UIStrings15,
-  createOverlays: () => createOverlays14,
-  generateInsight: () => generateInsight14,
+  UIStrings: () => UIStrings16,
+  createOverlays: () => createOverlays15,
+  generateInsight: () => generateInsight15,
   generatePreconnectCandidates: () => generatePreconnectCandidates,
   generatePreconnectedOrigins: () => generatePreconnectedOrigins,
   handleLinkResponseHeader: () => handleLinkResponseHeader,
-  i18nString: () => i18nString14,
+  i18nString: () => i18nString15,
   isNetworkDependencyTreeInsight: () => isNetworkDependencyTreeInsight,
   normalizePath: () => normalizePath,
   schemeIs: () => schemeIs
 });
-function finalize44(partialModel) {
+function finalize45(partialModel) {
   return {
     insightKey: InsightKeys.NETWORK_DEPENDENCY_TREE,
-    strings: UIStrings15,
-    title: i18nString14(UIStrings15.title),
-    description: i18nString14(UIStrings15.description),
+    strings: UIStrings16,
+    title: i18nString15(UIStrings16.title),
+    description: i18nString15(UIStrings16.description),
     docs: "https://developer.chrome.com/docs/performance/insights/network-dependency-tree",
     category: InsightCategory.LCP,
     state: partialModel.fail ? "fail" : "pass",
@@ -28439,7 +28859,7 @@ function generateNetworkDependencyTree(context) {
         currentNodes.push(found);
       }
       path7.forEach((request2) => found?.relatedRequests.add(request2));
-      relatedEvents.set(request, depth < 2 ? [] : [i18nString14(UIStrings15.warningDescription)]);
+      relatedEvents.set(request, depth < 2 ? [] : [i18nString15(UIStrings16.warningDescription)]);
       currentNodes = found.children;
     }
   }
@@ -28615,7 +29035,8 @@ function candidateRequestsByOrigin(data31, mainResource, contextRequests, lcpGra
     if (!hasValidTiming(request)) {
       return;
     }
-    if (data31.NetworkRequests.eventToInitiator.get(request) === mainResource) {
+    const initiator = Initiators_exports.getNetworkInitiator(data31, request);
+    if (initiator === mainResource) {
       return;
     }
     const url = new URL(request.args.data.url);
@@ -28699,9 +29120,9 @@ function generatePreconnectCandidates(data31, context, contextRequests) {
 function isNetworkDependencyTreeInsight(model2) {
   return model2.insightKey === InsightKeys.NETWORK_DEPENDENCY_TREE;
 }
-function generateInsight14(data31, context) {
+function generateInsight15(data31, context) {
   if (!context.navigation) {
-    return finalize44({
+    return finalize45({
       rootNodes: [],
       maxTime: 0,
       fail: false,
@@ -28714,7 +29135,7 @@ function generateInsight14(data31, context) {
   const contextRequests = data31.NetworkRequests.byTime.filter(isWithinContext);
   const preconnectCandidates = generatePreconnectCandidates(data31, context, contextRequests);
   const preconnectedOrigins = generatePreconnectedOrigins(data31, context, contextRequests, preconnectCandidates);
-  return finalize44({
+  return finalize45({
     rootNodes,
     maxTime,
     fail,
@@ -28723,7 +29144,7 @@ function generateInsight14(data31, context) {
     preconnectCandidates
   });
 }
-function createOverlays14(model2) {
+function createOverlays15(model2) {
   function walk(nodes, overlays2) {
     nodes.forEach((node) => {
       overlays2.push({
@@ -28770,15 +29191,16 @@ function schemeIs(url, scheme) {
     return false;
   }
 }
-var UIStrings15, i18nString14, nonCriticalResourceTypes, PRECONNECT_SOCKET_MAX_IDLE_IN_MS, IGNORE_THRESHOLD_IN_MILLISECONDS, TOO_MANY_PRECONNECTS_THRESHOLD, ParsedURL;
+var UIStrings16, i18nString15, nonCriticalResourceTypes, PRECONNECT_SOCKET_MAX_IDLE_IN_MS, IGNORE_THRESHOLD_IN_MILLISECONDS, TOO_MANY_PRECONNECTS_THRESHOLD, ParsedURL;
 var init_NetworkDependencyTree = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/NetworkDependencyTree.js"() {
     init_process_global();
     init_platform();
+    init_extras();
     init_helpers2();
     init_types2();
     init_types4();
-    UIStrings15 = {
+    UIStrings16 = {
       /**
        * @description Title of an insight that recommends avoiding chaining critical requests.
        */
@@ -28853,7 +29275,7 @@ var init_NetworkDependencyTree = __esm({
        */
       columnWastedMs: "Est LCP savings"
     };
-    i18nString14 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString15 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     nonCriticalResourceTypes = /* @__PURE__ */ new Set([
       "Image",
       "XHR",
@@ -28863,7 +29285,7 @@ var init_NetworkDependencyTree = __esm({
     PRECONNECT_SOCKET_MAX_IDLE_IN_MS = Timing_exports.Milli(15e3);
     IGNORE_THRESHOLD_IN_MILLISECONDS = Timing_exports.Milli(50);
     TOO_MANY_PRECONNECTS_THRESHOLD = 4;
-    __name(finalize44, "finalize");
+    __name(finalize45, "finalize");
     __name(isCritical, "isCritical");
     __name(findMaxLeafNode, "findMaxLeafNode");
     __name(sortRecursively, "sortRecursively");
@@ -28878,8 +29300,8 @@ var init_NetworkDependencyTree = __esm({
     __name(candidateRequestsByOrigin, "candidateRequestsByOrigin");
     __name(generatePreconnectCandidates, "generatePreconnectCandidates");
     __name(isNetworkDependencyTreeInsight, "isNetworkDependencyTreeInsight");
-    __name(generateInsight14, "generateInsight");
-    __name(createOverlays14, "createOverlays");
+    __name(generateInsight15, "generateInsight");
+    __name(createOverlays15, "createOverlays");
     __name(normalizePath, "normalizePath");
     __name(schemeIs, "schemeIs");
     ParsedURL = class _ParsedURL {
@@ -29247,11 +29669,11 @@ var init_NetworkDependencyTree = __esm({
 // node_modules/@paulirish/trace_engine/models/trace/insights/RenderBlocking.js
 var RenderBlocking_exports = {};
 __export(RenderBlocking_exports, {
-  UIStrings: () => UIStrings16,
+  UIStrings: () => UIStrings17,
   createOverlayForRequest: () => createOverlayForRequest4,
-  createOverlays: () => createOverlays15,
-  generateInsight: () => generateInsight15,
-  i18nString: () => i18nString15,
+  createOverlays: () => createOverlays16,
+  generateInsight: () => generateInsight16,
+  i18nString: () => i18nString16,
   isRenderBlockingInsight: () => isRenderBlockingInsight
 });
 function isRenderBlockingInsight(insight) {
@@ -29320,27 +29742,27 @@ function computeSavings(data31, context, renderBlockingRequests) {
   }
   return { metricSavings, requestIdToWastedMs };
 }
-function finalize45(partialModel) {
+function finalize46(partialModel) {
   return {
     insightKey: InsightKeys.RENDER_BLOCKING,
-    strings: UIStrings16,
-    title: i18nString15(UIStrings16.title),
-    description: i18nString15(UIStrings16.description),
+    strings: UIStrings17,
+    title: i18nString16(UIStrings17.title),
+    description: i18nString16(UIStrings17.description),
     docs: "https://developer.chrome.com/docs/performance/insights/render-blocking",
     category: InsightCategory.LCP,
     state: partialModel.renderBlockingRequests.length > 0 ? "fail" : "pass",
     ...partialModel
   };
 }
-function generateInsight15(data31, context) {
+function generateInsight16(data31, context) {
   if (!context.navigation) {
-    return finalize45({
+    return finalize46({
       renderBlockingRequests: []
     });
   }
-  const firstPaintTs = data31.PageLoadMetrics.metricScoresByFrameId.get(context.frameId)?.get(context.navigationId)?.get(ModelHandlers_exports.PageLoadMetrics.MetricName.FP)?.event?.ts;
+  const firstPaintTs = data31.PageLoadMetrics.metricScoresByFrameId.get(context.frameId)?.get(context.navigation)?.get(ModelHandlers_exports.PageLoadMetrics.MetricName.FP)?.event?.ts;
   if (!firstPaintTs) {
-    return finalize45({
+    return finalize46({
       renderBlockingRequests: [],
       warnings: [InsightWarning.NO_FP]
     });
@@ -29373,7 +29795,7 @@ function generateInsight15(data31, context) {
   renderBlockingRequests = renderBlockingRequests.sort((a, b) => {
     return b.dur - a.dur;
   });
-  return finalize45({
+  return finalize46({
     relatedEvents: renderBlockingRequests,
     renderBlockingRequests,
     ...savings
@@ -29386,21 +29808,21 @@ function createOverlayForRequest4(request) {
     outlineReason: "ERROR"
   };
 }
-function createOverlays15(model2) {
+function createOverlays16(model2) {
   return model2.renderBlockingRequests.map((request) => createOverlayForRequest4(request));
 }
-var UIStrings16, i18nString15, MINIMUM_WASTED_MS;
+var UIStrings17, i18nString16, MINIMUM_WASTED_MS;
 var init_RenderBlocking = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/RenderBlocking.js"() {
     init_process_global();
     init_handlers();
     init_helpers2();
     init_types4();
-    UIStrings16 = {
+    UIStrings17 = {
       /**
        * @description Title of an insight that provides the user with the list of network requests that blocked and therefore slowed down the page rendering and becoming visible to the user.
        */
-      title: "Render blocking requests",
+      title: "Render-blocking requests",
       /**
        * @description Text to describe that there are requests blocking rendering, which may affect LCP.
        */
@@ -29416,29 +29838,29 @@ var init_RenderBlocking = __esm({
       /**
        * @description Text status indicating that no requests blocked the initial render of a navigation
        */
-      noRenderBlocking: "No render blocking requests for this navigation"
+      noRenderBlocking: "No render-blocking requests for this navigation"
     };
-    i18nString15 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString16 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     __name(isRenderBlockingInsight, "isRenderBlockingInsight");
     MINIMUM_WASTED_MS = 50;
     __name(getNodesAndTimingByRequestId, "getNodesAndTimingByRequestId");
     __name(estimateSavingsWithGraphs2, "estimateSavingsWithGraphs");
     __name(hasImageLCP, "hasImageLCP");
     __name(computeSavings, "computeSavings");
-    __name(finalize45, "finalize");
-    __name(generateInsight15, "generateInsight");
+    __name(finalize46, "finalize");
+    __name(generateInsight16, "generateInsight");
     __name(createOverlayForRequest4, "createOverlayForRequest");
-    __name(createOverlays15, "createOverlays");
+    __name(createOverlays16, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/SlowCSSSelector.js
 var SlowCSSSelector_exports = {};
 __export(SlowCSSSelector_exports, {
-  UIStrings: () => UIStrings17,
-  createOverlays: () => createOverlays16,
-  generateInsight: () => generateInsight16,
-  i18nString: () => i18nString16,
+  UIStrings: () => UIStrings18,
+  createOverlays: () => createOverlays17,
+  generateInsight: () => generateInsight17,
+  i18nString: () => i18nString17,
   isSlowCSSSelectorInsight: () => isSlowCSSSelectorInsight
 });
 function aggregateSelectorStats(data31, context) {
@@ -29465,12 +29887,12 @@ function aggregateSelectorStats(data31, context) {
   }
   return [...selectorMap.values()];
 }
-function finalize46(partialModel) {
+function finalize47(partialModel) {
   return {
     insightKey: InsightKeys.SLOW_CSS_SELECTOR,
-    strings: UIStrings17,
-    title: i18nString16(UIStrings17.title),
-    description: i18nString16(UIStrings17.description),
+    strings: UIStrings18,
+    title: i18nString17(UIStrings18.title),
+    description: i18nString17(UIStrings18.description),
     docs: "https://developer.chrome.com/docs/performance/insights/slow-css-selector",
     category: InsightCategory.ALL,
     state: partialModel.topSelectorElapsedMs && partialModel.topSelectorMatchAttempts ? "informative" : "pass",
@@ -29480,7 +29902,7 @@ function finalize46(partialModel) {
 function isSlowCSSSelectorInsight(model2) {
   return model2.insightKey === InsightKeys.SLOW_CSS_SELECTOR;
 }
-function generateInsight16(data31, context) {
+function generateInsight17(data31, context) {
   const selectorStatsData = data31.SelectorStats;
   if (!selectorStatsData) {
     throw new Error("no selector stats data");
@@ -29507,7 +29929,7 @@ function generateInsight16(data31, context) {
       return a[SelectorTimingsKey.MatchAttempts] > b[SelectorTimingsKey.MatchAttempts] ? a : b;
     });
   }
-  return finalize46({
+  return finalize47({
     // TODO: should we identify RecalcStyle events as linked to this insight?
     relatedEvents: [],
     totalElapsedMs: Timing_exports.Milli(totalElapsedUs / 1e3),
@@ -29517,10 +29939,10 @@ function generateInsight16(data31, context) {
     topSelectorMatchAttempts
   });
 }
-function createOverlays16(_) {
+function createOverlays17(_) {
   return [];
 }
-var UIStrings17, i18nString16, slowCSSSelectorThreshold;
+var UIStrings18, i18nString17, slowCSSSelectorThreshold;
 var init_SlowCSSSelector = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/SlowCSSSelector.js"() {
     init_process_global();
@@ -29528,7 +29950,7 @@ var init_SlowCSSSelector = __esm({
     init_TraceEvents();
     init_types2();
     init_types4();
-    UIStrings17 = {
+    UIStrings18 = {
       /**
        * @description Title of an insight that provides details about slow CSS selectors.
        */
@@ -29570,24 +29992,24 @@ var init_SlowCSSSelector = __esm({
        */
       topSelectorMatchAttempt: "Top selector match attempt"
     };
-    i18nString16 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString17 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     slowCSSSelectorThreshold = 500;
     __name(aggregateSelectorStats, "aggregateSelectorStats");
-    __name(finalize46, "finalize");
+    __name(finalize47, "finalize");
     __name(isSlowCSSSelectorInsight, "isSlowCSSSelectorInsight");
-    __name(generateInsight16, "generateInsight");
-    __name(createOverlays16, "createOverlays");
+    __name(generateInsight17, "generateInsight");
+    __name(createOverlays17, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/ThirdParties.js
 var ThirdParties_exports2 = {};
 __export(ThirdParties_exports2, {
-  UIStrings: () => UIStrings18,
-  createOverlays: () => createOverlays17,
+  UIStrings: () => UIStrings19,
+  createOverlays: () => createOverlays18,
   createOverlaysForSummary: () => createOverlaysForSummary,
-  generateInsight: () => generateInsight17,
-  i18nString: () => i18nString17,
+  generateInsight: () => generateInsight18,
+  i18nString: () => i18nString18,
   isThirdPartyInsight: () => isThirdPartyInsight
 });
 function getRelatedEvents(summaries, firstPartyEntity) {
@@ -29599,12 +30021,12 @@ function getRelatedEvents(summaries, firstPartyEntity) {
   }
   return relatedEvents;
 }
-function finalize47(partialModel) {
+function finalize48(partialModel) {
   return {
     insightKey: InsightKeys.THIRD_PARTIES,
-    strings: UIStrings18,
-    title: i18nString17(UIStrings18.title),
-    description: i18nString17(UIStrings18.description),
+    strings: UIStrings19,
+    title: i18nString18(UIStrings19.title),
+    description: i18nString18(UIStrings19.description),
     docs: "https://developer.chrome.com/docs/performance/insights/third-parties",
     category: InsightCategory.ALL,
     state: partialModel.entitySummaries.find((summary) => summary.entity !== partialModel.firstPartyEntity) ? "informative" : "pass",
@@ -29614,11 +30036,11 @@ function finalize47(partialModel) {
 function isThirdPartyInsight(model2) {
   return model2.insightKey === InsightKeys.THIRD_PARTIES;
 }
-function generateInsight17(data31, context) {
+function generateInsight18(data31, context) {
   const entitySummaries = ThirdParties_exports.summarizeByThirdParty(data31, context.bounds);
   const firstPartyUrl = context.navigation?.args.data?.documentLoaderURL ?? data31.Meta.mainFrameURL;
   const firstPartyEntity = import_third_party_web.default.getEntity(firstPartyUrl) || helpers_exports.makeUpEntity(data31.Renderer.entityMappings.createdEntityCache, firstPartyUrl);
-  return finalize47({
+  return finalize48({
     relatedEvents: getRelatedEvents(entitySummaries, firstPartyEntity),
     firstPartyEntity,
     entitySummaries
@@ -29639,7 +30061,7 @@ function createOverlaysForSummary(summary) {
   }
   return overlays;
 }
-function createOverlays17(model2) {
+function createOverlays18(model2) {
   const overlays = [];
   const summaries = model2.entitySummaries ?? [];
   for (const summary of summaries) {
@@ -29651,7 +30073,7 @@ function createOverlays17(model2) {
   }
   return overlays;
 }
-var UIStrings18, i18nString17;
+var UIStrings19, i18nString18;
 var init_ThirdParties2 = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/ThirdParties.js"() {
     init_process_global();
@@ -29659,7 +30081,7 @@ var init_ThirdParties2 = __esm({
     init_extras();
     init_handlers();
     init_types4();
-    UIStrings18 = {
+    UIStrings19 = {
       /** Title of an insight that provides details about the code on a web page that the user doesn't control (referred to as "third-party code"). */
       title: "3rd parties",
       /**
@@ -29678,31 +30100,31 @@ var init_ThirdParties2 = __esm({
        */
       noThirdParties: "No third parties found"
     };
-    i18nString17 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    i18nString18 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
     __name(getRelatedEvents, "getRelatedEvents");
-    __name(finalize47, "finalize");
+    __name(finalize48, "finalize");
     __name(isThirdPartyInsight, "isThirdPartyInsight");
-    __name(generateInsight17, "generateInsight");
+    __name(generateInsight18, "generateInsight");
     __name(createOverlaysForSummary, "createOverlaysForSummary");
-    __name(createOverlays17, "createOverlays");
+    __name(createOverlays18, "createOverlays");
   }
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/insights/Viewport.js
 var Viewport_exports = {};
 __export(Viewport_exports, {
-  UIStrings: () => UIStrings19,
-  createOverlays: () => createOverlays18,
-  generateInsight: () => generateInsight18,
-  i18nString: () => i18nString18,
+  UIStrings: () => UIStrings20,
+  createOverlays: () => createOverlays19,
+  generateInsight: () => generateInsight19,
+  i18nString: () => i18nString19,
   isViewportInsight: () => isViewportInsight
 });
-function finalize48(partialModel) {
+function finalize49(partialModel) {
   return {
     insightKey: InsightKeys.VIEWPORT,
-    strings: UIStrings19,
-    title: i18nString18(UIStrings19.title),
-    description: i18nString18(UIStrings19.description),
+    strings: UIStrings20,
+    title: i18nString19(UIStrings20.title),
+    description: i18nString19(UIStrings20.description),
     docs: "https://developer.chrome.com/docs/performance/insights/viewport",
     category: InsightCategory.INP,
     state: partialModel.mobileOptimized === false ? "fail" : "pass",
@@ -29712,7 +30134,7 @@ function finalize48(partialModel) {
 function isViewportInsight(model2) {
   return model2.insightKey === InsightKeys.VIEWPORT;
 }
-function generateInsight18(data31, context) {
+function generateInsight19(data31, context) {
   const viewportEvent = data31.UserInteractions.parseMetaViewportEvents.find((event) => {
     if (event.args.data.frame !== context.frameId) {
       return false;
@@ -29729,7 +30151,7 @@ function generateInsight18(data31, context) {
     return Timing_exports3.eventIsInBounds(event, context.bounds);
   });
   if (!compositorEvents.length) {
-    return finalize48({
+    return finalize49({
       mobileOptimized: null,
       warnings: [InsightWarning.NO_LAYOUT]
     });
@@ -29739,7 +30161,7 @@ function generateInsight18(data31, context) {
       const longPointerInteractions = [...data31.UserInteractions.interactionsOverThreshold.values()].filter((interaction) => ModelHandlers_exports.UserInteractions.categoryOfInteraction(interaction) === "POINTER" && interaction.inputDelay >= 5e4);
       const inputDelay = Math.max(0, ...longPointerInteractions.map((interaction) => interaction.inputDelay)) / 1e3;
       const inpMetricSavings = NumberUtilities_exports.clamp(inputDelay, 0, 300);
-      return finalize48({
+      return finalize49({
         mobileOptimized: false,
         viewportEvent,
         longPointerInteractions,
@@ -29747,12 +30169,12 @@ function generateInsight18(data31, context) {
       });
     }
   }
-  return finalize48({
+  return finalize49({
     mobileOptimized: true,
     viewportEvent
   });
 }
-function createOverlays18(model2) {
+function createOverlays19(model2) {
   if (!model2.longPointerInteractions) {
     return [];
   }
@@ -29762,12 +30184,12 @@ function createOverlays18(model2) {
     return {
       type: "TIMESPAN_BREAKDOWN",
       entry: interaction,
-      sections: [{ bounds, label: i18nString18(UIStrings19.mobileTapDelayLabel), showDuration: true }],
+      sections: [{ bounds, label: i18nString19(UIStrings20.mobileTapDelayLabel), showDuration: true }],
       renderLocation: "ABOVE_EVENT"
     };
   });
 }
-var UIStrings19, i18nString18;
+var UIStrings20, i18nString19;
 var init_Viewport = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/Viewport.js"() {
     init_process_global();
@@ -29776,7 +30198,7 @@ var init_Viewport = __esm({
     init_helpers2();
     init_types2();
     init_types4();
-    UIStrings19 = {
+    UIStrings20 = {
       /** Title of an insight that provides details about if the page's viewport is optimized for mobile viewing. */
       title: "Optimize viewport for mobile",
       /**
@@ -29788,11 +30210,11 @@ var init_Viewport = __esm({
        */
       mobileTapDelayLabel: "Mobile tap delay"
     };
-    i18nString18 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
-    __name(finalize48, "finalize");
+    i18nString19 = /* @__PURE__ */ __name((i18nId, values) => ({ i18nId, values }), "i18nString");
+    __name(finalize49, "finalize");
     __name(isViewportInsight, "isViewportInsight");
-    __name(generateInsight18, "generateInsight");
-    __name(createOverlays18, "createOverlays");
+    __name(generateInsight19, "generateInsight");
+    __name(createOverlays19, "createOverlays");
   }
 });
 
@@ -29801,6 +30223,7 @@ var Models_exports = {};
 __export(Models_exports, {
   CLSCulprits: () => CLSCulprits_exports,
   Cache: () => Cache_exports,
+  CharacterSet: () => CharacterSet_exports,
   DOMSize: () => DOMSize_exports,
   DocumentLatency: () => DocumentLatency_exports,
   DuplicatedJavaScript: () => DuplicatedJavaScript_exports,
@@ -29822,6 +30245,7 @@ var init_Models = __esm({
   "node_modules/@paulirish/trace_engine/models/trace/insights/Models.js"() {
     init_process_global();
     init_Cache();
+    init_CharacterSet();
     init_CLSCulprits();
     init_DocumentLatency();
     init_DOMSize();
@@ -29856,12 +30280,12 @@ var init_insights = __esm({
 });
 
 // node_modules/@paulirish/trace_engine/models/trace/LanternComputationData.js
-function createProcessedNavigation(data31, frameId, navigationId) {
+function createProcessedNavigation(data31, frameId, navigation2) {
   const scoresByNav = data31.PageLoadMetrics.metricScoresByFrameId.get(frameId);
   if (!scoresByNav) {
     throw new core_exports.LanternError("missing metric scores for frame");
   }
-  const scores = scoresByNav.get(navigationId);
+  const scores = scoresByNav.get(navigation2);
   if (!scores) {
     throw new core_exports.LanternError("missing metric scores for specified navigation");
   }
@@ -30001,12 +30425,7 @@ function createLanternRequest(parsedTrace, workerThreads, request) {
     priority: request.args.data.priority,
     frameId: request.args.data.frame,
     fromWorker,
-    serverResponseTime: request.args.data.lrServerResponseTime ?? void 0,
-    // Set later.
-    redirects: void 0,
-    redirectSource: void 0,
-    redirectDestination: void 0,
-    initiatorRequest: void 0
+    serverResponseTime: request.args.data.lrServerResponseTime
   };
 }
 function chooseInitiatorRequest(request, requestsByURL) {
@@ -30433,7 +30852,7 @@ var init_Processor = __esm({
         }
         return this.#insights;
       }
-      #createLanternContext(data31, traceEvents, frameId, navigationId, options) {
+      #createLanternContext(data31, traceEvents, frameId, navigation2, options) {
         if (!data31.NetworkRequests || !data31.Workers || !data31.PageLoadMetrics) {
           return;
         }
@@ -30441,7 +30860,7 @@ var init_Processor = __esm({
           throw new core_exports.LanternError("No network requests found in trace");
         }
         const navStarts = data31.Meta.navigationsByFrameId.get(frameId);
-        const navStartIndex = navStarts?.findIndex((n) => n.args.data?.navigationId === navigationId);
+        const navStartIndex = navStarts?.findIndex((n) => n === navigation2);
         if (!navStarts || navStartIndex === void 0 || navStartIndex === -1) {
           throw new core_exports.LanternError("Could not find navigation start");
         }
@@ -30453,7 +30872,7 @@ var init_Processor = __esm({
         };
         const requests = createNetworkRequests(trace, data31, startTime, endTime);
         const graph2 = createGraph(requests, trace, data31);
-        const processedNavigation = createProcessedNavigation(data31, frameId, navigationId);
+        const processedNavigation = createProcessedNavigation(data31, frameId, navigation2);
         const networkAnalysis = core_exports.NetworkAnalyzer.analyze(requests);
         if (!networkAnalysis) {
           return;
@@ -30501,6 +30920,7 @@ var init_Processor = __esm({
           SlowCSSSelector: null,
           ForcedReflow: null,
           Cache: null,
+          CharacterSet: null,
           ModernHTTP: null,
           LegacyJavaScript: null
         };
@@ -30514,10 +30934,10 @@ var init_Processor = __esm({
         const observedInpScore = Common_exports.evaluateINPMetricScore(observedInp);
         const observedClsScore = Common_exports.evaluateCLSMetricScore(observedCls);
         const insightToSortingRank = /* @__PURE__ */ new Map();
-        for (const [name, model2] of Object.entries(insightSet.model)) {
-          const lcp = model2.metricSavings?.LCP ?? 0;
-          const inp = model2.metricSavings?.INP ?? 0;
-          const cls = model2.metricSavings?.CLS ?? 0;
+        for (const [name, insight] of Object.entries(insightSet.model)) {
+          const lcp = insight.metricSavings?.LCP ?? 0;
+          const inp = insight.metricSavings?.INP ?? 0;
+          const cls = insight.metricSavings?.CLS ?? 0;
           const lcpPostSavings = observedLcp !== void 0 ? Math.max(0, observedLcp - lcp) : void 0;
           const inpPostSavings = Math.max(0, observedInp - inp);
           const clsPostSavings = Math.max(0, observedCls - cls);
@@ -30559,9 +30979,12 @@ var init_Processor = __esm({
       }
       #computeInsightSet(data31, context) {
         const logger = context.options.logger;
+        if (!this.#insights) {
+          this.#insights = /* @__PURE__ */ new Map();
+        }
         let id, urlString, navigation2;
         if (context.navigation) {
-          id = context.navigationId;
+          id = `NAVIGATION_${this.#insights.size}`;
           urlString = data31.Meta.finalDisplayUrlByNavigationId.get(context.navigationId) ?? data31.Meta.mainFrameURL;
           navigation2 = context.navigation;
         } else {
@@ -30569,32 +30992,32 @@ var init_Processor = __esm({
           urlString = data31.Meta.finalDisplayUrlByNavigationId.get("") ?? data31.Meta.mainFrameURL;
         }
         const insightSetModel = {};
+        const insightSetModelErrors = {};
         for (const [name, insight] of Object.entries(_a2.getInsightRunners())) {
-          let model2;
           try {
             logger?.start(`insights:${name}`);
-            model2 = insight.generateInsight(data31, context);
+            const model2 = insight.generateInsight(data31, context);
             model2.frameId = context.frameId;
             const navId = context.navigation?.args.data?.navigationId;
             if (navId) {
-              model2.navigationId = navId;
+              model2.navigation = context.navigation;
             }
             model2.createOverlays = () => {
               return insight.createOverlays(model2);
             };
+            Object.assign(insightSetModel, { [name]: model2 });
           } catch (err) {
-            model2 = err;
+            Object.assign(insightSetModelErrors, { [name]: err });
           } finally {
             logger?.end(`insights:${name}`);
           }
-          Object.assign(insightSetModel, { [name]: model2 });
         }
         const isNavigation = id === TraceEvents_exports.NO_NAVIGATION;
         const trivialThreshold = Timing_exports3.milliToMicro(Timing_exports.Milli(5e3));
-        const everyInsightPasses = Object.values(insightSetModel).filter((model2) => !(model2 instanceof Error)).every((model2) => model2.state === "pass");
-        const noLcp = !insightSetModel.LCPBreakdown.lcpEvent;
-        const noInp = !insightSetModel.INPBreakdown.longestInteractionEvent;
-        const noLayoutShifts = insightSetModel.CLSCulprits.shifts?.size === 0;
+        const everyInsightPasses = Object.values(insightSetModel).every((model2) => model2 && model2.state === "pass");
+        const noLcp = !insightSetModel.LCPBreakdown?.lcpEvent;
+        const noInp = !insightSetModel.INPBreakdown?.longestInteractionEvent;
+        const noLayoutShifts = insightSetModel.CLSCulprits?.shifts?.size === 0;
         const shouldExclude = isNavigation && context.bounds.range < trivialThreshold && everyInsightPasses && noLcp && noInp && noLayoutShifts;
         if (shouldExclude) {
           return;
@@ -30611,11 +31034,9 @@ var init_Processor = __esm({
           navigation: navigation2,
           frameId: context.frameId,
           bounds: context.bounds,
-          model: insightSetModel
+          model: insightSetModel,
+          modelErrors: insightSetModelErrors
         };
-        if (!this.#insights) {
-          this.#insights = /* @__PURE__ */ new Map();
-        }
         this.#insights.set(insightSet.id, insightSet);
         this.sortInsightSet(insightSet, context.options.metadata ?? null);
       }
@@ -30655,7 +31076,7 @@ var init_Processor = __esm({
         let lantern;
         try {
           options.logger?.start("insights:createLanternContext");
-          lantern = this.#createLanternContext(data31, traceEvents, frameId, navigationId, options);
+          lantern = this.#createLanternContext(data31, traceEvents, frameId, navigation2, options);
         } catch (e) {
           const expectedErrors = [
             "mainDocumentRequest not found",
@@ -31484,7 +31905,7 @@ xn--3pxu8k": _74, "点看": _74, "xn--42c2d9a": _74, "คอม": _74, "xn--45q1
 });
 
 // core/lib/lh-error.js
-var UIStrings20, str_, LHERROR_SENTINEL, ERROR_SENTINEL, LighthouseError, ERRORS;
+var UIStrings21, str_, LHERROR_SENTINEL, ERROR_SENTINEL, LighthouseError, ERRORS;
 var init_lh_error = __esm({
   "core/lib/lh-error.js"() {
     "use strict";
@@ -31495,7 +31916,7 @@ var init_lh_error = __esm({
      * Copyright 2018 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings20 = {
+    UIStrings21 = {
       /**
        * @description Error message explaining that the Lighthouse run was not able to collect screenshots through Chrome.
        * @example {NO_SPEEDLINE_FRAMES} errorCode
@@ -31581,7 +32002,7 @@ var init_lh_error = __esm({
       /** Error message explaining that the browser tab that Lighthouse is inspecting has crashed. */
       targetCrashed: "Browser tab has unexpectedly crashed."
     };
-    str_ = createIcuMessageFn({ url: "core/lib/lh-error.js" }.url, UIStrings20);
+    str_ = createIcuMessageFn({ url: "core/lib/lh-error.js" }.url, UIStrings21);
     LHERROR_SENTINEL = "__LighthouseErrorSentinel";
     ERROR_SENTINEL = "__ErrorSentinel";
     LighthouseError = class _LighthouseError extends Error {
@@ -31694,76 +32115,76 @@ var init_lh_error = __esm({
       // Screenshot/speedline errors
       NO_SPEEDLINE_FRAMES: {
         code: "NO_SPEEDLINE_FRAMES",
-        message: UIStrings20.didntCollectScreenshots,
+        message: UIStrings21.didntCollectScreenshots,
         lhrRuntimeError: true
       },
       SPEEDINDEX_OF_ZERO: {
         code: "SPEEDINDEX_OF_ZERO",
-        message: UIStrings20.didntCollectScreenshots,
+        message: UIStrings21.didntCollectScreenshots,
         lhrRuntimeError: true
       },
       NO_SCREENSHOTS: {
         code: "NO_SCREENSHOTS",
-        message: UIStrings20.didntCollectScreenshots,
+        message: UIStrings21.didntCollectScreenshots,
         lhrRuntimeError: true
       },
       INVALID_SPEEDLINE: {
         code: "INVALID_SPEEDLINE",
-        message: UIStrings20.didntCollectScreenshots,
+        message: UIStrings21.didntCollectScreenshots,
         lhrRuntimeError: true
       },
       // Trace parsing errors
       NO_TRACING_STARTED: {
         code: "NO_TRACING_STARTED",
-        message: UIStrings20.badTraceRecording,
+        message: UIStrings21.badTraceRecording,
         lhrRuntimeError: true
       },
       NO_RESOURCE_REQUEST: {
         code: "NO_RESOURCE_REQUEST",
-        message: UIStrings20.badTraceRecording,
+        message: UIStrings21.badTraceRecording,
         lhrRuntimeError: true
       },
       NO_NAVSTART: {
         code: "NO_NAVSTART",
-        message: UIStrings20.badTraceRecording,
+        message: UIStrings21.badTraceRecording,
         lhrRuntimeError: true
       },
       NO_FCP: {
         code: "NO_FCP",
-        message: UIStrings20.noFcp,
+        message: UIStrings21.noFcp,
         lhrRuntimeError: true
       },
       NO_DCL: {
         code: "NO_DCL",
-        message: UIStrings20.badTraceRecording,
+        message: UIStrings21.badTraceRecording,
         lhrRuntimeError: true
       },
       NO_FMP: {
         code: "NO_FMP",
-        message: UIStrings20.badTraceRecording
+        message: UIStrings21.badTraceRecording
       },
       NO_LCP: {
         code: "NO_LCP",
-        message: UIStrings20.noLcp
+        message: UIStrings21.noLcp
       },
       NO_LCP_ALL_FRAMES: {
         code: "NO_LCP_ALL_FRAMES",
-        message: UIStrings20.noLcp
+        message: UIStrings21.noLcp
       },
       UNSUPPORTED_OLD_CHROME: {
         code: "UNSUPPORTED_OLD_CHROME",
-        message: UIStrings20.oldChromeDoesNotSupportFeature
+        message: UIStrings21.oldChromeDoesNotSupportFeature
       },
       // TTI calculation failures
-      NO_TTI_CPU_IDLE_PERIOD: { code: "NO_TTI_CPU_IDLE_PERIOD", message: UIStrings20.pageLoadTookTooLong },
+      NO_TTI_CPU_IDLE_PERIOD: { code: "NO_TTI_CPU_IDLE_PERIOD", message: UIStrings21.pageLoadTookTooLong },
       NO_TTI_NETWORK_IDLE_PERIOD: {
         code: "NO_TTI_NETWORK_IDLE_PERIOD",
-        message: UIStrings20.pageLoadTookTooLong
+        message: UIStrings21.pageLoadTookTooLong
       },
       // Page load failures
       NO_DOCUMENT_REQUEST: {
         code: "NO_DOCUMENT_REQUEST",
-        message: UIStrings20.pageLoadFailed,
+        message: UIStrings21.pageLoadFailed,
         lhrRuntimeError: true
       },
       /* Used when DevTools reports loading failed. Usually an internal (Chrome) issue.
@@ -31771,7 +32192,7 @@ var init_lh_error = __esm({
        */
       FAILED_DOCUMENT_REQUEST: {
         code: "FAILED_DOCUMENT_REQUEST",
-        message: UIStrings20.pageLoadFailedWithDetails,
+        message: UIStrings21.pageLoadFailedWithDetails,
         lhrRuntimeError: true
       },
       /* Used when status code is 4xx or 5xx.
@@ -31779,7 +32200,7 @@ var init_lh_error = __esm({
        */
       ERRORED_DOCUMENT_REQUEST: {
         code: "ERRORED_DOCUMENT_REQUEST",
-        message: UIStrings20.pageLoadFailedWithStatusCode,
+        message: UIStrings21.pageLoadFailedWithStatusCode,
         lhrRuntimeError: true
       },
       /* Used when security error prevents page load.
@@ -31787,70 +32208,70 @@ var init_lh_error = __esm({
        */
       INSECURE_DOCUMENT_REQUEST: {
         code: "INSECURE_DOCUMENT_REQUEST",
-        message: UIStrings20.pageLoadFailedInsecure,
+        message: UIStrings21.pageLoadFailedInsecure,
         lhrRuntimeError: true
       },
       /* Used when any Chrome interstitial error prevents page load.
        */
       CHROME_INTERSTITIAL_ERROR: {
         code: "CHROME_INTERSTITIAL_ERROR",
-        message: UIStrings20.pageLoadFailedInterstitial,
+        message: UIStrings21.pageLoadFailedInterstitial,
         lhrRuntimeError: true
       },
       /* Used when the page stopped responding and did not finish loading. */
       PAGE_HUNG: {
         code: "PAGE_HUNG",
-        message: UIStrings20.pageLoadFailedHung,
+        message: UIStrings21.pageLoadFailedHung,
         lhrRuntimeError: true
       },
       /* Used when the page is non-HTML. */
       NOT_HTML: {
         code: "NOT_HTML",
-        message: UIStrings20.notHtml,
+        message: UIStrings21.notHtml,
         lhrRuntimeError: true
       },
       // Protocol internal failures
       TRACING_ALREADY_STARTED: {
         code: "TRACING_ALREADY_STARTED",
-        message: UIStrings20.internalChromeError,
+        message: UIStrings21.internalChromeError,
         pattern: /Tracing.*started/,
         lhrRuntimeError: true
       },
       PARSING_PROBLEM: {
         code: "PARSING_PROBLEM",
-        message: UIStrings20.internalChromeError,
+        message: UIStrings21.internalChromeError,
         pattern: /Parsing problem/,
         lhrRuntimeError: true
       },
       READ_FAILED: {
         code: "READ_FAILED",
-        message: UIStrings20.internalChromeError,
+        message: UIStrings21.internalChromeError,
         pattern: /Read failed/,
         lhrRuntimeError: true
       },
       // URL parsing failures
       INVALID_URL: {
         code: "INVALID_URL",
-        message: UIStrings20.urlInvalid
+        message: UIStrings21.urlInvalid
       },
       /* Protocol timeout failures
        * Requires an additional `protocolMethod` field for translation.
        */
       PROTOCOL_TIMEOUT: {
         code: "PROTOCOL_TIMEOUT",
-        message: UIStrings20.protocolTimeout,
+        message: UIStrings21.protocolTimeout,
         lhrRuntimeError: true
       },
       // DNS failure on main document (no resolution, timed out, etc)
       DNS_FAILURE: {
         code: "DNS_FAILURE",
-        message: UIStrings20.dnsFailure,
+        message: UIStrings21.dnsFailure,
         lhrRuntimeError: true
       },
       /** A timeout in the initial connection to the debugger protocol. */
       CRI_TIMEOUT: {
         code: "CRI_TIMEOUT",
-        message: UIStrings20.criTimeout,
+        message: UIStrings21.criTimeout,
         lhrRuntimeError: true
       },
       /**
@@ -31859,7 +32280,7 @@ var init_lh_error = __esm({
       */
       MISSING_REQUIRED_ARTIFACT: {
         code: "MISSING_REQUIRED_ARTIFACT",
-        message: UIStrings20.missingRequiredArtifact
+        message: UIStrings21.missingRequiredArtifact
       },
       /**
        * Error internal to Runner used when an artifact required for an audit was an error.
@@ -31867,12 +32288,12 @@ var init_lh_error = __esm({
       */
       ERRORED_REQUIRED_ARTIFACT: {
         code: "ERRORED_REQUIRED_ARTIFACT",
-        message: UIStrings20.erroredRequiredArtifact
+        message: UIStrings21.erroredRequiredArtifact
       },
       /** The page has crashed and will no longer respond to 99% of CDP commmands. */
       TARGET_CRASHED: {
         code: "TARGET_CRASHED",
-        message: UIStrings20.targetCrashed,
+        message: UIStrings21.targetCrashed,
         lhrRuntimeError: true
       }
       // Hey! When adding a new error type, update lighthouse-result.proto too.
@@ -33972,6 +34393,7 @@ async function runA11yChecks() {
       "aria-roledescription": { enabled: false },
       "aria-treeitem-name": { enabled: true },
       "aria-text": { enabled: true },
+      "autocomplete-valid": { enabled: true },
       "audio-caption": { enabled: false },
       "blink": { enabled: false },
       "duplicate-id": { enabled: false },
@@ -33991,6 +34413,7 @@ async function runA11yChecks() {
       // https://github.com/dequelabs/axe-core/issues/2958
       "nested-interactive": { enabled: false },
       "no-autoplay-audio": { enabled: false },
+      "presentation-role-conflict": { enabled: true },
       "role-img-alt": { enabled: false },
       "scrollable-region-focusable": { enabled: false },
       "select-name": { enabled: true },
@@ -33998,7 +34421,7 @@ async function runA11yChecks() {
       "skip-link": { enabled: true },
       // https://github.com/GoogleChrome/lighthouse/issues/16163
       "summary-name": { enabled: false },
-      "svg-img-alt": { enabled: false },
+      "svg-img-alt": { enabled: true },
       "tabindex": { enabled: true },
       "table-duplicate-name": { enabled: true },
       "table-fake-caption": { enabled: true },
@@ -34910,7 +35333,9 @@ function collectElements() {
       name: formEl.name,
       autocomplete: formEl.autocomplete,
       // @ts-expect-error - getNodeDetails put into scope via stringification
-      node: getNodeDetails(formEl)
+      node: getNodeDetails(formEl),
+      webMcpToolname: formEl.getAttribute("toolname"),
+      webMcpTooldescription: formEl.getAttribute("tooldescription")
     });
   }
   const labelEls = getElementsInDocument("label");
@@ -35420,7 +35845,6 @@ var init_main_resource = __esm({
         if (!mainDocumentUrl) throw new Error("mainDocumentUrl must exist to get the main resource");
         const records = await NetworkRecordsComputed.request(data31.devtoolsLog, context);
         const mainResource = core_exports.NetworkAnalyzer.findLastDocumentForUrl(
-          // @ts-expect-error - trace engine types for InitiatorType are outdated
           records,
           mainDocumentUrl
         );
@@ -35437,7 +35861,7 @@ var init_main_resource = __esm({
 // core/gather/gatherers/link-elements.js
 var link_elements_exports = {};
 __export(link_elements_exports, {
-  UIStrings: () => UIStrings22,
+  UIStrings: () => UIStrings23,
   default: () => link_elements_default
 });
 function normalizeUrlOrNull(url, finalDisplayedUrl) {
@@ -35474,7 +35898,7 @@ function getLinkElementsInDOM() {
   }
   return linkElements;
 }
-var import_http_link_header, UIStrings22, str_3, LinkElements, link_elements_default;
+var import_http_link_header, UIStrings23, str_3, LinkElements, link_elements_default;
 var init_link_elements = __esm({
   "core/gather/gatherers/link-elements.js"() {
     "use strict";
@@ -35491,7 +35915,7 @@ var init_link_elements = __esm({
      * Copyright 2018 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings22 = {
+    UIStrings23 = {
       /**
        * @description Warning message explaining that there was an error parsing a link header in an HTTP response. `error` will be an english string with more details on the error. `header` will be the value of the header that caused the error. `link` is a type of HTTP header and should not be translated.
        * @example {Expected attribute delimiter at offset 94} error
@@ -35499,7 +35923,7 @@ var init_link_elements = __esm({
        */
       headerParseWarning: "Error parsing `link` header ({error}): `{header}`"
     };
-    str_3 = createIcuMessageFn({ url: "core/gather/gatherers/link-elements.js" }.url, UIStrings22);
+    str_3 = createIcuMessageFn({ url: "core/gather/gatherers/link-elements.js" }.url, UIStrings23);
     __name(normalizeUrlOrNull, "normalizeUrlOrNull");
     __name(getCrossoriginFromHeader, "getCrossoriginFromHeader");
     __name(getLinkElementsInDOM, "getLinkElementsInDOM");
@@ -35541,7 +35965,7 @@ var init_link_elements = __esm({
             parsedRefs = import_http_link_header.default.parse(header.value).refs;
           } catch (err) {
             const truncatedHeader = Util.truncate(header.value, 100);
-            const warning = str_3(UIStrings22.headerParseWarning, {
+            const warning = str_3(UIStrings23.headerParseWarning, {
               error: err.message,
               header: truncatedHeader
             });
@@ -36395,7 +36819,7 @@ var require_SourceMap = __commonJS({
         let nameIndex = 0;
         const names2 = map.names ?? [];
         const tokenIter = new TokenIterator(map.mappings);
-        let sourceURL = this.#sourceInfos[sourceIndex].sourceURL;
+        let sourceURL = this.#sourceInfos[sourceIndex]?.sourceURL;
         while (true) {
           if (tokenIter.peek() === ",") {
             tokenIter.next();
@@ -36417,7 +36841,7 @@ var require_SourceMap = __commonJS({
           const sourceIndexDelta = tokenIter.nextVLQ();
           if (sourceIndexDelta) {
             sourceIndex += sourceIndexDelta;
-            sourceURL = this.#sourceInfos[sourceIndex].sourceURL;
+            sourceURL = this.#sourceInfos[sourceIndex]?.sourceURL;
           }
           sourceLineNumber += tokenIter.nextVLQ();
           sourceColumnNumber += tokenIter.nextVLQ();
@@ -36900,7 +37324,7 @@ var init_viewport_dimensions = __esm({
 });
 
 // core/audits/accessibility/axe-audit.js
-var UIStrings23, str_4, AxeAudit, axe_audit_default;
+var UIStrings24, str_4, AxeAudit, axe_audit_default;
 var init_axe_audit = __esm({
   "core/audits/accessibility/axe-audit.js"() {
     "use strict";
@@ -36912,11 +37336,11 @@ var init_axe_audit = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings23 = {
+    UIStrings24 = {
       /** Label of a table column that identifies HTML elements that have failed an audit. */
       failingElementsHeader: "Failing Elements"
     };
-    str_4 = createIcuMessageFn({ url: "core/audits/accessibility/axe-audit.js" }.url, UIStrings23);
+    str_4 = createIcuMessageFn({ url: "core/audits/accessibility/axe-audit.js" }.url, UIStrings24);
     AxeAudit = class extends Audit {
       static {
         __name(this, "AxeAudit");
@@ -36973,7 +37397,7 @@ var init_axe_audit = __esm({
         }
         const headings = [
           /* eslint-disable max-len */
-          { key: "node", valueType: "node", subItemsHeading: { key: "relatedNode", valueType: "node" }, label: str_4(UIStrings23.failingElementsHeader) }
+          { key: "node", valueType: "node", subItemsHeading: { key: "relatedNode", valueType: "node" }, label: str_4(UIStrings24.failingElementsHeader) }
           /* eslint-enable max-len */
         ];
         let debugData;
@@ -36997,10 +37421,10 @@ var init_axe_audit = __esm({
 // core/audits/accessibility/accesskeys.js
 var accesskeys_exports = {};
 __export(accesskeys_exports, {
-  UIStrings: () => UIStrings24,
+  UIStrings: () => UIStrings25,
   default: () => accesskeys_default
 });
-var UIStrings24, str_5, Accesskeys, accesskeys_default;
+var UIStrings25, str_5, Accesskeys, accesskeys_default;
 var init_accesskeys = __esm({
   "core/audits/accessibility/accesskeys.js"() {
     "use strict";
@@ -37012,7 +37436,7 @@ var init_accesskeys = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings24 = {
+    UIStrings25 = {
       /** Title of an accessibility audit that evaluates if the accesskey HTML attribute values are unique across all elements. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`[accesskey]` values are unique",
       /** Title of an accessibility audit that evaluates if the ARIA HTML attributes are misaligned with the aria-role HTML attribute specificed on the element, such mismatches are invalid. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37020,7 +37444,7 @@ var init_accesskeys = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Access keys let users quickly focus a part of the page. For proper navigation, each access key must be unique. [Learn more about access keys](https://dequeuniversity.com/rules/axe/4.11/accesskeys)."
     };
-    str_5 = createIcuMessageFn({ url: "core/audits/accessibility/accesskeys.js" }.url, UIStrings24);
+    str_5 = createIcuMessageFn({ url: "core/audits/accessibility/accesskeys.js" }.url, UIStrings25);
     Accesskeys = class extends axe_audit_default {
       static {
         __name(this, "Accesskeys");
@@ -37031,9 +37455,9 @@ var init_accesskeys = __esm({
       static get meta() {
         return {
           id: "accesskeys",
-          title: str_5(UIStrings24.title),
-          failureTitle: str_5(UIStrings24.failureTitle),
-          description: str_5(UIStrings24.description),
+          title: str_5(UIStrings25.title),
+          failureTitle: str_5(UIStrings25.failureTitle),
+          description: str_5(UIStrings25.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37045,10 +37469,10 @@ var init_accesskeys = __esm({
 // core/audits/accessibility/aria-allowed-attr.js
 var aria_allowed_attr_exports = {};
 __export(aria_allowed_attr_exports, {
-  UIStrings: () => UIStrings25,
+  UIStrings: () => UIStrings26,
   default: () => aria_allowed_attr_default
 });
-var UIStrings25, str_6, ARIAAllowedAttr, aria_allowed_attr_default;
+var UIStrings26, str_6, ARIAAllowedAttr, aria_allowed_attr_default;
 var init_aria_allowed_attr = __esm({
   "core/audits/accessibility/aria-allowed-attr.js"() {
     "use strict";
@@ -37060,7 +37484,7 @@ var init_aria_allowed_attr = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings25 = {
+    UIStrings26 = {
       /** Title of an accessibility audit that evaluates if the ARIA HTML attributes are misaligned with the aria-role HTML attribute specificed on the element, such mismatches are invalid. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`[aria-*]` attributes match their roles",
       /** Title of an accessibility audit that evaluates if the ARIA HTML attributes are misaligned with the aria-role HTML attribute specificed on the element, such mismatches are invalid. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37068,7 +37492,7 @@ var init_aria_allowed_attr = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Each ARIA `role` supports a specific subset of `aria-*` attributes. Mismatching these invalidates the `aria-*` attributes. [Learn how to match ARIA attributes to their roles](https://dequeuniversity.com/rules/axe/4.11/aria-allowed-attr)."
     };
-    str_6 = createIcuMessageFn({ url: "core/audits/accessibility/aria-allowed-attr.js" }.url, UIStrings25);
+    str_6 = createIcuMessageFn({ url: "core/audits/accessibility/aria-allowed-attr.js" }.url, UIStrings26);
     ARIAAllowedAttr = class extends axe_audit_default {
       static {
         __name(this, "ARIAAllowedAttr");
@@ -37079,9 +37503,9 @@ var init_aria_allowed_attr = __esm({
       static get meta() {
         return {
           id: "aria-allowed-attr",
-          title: str_6(UIStrings25.title),
-          failureTitle: str_6(UIStrings25.failureTitle),
-          description: str_6(UIStrings25.description),
+          title: str_6(UIStrings26.title),
+          failureTitle: str_6(UIStrings26.failureTitle),
+          description: str_6(UIStrings26.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37093,10 +37517,10 @@ var init_aria_allowed_attr = __esm({
 // core/audits/accessibility/aria-allowed-role.js
 var aria_allowed_role_exports = {};
 __export(aria_allowed_role_exports, {
-  UIStrings: () => UIStrings26,
+  UIStrings: () => UIStrings27,
   default: () => aria_allowed_role_default
 });
-var UIStrings26, str_7, ARIAAllowedRole, aria_allowed_role_default;
+var UIStrings27, str_7, ARIAAllowedRole, aria_allowed_role_default;
 var init_aria_allowed_role = __esm({
   "core/audits/accessibility/aria-allowed-role.js"() {
     "use strict";
@@ -37108,7 +37532,7 @@ var init_aria_allowed_role = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings26 = {
+    UIStrings27 = {
       /** Title of an accessibility audit that evaluates if the ARIA role attributes are valid for the HTML element. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Uses ARIA roles only on compatible elements",
       /** Title of an accessibility audit that evaluates if the ARIA role attributes are valid for the HTML element. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37116,7 +37540,7 @@ var init_aria_allowed_role = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Many HTML elements can only be assigned certain ARIA roles. Using ARIA roles where they are not allowed can interfere with the accessibility of the web page. [Learn more about ARIA roles](https://dequeuniversity.com/rules/axe/4.11/aria-allowed-role)."
     };
-    str_7 = createIcuMessageFn({ url: "core/audits/accessibility/aria-allowed-role.js" }.url, UIStrings26);
+    str_7 = createIcuMessageFn({ url: "core/audits/accessibility/aria-allowed-role.js" }.url, UIStrings27);
     ARIAAllowedRole = class extends axe_audit_default {
       static {
         __name(this, "ARIAAllowedRole");
@@ -37127,9 +37551,9 @@ var init_aria_allowed_role = __esm({
       static get meta() {
         return {
           id: "aria-allowed-role",
-          title: str_7(UIStrings26.title),
-          failureTitle: str_7(UIStrings26.failureTitle),
-          description: str_7(UIStrings26.description),
+          title: str_7(UIStrings27.title),
+          failureTitle: str_7(UIStrings27.failureTitle),
+          description: str_7(UIStrings27.description),
           scoreDisplayMode: axe_audit_default.SCORING_MODES.INFORMATIVE,
           requiredArtifacts: ["Accessibility"]
         };
@@ -37142,10 +37566,10 @@ var init_aria_allowed_role = __esm({
 // core/audits/accessibility/aria-command-name.js
 var aria_command_name_exports = {};
 __export(aria_command_name_exports, {
-  UIStrings: () => UIStrings27,
+  UIStrings: () => UIStrings28,
   default: () => aria_command_name_default
 });
-var UIStrings27, str_8, AriaCommandName, aria_command_name_default;
+var UIStrings28, str_8, AriaCommandName, aria_command_name_default;
 var init_aria_command_name = __esm({
   "core/audits/accessibility/aria-command-name.js"() {
     "use strict";
@@ -37157,7 +37581,7 @@ var init_aria_command_name = __esm({
      * Copyright 2020 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings27 = {
+    UIStrings28 = {
       /** Title of an accessibility audit that evaluates if important HTML elements have an accessible name. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`button`, `link`, and `menuitem` elements have accessible names",
       /** Title of an accessibility audit that evaluates if important HTML elements do not have accessible names. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37165,7 +37589,7 @@ var init_aria_command_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should have accessible names for HTML elements. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "When an element doesn't have an accessible name, screen readers announce it with a generic name, making it unusable for users who rely on screen readers. [Learn how to make command elements more accessible](https://dequeuniversity.com/rules/axe/4.11/aria-command-name)."
     };
-    str_8 = createIcuMessageFn({ url: "core/audits/accessibility/aria-command-name.js" }.url, UIStrings27);
+    str_8 = createIcuMessageFn({ url: "core/audits/accessibility/aria-command-name.js" }.url, UIStrings28);
     AriaCommandName = class extends axe_audit_default {
       static {
         __name(this, "AriaCommandName");
@@ -37176,9 +37600,9 @@ var init_aria_command_name = __esm({
       static get meta() {
         return {
           id: "aria-command-name",
-          title: str_8(UIStrings27.title),
-          failureTitle: str_8(UIStrings27.failureTitle),
-          description: str_8(UIStrings27.description),
+          title: str_8(UIStrings28.title),
+          failureTitle: str_8(UIStrings28.failureTitle),
+          description: str_8(UIStrings28.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37190,10 +37614,10 @@ var init_aria_command_name = __esm({
 // core/audits/accessibility/aria-conditional-attr.js
 var aria_conditional_attr_exports = {};
 __export(aria_conditional_attr_exports, {
-  UIStrings: () => UIStrings28,
+  UIStrings: () => UIStrings29,
   default: () => aria_conditional_attr_default
 });
-var UIStrings28, str_9, AriaConditionalAttr, aria_conditional_attr_default;
+var UIStrings29, str_9, AriaConditionalAttr, aria_conditional_attr_default;
 var init_aria_conditional_attr = __esm({
   "core/audits/accessibility/aria-conditional-attr.js"() {
     "use strict";
@@ -37205,7 +37629,7 @@ var init_aria_conditional_attr = __esm({
      * Copyright 2024 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings28 = {
+    UIStrings29 = {
       /** Title of an accessibility audit that checks if ARIA attributes are used as specified for element roles. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "ARIA attributes are used as specified for the element's role",
       /** Title of an accessibility audit that checks if ARIA attributes are used as specified for element roles. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37213,7 +37637,7 @@ var init_aria_conditional_attr = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Some ARIA attributes are only allowed on an element under certain conditions. [Learn more about conditional ARIA attributes](https://dequeuniversity.com/rules/axe/4.11/aria-conditional-attr)."
     };
-    str_9 = createIcuMessageFn({ url: "core/audits/accessibility/aria-conditional-attr.js" }.url, UIStrings28);
+    str_9 = createIcuMessageFn({ url: "core/audits/accessibility/aria-conditional-attr.js" }.url, UIStrings29);
     AriaConditionalAttr = class extends axe_audit_default {
       static {
         __name(this, "AriaConditionalAttr");
@@ -37224,9 +37648,9 @@ var init_aria_conditional_attr = __esm({
       static get meta() {
         return {
           id: "aria-conditional-attr",
-          title: str_9(UIStrings28.title),
-          failureTitle: str_9(UIStrings28.failureTitle),
-          description: str_9(UIStrings28.description),
+          title: str_9(UIStrings29.title),
+          failureTitle: str_9(UIStrings29.failureTitle),
+          description: str_9(UIStrings29.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37238,10 +37662,10 @@ var init_aria_conditional_attr = __esm({
 // core/audits/accessibility/aria-deprecated-role.js
 var aria_deprecated_role_exports = {};
 __export(aria_deprecated_role_exports, {
-  UIStrings: () => UIStrings29,
+  UIStrings: () => UIStrings30,
   default: () => aria_deprecated_role_default
 });
-var UIStrings29, str_10, AriaDeprecatedRole, aria_deprecated_role_default;
+var UIStrings30, str_10, AriaDeprecatedRole, aria_deprecated_role_default;
 var init_aria_deprecated_role = __esm({
   "core/audits/accessibility/aria-deprecated-role.js"() {
     "use strict";
@@ -37253,7 +37677,7 @@ var init_aria_deprecated_role = __esm({
      * Copyright 2024 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings29 = {
+    UIStrings30 = {
       /** Title of an accessibility audit that checks if deprecated ARIA roles are used. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Deprecated ARIA roles were not used",
       /** Title of an accessibility audit that checks if deprecated ARIA roles are used. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37261,7 +37685,7 @@ var init_aria_deprecated_role = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Deprecated ARIA roles may not be processed correctly by assistive technology. [Learn more about deprecated ARIA roles](https://dequeuniversity.com/rules/axe/4.11/aria-deprecated-role)."
     };
-    str_10 = createIcuMessageFn({ url: "core/audits/accessibility/aria-deprecated-role.js" }.url, UIStrings29);
+    str_10 = createIcuMessageFn({ url: "core/audits/accessibility/aria-deprecated-role.js" }.url, UIStrings30);
     AriaDeprecatedRole = class extends axe_audit_default {
       static {
         __name(this, "AriaDeprecatedRole");
@@ -37272,9 +37696,9 @@ var init_aria_deprecated_role = __esm({
       static get meta() {
         return {
           id: "aria-deprecated-role",
-          title: str_10(UIStrings29.title),
-          failureTitle: str_10(UIStrings29.failureTitle),
-          description: str_10(UIStrings29.description),
+          title: str_10(UIStrings30.title),
+          failureTitle: str_10(UIStrings30.failureTitle),
+          description: str_10(UIStrings30.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37286,10 +37710,10 @@ var init_aria_deprecated_role = __esm({
 // core/audits/accessibility/aria-dialog-name.js
 var aria_dialog_name_exports = {};
 __export(aria_dialog_name_exports, {
-  UIStrings: () => UIStrings30,
+  UIStrings: () => UIStrings31,
   default: () => aria_dialog_name_default
 });
-var UIStrings30, str_11, AriaDialogName, aria_dialog_name_default;
+var UIStrings31, str_11, AriaDialogName, aria_dialog_name_default;
 var init_aria_dialog_name = __esm({
   "core/audits/accessibility/aria-dialog-name.js"() {
     "use strict";
@@ -37301,7 +37725,7 @@ var init_aria_dialog_name = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings30 = {
+    UIStrings31 = {
       /** Title of an accessibility audit that evaluates if ARIA dialog elements have an accessible name. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: 'Elements with `role="dialog"` or `role="alertdialog"` have accessible names.',
       /** Title of an accessibility audit that evaluates if ARIA dialog elements do not have accessible names. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37309,7 +37733,7 @@ var init_aria_dialog_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should have accessible names for ARIA dialog elements. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "ARIA dialog elements without accessible names may prevent screen readers users from discerning the purpose of these elements. [Learn how to make ARIA dialog elements more accessible](https://dequeuniversity.com/rules/axe/4.11/aria-dialog-name)."
     };
-    str_11 = createIcuMessageFn({ url: "core/audits/accessibility/aria-dialog-name.js" }.url, UIStrings30);
+    str_11 = createIcuMessageFn({ url: "core/audits/accessibility/aria-dialog-name.js" }.url, UIStrings31);
     AriaDialogName = class extends axe_audit_default {
       static {
         __name(this, "AriaDialogName");
@@ -37320,9 +37744,9 @@ var init_aria_dialog_name = __esm({
       static get meta() {
         return {
           id: "aria-dialog-name",
-          title: str_11(UIStrings30.title),
-          failureTitle: str_11(UIStrings30.failureTitle),
-          description: str_11(UIStrings30.description),
+          title: str_11(UIStrings31.title),
+          failureTitle: str_11(UIStrings31.failureTitle),
+          description: str_11(UIStrings31.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37334,10 +37758,10 @@ var init_aria_dialog_name = __esm({
 // core/audits/accessibility/aria-hidden-body.js
 var aria_hidden_body_exports = {};
 __export(aria_hidden_body_exports, {
-  UIStrings: () => UIStrings31,
+  UIStrings: () => UIStrings32,
   default: () => aria_hidden_body_default
 });
-var UIStrings31, str_12, AriaHiddenBody, aria_hidden_body_default;
+var UIStrings32, str_12, AriaHiddenBody, aria_hidden_body_default;
 var init_aria_hidden_body = __esm({
   "core/audits/accessibility/aria-hidden-body.js"() {
     "use strict";
@@ -37349,7 +37773,7 @@ var init_aria_hidden_body = __esm({
      * Copyright 2019 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings31 = {
+    UIStrings32 = {
       /** Title of an accessibility audit that checks if the html <body> element does not have an aria-hidden attribute set on it. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: '`[aria-hidden="true"]` is not present on the document `<body>`',
       /** Title of an accessibility audit that checks if the html <body> element does not have an aria-hidden attribute set on it. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37357,7 +37781,7 @@ var init_aria_hidden_body = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: 'Assistive technologies, like screen readers, work inconsistently when `aria-hidden="true"` is set on the document `<body>`. [Learn how `aria-hidden` affects the document body](https://dequeuniversity.com/rules/axe/4.11/aria-hidden-body).'
     };
-    str_12 = createIcuMessageFn({ url: "core/audits/accessibility/aria-hidden-body.js" }.url, UIStrings31);
+    str_12 = createIcuMessageFn({ url: "core/audits/accessibility/aria-hidden-body.js" }.url, UIStrings32);
     AriaHiddenBody = class extends axe_audit_default {
       static {
         __name(this, "AriaHiddenBody");
@@ -37368,9 +37792,9 @@ var init_aria_hidden_body = __esm({
       static get meta() {
         return {
           id: "aria-hidden-body",
-          title: str_12(UIStrings31.title),
-          failureTitle: str_12(UIStrings31.failureTitle),
-          description: str_12(UIStrings31.description),
+          title: str_12(UIStrings32.title),
+          failureTitle: str_12(UIStrings32.failureTitle),
+          description: str_12(UIStrings32.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37382,10 +37806,10 @@ var init_aria_hidden_body = __esm({
 // core/audits/accessibility/aria-hidden-focus.js
 var aria_hidden_focus_exports = {};
 __export(aria_hidden_focus_exports, {
-  UIStrings: () => UIStrings32,
+  UIStrings: () => UIStrings33,
   default: () => aria_hidden_focus_default
 });
-var UIStrings32, str_13, AriaHiddenFocus, aria_hidden_focus_default;
+var UIStrings33, str_13, AriaHiddenFocus, aria_hidden_focus_default;
 var init_aria_hidden_focus = __esm({
   "core/audits/accessibility/aria-hidden-focus.js"() {
     "use strict";
@@ -37397,7 +37821,7 @@ var init_aria_hidden_focus = __esm({
      * Copyright 2019 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings32 = {
+    UIStrings33 = {
       /** Title of an accessibility audit that checks if all elements that have an aria-hidden attribute do not contain focusable descendent elements. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: '`[aria-hidden="true"]` elements do not contain focusable descendents',
       /** Title of an accessibility audit that checks if all elements that have an aria-hidden attribute do not contain focusable descendent elements. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37405,7 +37829,7 @@ var init_aria_hidden_focus = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: 'Focusable descendents within an `[aria-hidden="true"]` element prevent those interactive elements from being available to users of assistive technologies like screen readers. [Learn how `aria-hidden` affects focusable elements](https://dequeuniversity.com/rules/axe/4.11/aria-hidden-focus).'
     };
-    str_13 = createIcuMessageFn({ url: "core/audits/accessibility/aria-hidden-focus.js" }.url, UIStrings32);
+    str_13 = createIcuMessageFn({ url: "core/audits/accessibility/aria-hidden-focus.js" }.url, UIStrings33);
     AriaHiddenFocus = class extends axe_audit_default {
       static {
         __name(this, "AriaHiddenFocus");
@@ -37416,9 +37840,9 @@ var init_aria_hidden_focus = __esm({
       static get meta() {
         return {
           id: "aria-hidden-focus",
-          title: str_13(UIStrings32.title),
-          failureTitle: str_13(UIStrings32.failureTitle),
-          description: str_13(UIStrings32.description),
+          title: str_13(UIStrings33.title),
+          failureTitle: str_13(UIStrings33.failureTitle),
+          description: str_13(UIStrings33.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37430,10 +37854,10 @@ var init_aria_hidden_focus = __esm({
 // core/audits/accessibility/aria-input-field-name.js
 var aria_input_field_name_exports = {};
 __export(aria_input_field_name_exports, {
-  UIStrings: () => UIStrings33,
+  UIStrings: () => UIStrings34,
   default: () => aria_input_field_name_default
 });
-var UIStrings33, str_14, AriaInputFieldName, aria_input_field_name_default;
+var UIStrings34, str_14, AriaInputFieldName, aria_input_field_name_default;
 var init_aria_input_field_name = __esm({
   "core/audits/accessibility/aria-input-field-name.js"() {
     "use strict";
@@ -37445,7 +37869,7 @@ var init_aria_input_field_name = __esm({
      * Copyright 2019 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings33 = {
+    UIStrings34 = {
       /** Title of an accessibility audit that checks that all ARIA input fields have an accessible name. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "ARIA input fields have accessible names",
       /** Title of an accessibility audit that checks that all ARIA input fields have an accessible name. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37453,7 +37877,7 @@ var init_aria_input_field_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "When an input field doesn't have an accessible name, screen readers announce it with a generic name, making it unusable for users who rely on screen readers. [Learn more about input field labels](https://dequeuniversity.com/rules/axe/4.11/aria-input-field-name)."
     };
-    str_14 = createIcuMessageFn({ url: "core/audits/accessibility/aria-input-field-name.js" }.url, UIStrings33);
+    str_14 = createIcuMessageFn({ url: "core/audits/accessibility/aria-input-field-name.js" }.url, UIStrings34);
     AriaInputFieldName = class extends axe_audit_default {
       static {
         __name(this, "AriaInputFieldName");
@@ -37464,9 +37888,9 @@ var init_aria_input_field_name = __esm({
       static get meta() {
         return {
           id: "aria-input-field-name",
-          title: str_14(UIStrings33.title),
-          failureTitle: str_14(UIStrings33.failureTitle),
-          description: str_14(UIStrings33.description),
+          title: str_14(UIStrings34.title),
+          failureTitle: str_14(UIStrings34.failureTitle),
+          description: str_14(UIStrings34.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37478,10 +37902,10 @@ var init_aria_input_field_name = __esm({
 // core/audits/accessibility/aria-meter-name.js
 var aria_meter_name_exports = {};
 __export(aria_meter_name_exports, {
-  UIStrings: () => UIStrings34,
+  UIStrings: () => UIStrings35,
   default: () => aria_meter_name_default
 });
-var UIStrings34, str_15, AriaMeterName, aria_meter_name_default;
+var UIStrings35, str_15, AriaMeterName, aria_meter_name_default;
 var init_aria_meter_name = __esm({
   "core/audits/accessibility/aria-meter-name.js"() {
     "use strict";
@@ -37493,7 +37917,7 @@ var init_aria_meter_name = __esm({
      * Copyright 2020 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings34 = {
+    UIStrings35 = {
       /** Title of an accessibility audit that evaluates if meter HTML elements have an accessible name. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "ARIA `meter` elements have accessible names",
       /** Title of an accessibility audit that evaluates if meter HTML elements do not have accessible names. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37501,7 +37925,7 @@ var init_aria_meter_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should have accessible names for HTML 'meter' elements. This is displayed after a user expands the section to see more. No character length limits. 'Learn how...' becomes link text to additional documentation. */
       description: "When a meter element doesn't have an accessible name, screen readers announce it with a generic name, making it unusable for users who rely on screen readers. [Learn how to name `meter` elements](https://dequeuniversity.com/rules/axe/4.11/aria-meter-name)."
     };
-    str_15 = createIcuMessageFn({ url: "core/audits/accessibility/aria-meter-name.js" }.url, UIStrings34);
+    str_15 = createIcuMessageFn({ url: "core/audits/accessibility/aria-meter-name.js" }.url, UIStrings35);
     AriaMeterName = class extends axe_audit_default {
       static {
         __name(this, "AriaMeterName");
@@ -37512,9 +37936,9 @@ var init_aria_meter_name = __esm({
       static get meta() {
         return {
           id: "aria-meter-name",
-          title: str_15(UIStrings34.title),
-          failureTitle: str_15(UIStrings34.failureTitle),
-          description: str_15(UIStrings34.description),
+          title: str_15(UIStrings35.title),
+          failureTitle: str_15(UIStrings35.failureTitle),
+          description: str_15(UIStrings35.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37526,10 +37950,10 @@ var init_aria_meter_name = __esm({
 // core/audits/accessibility/aria-progressbar-name.js
 var aria_progressbar_name_exports = {};
 __export(aria_progressbar_name_exports, {
-  UIStrings: () => UIStrings35,
+  UIStrings: () => UIStrings36,
   default: () => aria_progressbar_name_default
 });
-var UIStrings35, str_16, AriaProgressbarName, aria_progressbar_name_default;
+var UIStrings36, str_16, AriaProgressbarName, aria_progressbar_name_default;
 var init_aria_progressbar_name = __esm({
   "core/audits/accessibility/aria-progressbar-name.js"() {
     "use strict";
@@ -37541,7 +37965,7 @@ var init_aria_progressbar_name = __esm({
      * Copyright 2020 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings35 = {
+    UIStrings36 = {
       /** Title of an accessibility audit that evaluates if progressbar HTML elements have an accessible name. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "ARIA `progressbar` elements have accessible names",
       /** Title of an accessibility audit that evaluates if progressbar HTML elements do not have accessible names. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37549,7 +37973,7 @@ var init_aria_progressbar_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "When a `progressbar` element doesn't have an accessible name, screen readers announce it with a generic name, making it unusable for users who rely on screen readers. [Learn how to label `progressbar` elements](https://dequeuniversity.com/rules/axe/4.11/aria-progressbar-name)."
     };
-    str_16 = createIcuMessageFn({ url: "core/audits/accessibility/aria-progressbar-name.js" }.url, UIStrings35);
+    str_16 = createIcuMessageFn({ url: "core/audits/accessibility/aria-progressbar-name.js" }.url, UIStrings36);
     AriaProgressbarName = class extends axe_audit_default {
       static {
         __name(this, "AriaProgressbarName");
@@ -37560,9 +37984,9 @@ var init_aria_progressbar_name = __esm({
       static get meta() {
         return {
           id: "aria-progressbar-name",
-          title: str_16(UIStrings35.title),
-          failureTitle: str_16(UIStrings35.failureTitle),
-          description: str_16(UIStrings35.description),
+          title: str_16(UIStrings36.title),
+          failureTitle: str_16(UIStrings36.failureTitle),
+          description: str_16(UIStrings36.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37574,10 +37998,10 @@ var init_aria_progressbar_name = __esm({
 // core/audits/accessibility/aria-prohibited-attr.js
 var aria_prohibited_attr_exports = {};
 __export(aria_prohibited_attr_exports, {
-  UIStrings: () => UIStrings36,
+  UIStrings: () => UIStrings37,
   default: () => aria_prohibited_attr_default
 });
-var UIStrings36, str_17, AriaProhibitedAttr, aria_prohibited_attr_default;
+var UIStrings37, str_17, AriaProhibitedAttr, aria_prohibited_attr_default;
 var init_aria_prohibited_attr = __esm({
   "core/audits/accessibility/aria-prohibited-attr.js"() {
     "use strict";
@@ -37589,7 +38013,7 @@ var init_aria_prohibited_attr = __esm({
      * Copyright 2024 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings36 = {
+    UIStrings37 = {
       /** Title of an accessibility audit that checks if elements use prohibited ARIA attributes. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Elements use only permitted ARIA attributes",
       /** Title of an accessibility audit that checks if elements use prohibited ARIA attributes. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37597,7 +38021,7 @@ var init_aria_prohibited_attr = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Using ARIA attributes in roles where they are prohibited can mean that important information is not communicated to users of assistive technologies. [Learn more about prohibited ARIA roles](https://dequeuniversity.com/rules/axe/4.11/aria-prohibited-attr)."
     };
-    str_17 = createIcuMessageFn({ url: "core/audits/accessibility/aria-prohibited-attr.js" }.url, UIStrings36);
+    str_17 = createIcuMessageFn({ url: "core/audits/accessibility/aria-prohibited-attr.js" }.url, UIStrings37);
     AriaProhibitedAttr = class extends axe_audit_default {
       static {
         __name(this, "AriaProhibitedAttr");
@@ -37608,9 +38032,9 @@ var init_aria_prohibited_attr = __esm({
       static get meta() {
         return {
           id: "aria-prohibited-attr",
-          title: str_17(UIStrings36.title),
-          failureTitle: str_17(UIStrings36.failureTitle),
-          description: str_17(UIStrings36.description),
+          title: str_17(UIStrings37.title),
+          failureTitle: str_17(UIStrings37.failureTitle),
+          description: str_17(UIStrings37.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37622,10 +38046,10 @@ var init_aria_prohibited_attr = __esm({
 // core/audits/accessibility/aria-required-attr.js
 var aria_required_attr_exports = {};
 __export(aria_required_attr_exports, {
-  UIStrings: () => UIStrings37,
+  UIStrings: () => UIStrings38,
   default: () => aria_required_attr_default
 });
-var UIStrings37, str_18, ARIARequiredAttr, aria_required_attr_default;
+var UIStrings38, str_18, ARIARequiredAttr, aria_required_attr_default;
 var init_aria_required_attr = __esm({
   "core/audits/accessibility/aria-required-attr.js"() {
     "use strict";
@@ -37637,7 +38061,7 @@ var init_aria_required_attr = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings37 = {
+    UIStrings38 = {
       /** Title of an accessibility audit that evaluates if all elements with the aria-role attribute have the other corresponding ARIA attributes set as well. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`[role]`s have all required `[aria-*]` attributes",
       /** Title of an accessibility audit that evaluates if all elements with the aria-role attribute have the other corresponding ARIA attributes set as well. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37645,7 +38069,7 @@ var init_aria_required_attr = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Some ARIA roles have required attributes that describe the state of the element to screen readers. [Learn more about roles and required attributes](https://dequeuniversity.com/rules/axe/4.11/aria-required-attr)."
     };
-    str_18 = createIcuMessageFn({ url: "core/audits/accessibility/aria-required-attr.js" }.url, UIStrings37);
+    str_18 = createIcuMessageFn({ url: "core/audits/accessibility/aria-required-attr.js" }.url, UIStrings38);
     ARIARequiredAttr = class extends axe_audit_default {
       static {
         __name(this, "ARIARequiredAttr");
@@ -37656,9 +38080,9 @@ var init_aria_required_attr = __esm({
       static get meta() {
         return {
           id: "aria-required-attr",
-          title: str_18(UIStrings37.title),
-          failureTitle: str_18(UIStrings37.failureTitle),
-          description: str_18(UIStrings37.description),
+          title: str_18(UIStrings38.title),
+          failureTitle: str_18(UIStrings38.failureTitle),
+          description: str_18(UIStrings38.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37670,10 +38094,10 @@ var init_aria_required_attr = __esm({
 // core/audits/accessibility/aria-required-children.js
 var aria_required_children_exports = {};
 __export(aria_required_children_exports, {
-  UIStrings: () => UIStrings38,
+  UIStrings: () => UIStrings39,
   default: () => aria_required_children_default
 });
-var UIStrings38, str_19, AriaRequiredChildren, aria_required_children_default;
+var UIStrings39, str_19, AriaRequiredChildren, aria_required_children_default;
 var init_aria_required_children = __esm({
   "core/audits/accessibility/aria-required-children.js"() {
     "use strict";
@@ -37685,7 +38109,7 @@ var init_aria_required_children = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings38 = {
+    UIStrings39 = {
       /** Title of an accessibility audit that evaluates if the elements with an aria-role that require child elements have the required children. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Elements with an ARIA `[role]` that require children to contain a specific `[role]` have all required children.",
       /** Title of an accessibility audit that evaluates if the elements with an aria-role that require child elements have the required children. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37693,7 +38117,7 @@ var init_aria_required_children = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Some ARIA parent roles must contain specific child roles to perform their intended accessibility functions. [Learn more about roles and required children elements](https://dequeuniversity.com/rules/axe/4.11/aria-required-children)."
     };
-    str_19 = createIcuMessageFn({ url: "core/audits/accessibility/aria-required-children.js" }.url, UIStrings38);
+    str_19 = createIcuMessageFn({ url: "core/audits/accessibility/aria-required-children.js" }.url, UIStrings39);
     AriaRequiredChildren = class extends axe_audit_default {
       static {
         __name(this, "AriaRequiredChildren");
@@ -37704,9 +38128,9 @@ var init_aria_required_children = __esm({
       static get meta() {
         return {
           id: "aria-required-children",
-          title: str_19(UIStrings38.title),
-          failureTitle: str_19(UIStrings38.failureTitle),
-          description: str_19(UIStrings38.description),
+          title: str_19(UIStrings39.title),
+          failureTitle: str_19(UIStrings39.failureTitle),
+          description: str_19(UIStrings39.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37718,10 +38142,10 @@ var init_aria_required_children = __esm({
 // core/audits/accessibility/aria-required-parent.js
 var aria_required_parent_exports = {};
 __export(aria_required_parent_exports, {
-  UIStrings: () => UIStrings39,
+  UIStrings: () => UIStrings40,
   default: () => aria_required_parent_default
 });
-var UIStrings39, str_20, AriaRequiredParent, aria_required_parent_default;
+var UIStrings40, str_20, AriaRequiredParent, aria_required_parent_default;
 var init_aria_required_parent = __esm({
   "core/audits/accessibility/aria-required-parent.js"() {
     "use strict";
@@ -37733,7 +38157,7 @@ var init_aria_required_parent = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings39 = {
+    UIStrings40 = {
       /** Title of an accessibility audit that evaluates valid aria-role usage. Some ARIA roles require that elements must be a child of specific parent element. This audit checks that when those roles are used, the element with the role is in fact a child of the required parent. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`[role]`s are contained by their required parent element",
       /** Title of an accessibility audit that evaluates valid aria-role usage. Some ARIA roles require that elements must be a child of specific parent element. This audit checks that when those roles are used, the element with the role is in fact a child of the required parent. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37741,7 +38165,7 @@ var init_aria_required_parent = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Some ARIA child roles must be contained by specific parent roles to properly perform their intended accessibility functions. [Learn more about ARIA roles and required parent element](https://dequeuniversity.com/rules/axe/4.11/aria-required-parent)."
     };
-    str_20 = createIcuMessageFn({ url: "core/audits/accessibility/aria-required-parent.js" }.url, UIStrings39);
+    str_20 = createIcuMessageFn({ url: "core/audits/accessibility/aria-required-parent.js" }.url, UIStrings40);
     AriaRequiredParent = class extends axe_audit_default {
       static {
         __name(this, "AriaRequiredParent");
@@ -37752,9 +38176,9 @@ var init_aria_required_parent = __esm({
       static get meta() {
         return {
           id: "aria-required-parent",
-          title: str_20(UIStrings39.title),
-          failureTitle: str_20(UIStrings39.failureTitle),
-          description: str_20(UIStrings39.description),
+          title: str_20(UIStrings40.title),
+          failureTitle: str_20(UIStrings40.failureTitle),
+          description: str_20(UIStrings40.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37766,10 +38190,10 @@ var init_aria_required_parent = __esm({
 // core/audits/accessibility/aria-roles.js
 var aria_roles_exports = {};
 __export(aria_roles_exports, {
-  UIStrings: () => UIStrings40,
+  UIStrings: () => UIStrings41,
   default: () => aria_roles_default
 });
-var UIStrings40, str_21, AriaRoles, aria_roles_default;
+var UIStrings41, str_21, AriaRoles, aria_roles_default;
 var init_aria_roles = __esm({
   "core/audits/accessibility/aria-roles.js"() {
     "use strict";
@@ -37781,7 +38205,7 @@ var init_aria_roles = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings40 = {
+    UIStrings41 = {
       /** Title of an accessibility audit that evaluates if all elements have valid aria-role HTML attributes. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`[role]` values are valid",
       /** Title of an accessibility audit that evaluates if all elements have valid aria-role HTML attributes. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37789,7 +38213,7 @@ var init_aria_roles = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "ARIA roles must have valid values in order to perform their intended accessibility functions. [Learn more about valid ARIA roles](https://dequeuniversity.com/rules/axe/4.11/aria-roles)."
     };
-    str_21 = createIcuMessageFn({ url: "core/audits/accessibility/aria-roles.js" }.url, UIStrings40);
+    str_21 = createIcuMessageFn({ url: "core/audits/accessibility/aria-roles.js" }.url, UIStrings41);
     AriaRoles = class extends axe_audit_default {
       static {
         __name(this, "AriaRoles");
@@ -37800,9 +38224,9 @@ var init_aria_roles = __esm({
       static get meta() {
         return {
           id: "aria-roles",
-          title: str_21(UIStrings40.title),
-          failureTitle: str_21(UIStrings40.failureTitle),
-          description: str_21(UIStrings40.description),
+          title: str_21(UIStrings41.title),
+          failureTitle: str_21(UIStrings41.failureTitle),
+          description: str_21(UIStrings41.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37814,10 +38238,10 @@ var init_aria_roles = __esm({
 // core/audits/accessibility/aria-text.js
 var aria_text_exports = {};
 __export(aria_text_exports, {
-  UIStrings: () => UIStrings41,
+  UIStrings: () => UIStrings42,
   default: () => aria_text_default
 });
-var UIStrings41, str_22, AriaText, aria_text_default;
+var UIStrings42, str_22, AriaText, aria_text_default;
 var init_aria_text = __esm({
   "core/audits/accessibility/aria-text.js"() {
     "use strict";
@@ -37829,7 +38253,7 @@ var init_aria_text = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings41 = {
+    UIStrings42 = {
       /** Title of an accessibility audit that evaluates if elements with `role=text` have no focusable descendents. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Elements with the `role=text` attribute do not have focusable descendents.",
       /** Title of an accessibility audit that evaluates if elements with `role=text` have focusable descendents. This title is descriptive of the successful state and is shown to users when no user action is required. */
@@ -37837,7 +38261,7 @@ var init_aria_text = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Adding `role=text` around a text node split by markup enables VoiceOver to treat it as one phrase, but the element's focusable descendents will not be announced. [Learn more about the `role=text` attribute](https://dequeuniversity.com/rules/axe/4.11/aria-text)."
     };
-    str_22 = createIcuMessageFn({ url: "core/audits/accessibility/aria-text.js" }.url, UIStrings41);
+    str_22 = createIcuMessageFn({ url: "core/audits/accessibility/aria-text.js" }.url, UIStrings42);
     AriaText = class extends axe_audit_default {
       static {
         __name(this, "AriaText");
@@ -37848,9 +38272,9 @@ var init_aria_text = __esm({
       static get meta() {
         return {
           id: "aria-text",
-          title: str_22(UIStrings41.title),
-          failureTitle: str_22(UIStrings41.failureTitle),
-          description: str_22(UIStrings41.description),
+          title: str_22(UIStrings42.title),
+          failureTitle: str_22(UIStrings42.failureTitle),
+          description: str_22(UIStrings42.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37862,10 +38286,10 @@ var init_aria_text = __esm({
 // core/audits/accessibility/aria-toggle-field-name.js
 var aria_toggle_field_name_exports = {};
 __export(aria_toggle_field_name_exports, {
-  UIStrings: () => UIStrings42,
+  UIStrings: () => UIStrings43,
   default: () => aria_toggle_field_name_default
 });
-var UIStrings42, str_23, AriaToggleFieldName, aria_toggle_field_name_default;
+var UIStrings43, str_23, AriaToggleFieldName, aria_toggle_field_name_default;
 var init_aria_toggle_field_name = __esm({
   "core/audits/accessibility/aria-toggle-field-name.js"() {
     "use strict";
@@ -37877,7 +38301,7 @@ var init_aria_toggle_field_name = __esm({
      * Copyright 2019 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings42 = {
+    UIStrings43 = {
       /** Title of an accessibility audit that checks that all ARIA toggle fields have an accessible name. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "ARIA toggle fields have accessible names",
       /** Title of an accessibility audit that checks that all ARIA toggle fields have an accessible name. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37885,7 +38309,7 @@ var init_aria_toggle_field_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "When a toggle field doesn't have an accessible name, screen readers announce it with a generic name, making it unusable for users who rely on screen readers. [Learn more about toggle fields](https://dequeuniversity.com/rules/axe/4.11/aria-toggle-field-name)."
     };
-    str_23 = createIcuMessageFn({ url: "core/audits/accessibility/aria-toggle-field-name.js" }.url, UIStrings42);
+    str_23 = createIcuMessageFn({ url: "core/audits/accessibility/aria-toggle-field-name.js" }.url, UIStrings43);
     AriaToggleFieldName = class extends axe_audit_default {
       static {
         __name(this, "AriaToggleFieldName");
@@ -37896,9 +38320,9 @@ var init_aria_toggle_field_name = __esm({
       static get meta() {
         return {
           id: "aria-toggle-field-name",
-          title: str_23(UIStrings42.title),
-          failureTitle: str_23(UIStrings42.failureTitle),
-          description: str_23(UIStrings42.description),
+          title: str_23(UIStrings43.title),
+          failureTitle: str_23(UIStrings43.failureTitle),
+          description: str_23(UIStrings43.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37910,10 +38334,10 @@ var init_aria_toggle_field_name = __esm({
 // core/audits/accessibility/aria-tooltip-name.js
 var aria_tooltip_name_exports = {};
 __export(aria_tooltip_name_exports, {
-  UIStrings: () => UIStrings43,
+  UIStrings: () => UIStrings44,
   default: () => aria_tooltip_name_default
 });
-var UIStrings43, str_24, AriaTooltipName, aria_tooltip_name_default;
+var UIStrings44, str_24, AriaTooltipName, aria_tooltip_name_default;
 var init_aria_tooltip_name = __esm({
   "core/audits/accessibility/aria-tooltip-name.js"() {
     "use strict";
@@ -37925,7 +38349,7 @@ var init_aria_tooltip_name = __esm({
      * Copyright 2020 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings43 = {
+    UIStrings44 = {
       /** Title of an accessibility audit that evaluates if tooltip HTML elements have an accessible name. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "ARIA `tooltip` elements have accessible names",
       /** Title of an accessibility audit that evaluates if tooltip HTML elements do not have accessible names. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37933,7 +38357,7 @@ var init_aria_tooltip_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should have accessible names for HTML 'tooltip' elements. This is displayed after a user expands the section to see more. No character length limits. 'Learn how...' becomes link text to additional documentation. */
       description: "When a tooltip element doesn't have an accessible name, screen readers announce it with a generic name, making it unusable for users who rely on screen readers. [Learn how to name `tooltip` elements](https://dequeuniversity.com/rules/axe/4.11/aria-tooltip-name)."
     };
-    str_24 = createIcuMessageFn({ url: "core/audits/accessibility/aria-tooltip-name.js" }.url, UIStrings43);
+    str_24 = createIcuMessageFn({ url: "core/audits/accessibility/aria-tooltip-name.js" }.url, UIStrings44);
     AriaTooltipName = class extends axe_audit_default {
       static {
         __name(this, "AriaTooltipName");
@@ -37944,9 +38368,9 @@ var init_aria_tooltip_name = __esm({
       static get meta() {
         return {
           id: "aria-tooltip-name",
-          title: str_24(UIStrings43.title),
-          failureTitle: str_24(UIStrings43.failureTitle),
-          description: str_24(UIStrings43.description),
+          title: str_24(UIStrings44.title),
+          failureTitle: str_24(UIStrings44.failureTitle),
+          description: str_24(UIStrings44.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -37958,10 +38382,10 @@ var init_aria_tooltip_name = __esm({
 // core/audits/accessibility/aria-treeitem-name.js
 var aria_treeitem_name_exports = {};
 __export(aria_treeitem_name_exports, {
-  UIStrings: () => UIStrings44,
+  UIStrings: () => UIStrings45,
   default: () => aria_treeitem_name_default
 });
-var UIStrings44, str_25, AriaTreeitemName, aria_treeitem_name_default;
+var UIStrings45, str_25, AriaTreeitemName, aria_treeitem_name_default;
 var init_aria_treeitem_name = __esm({
   "core/audits/accessibility/aria-treeitem-name.js"() {
     "use strict";
@@ -37973,7 +38397,7 @@ var init_aria_treeitem_name = __esm({
      * Copyright 2020 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings44 = {
+    UIStrings45 = {
       /** Title of an accessibility audit that evaluates if treeitem HTML elements have an accessible name. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "ARIA `treeitem` elements have accessible names",
       /** Title of an accessibility audit that evaluates if treeitem HTML elements do not have accessible names. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -37981,7 +38405,7 @@ var init_aria_treeitem_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should have accessible names for HTML elements. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "When a `treeitem` element doesn't have an accessible name, screen readers announce it with a generic name, making it unusable for users who rely on screen readers. [Learn more about labeling `treeitem` elements](https://dequeuniversity.com/rules/axe/4.11/aria-treeitem-name)."
     };
-    str_25 = createIcuMessageFn({ url: "core/audits/accessibility/aria-treeitem-name.js" }.url, UIStrings44);
+    str_25 = createIcuMessageFn({ url: "core/audits/accessibility/aria-treeitem-name.js" }.url, UIStrings45);
     AriaTreeitemName = class extends axe_audit_default {
       static {
         __name(this, "AriaTreeitemName");
@@ -37992,9 +38416,9 @@ var init_aria_treeitem_name = __esm({
       static get meta() {
         return {
           id: "aria-treeitem-name",
-          title: str_25(UIStrings44.title),
-          failureTitle: str_25(UIStrings44.failureTitle),
-          description: str_25(UIStrings44.description),
+          title: str_25(UIStrings45.title),
+          failureTitle: str_25(UIStrings45.failureTitle),
+          description: str_25(UIStrings45.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38006,10 +38430,10 @@ var init_aria_treeitem_name = __esm({
 // core/audits/accessibility/aria-valid-attr-value.js
 var aria_valid_attr_value_exports = {};
 __export(aria_valid_attr_value_exports, {
-  UIStrings: () => UIStrings45,
+  UIStrings: () => UIStrings46,
   default: () => aria_valid_attr_value_default
 });
-var UIStrings45, str_26, ARIAValidAttr, aria_valid_attr_value_default;
+var UIStrings46, str_26, ARIAValidAttr, aria_valid_attr_value_default;
 var init_aria_valid_attr_value = __esm({
   "core/audits/accessibility/aria-valid-attr-value.js"() {
     "use strict";
@@ -38021,7 +38445,7 @@ var init_aria_valid_attr_value = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings45 = {
+    UIStrings46 = {
       /** Title of an accessibility audit that evaluates if all elements that have an ARIA HTML attribute have a valid value for that attribute. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`[aria-*]` attributes have valid values",
       /** Title of an accessibility audit that evaluates if all elements that have an ARIA HTML attribute have a valid value for that attribute. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38029,7 +38453,7 @@ var init_aria_valid_attr_value = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Assistive technologies, like screen readers, can't interpret ARIA attributes with invalid values. [Learn more about valid values for ARIA attributes](https://dequeuniversity.com/rules/axe/4.11/aria-valid-attr-value)."
     };
-    str_26 = createIcuMessageFn({ url: "core/audits/accessibility/aria-valid-attr-value.js" }.url, UIStrings45);
+    str_26 = createIcuMessageFn({ url: "core/audits/accessibility/aria-valid-attr-value.js" }.url, UIStrings46);
     ARIAValidAttr = class extends axe_audit_default {
       static {
         __name(this, "ARIAValidAttr");
@@ -38040,9 +38464,9 @@ var init_aria_valid_attr_value = __esm({
       static get meta() {
         return {
           id: "aria-valid-attr-value",
-          title: str_26(UIStrings45.title),
-          failureTitle: str_26(UIStrings45.failureTitle),
-          description: str_26(UIStrings45.description),
+          title: str_26(UIStrings46.title),
+          failureTitle: str_26(UIStrings46.failureTitle),
+          description: str_26(UIStrings46.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38054,10 +38478,10 @@ var init_aria_valid_attr_value = __esm({
 // core/audits/accessibility/aria-valid-attr.js
 var aria_valid_attr_exports = {};
 __export(aria_valid_attr_exports, {
-  UIStrings: () => UIStrings46,
+  UIStrings: () => UIStrings47,
   default: () => aria_valid_attr_default
 });
-var UIStrings46, str_27, ARIAValidAttr2, aria_valid_attr_default;
+var UIStrings47, str_27, ARIAValidAttr2, aria_valid_attr_default;
 var init_aria_valid_attr = __esm({
   "core/audits/accessibility/aria-valid-attr.js"() {
     "use strict";
@@ -38069,7 +38493,7 @@ var init_aria_valid_attr = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings46 = {
+    UIStrings47 = {
       /** Title of an accessibility audit that evaluates if all elements with ARIA HTML attributes have spelled the name of attribute correctly. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`[aria-*]` attributes are valid and not misspelled",
       /** Title of an accessibility audit that evaluates if all elements with ARIA HTML attributes have spelled the name of attribute correctly. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38077,7 +38501,7 @@ var init_aria_valid_attr = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Assistive technologies, like screen readers, can't interpret ARIA attributes with invalid names. [Learn more about valid ARIA attributes](https://dequeuniversity.com/rules/axe/4.11/aria-valid-attr)."
     };
-    str_27 = createIcuMessageFn({ url: "core/audits/accessibility/aria-valid-attr.js" }.url, UIStrings46);
+    str_27 = createIcuMessageFn({ url: "core/audits/accessibility/aria-valid-attr.js" }.url, UIStrings47);
     ARIAValidAttr2 = class extends axe_audit_default {
       static {
         __name(this, "ARIAValidAttr");
@@ -38088,9 +38512,9 @@ var init_aria_valid_attr = __esm({
       static get meta() {
         return {
           id: "aria-valid-attr",
-          title: str_27(UIStrings46.title),
-          failureTitle: str_27(UIStrings46.failureTitle),
-          description: str_27(UIStrings46.description),
+          title: str_27(UIStrings47.title),
+          failureTitle: str_27(UIStrings47.failureTitle),
+          description: str_27(UIStrings47.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38099,13 +38523,61 @@ var init_aria_valid_attr = __esm({
   }
 });
 
+// core/audits/accessibility/autocomplete-valid.js
+var autocomplete_valid_exports = {};
+__export(autocomplete_valid_exports, {
+  UIStrings: () => UIStrings48,
+  default: () => autocomplete_valid_default
+});
+var UIStrings48, str_28, AutocompleteValid, autocomplete_valid_default;
+var init_autocomplete_valid = __esm({
+  "core/audits/accessibility/autocomplete-valid.js"() {
+    "use strict";
+    init_process_global();
+    init_axe_audit();
+    init_i18n();
+    /**
+     * @license
+     * Copyright 2026 Google LLC
+     * SPDX-License-Identifier: Apache-2.0
+     */
+    UIStrings48 = {
+      /** Title of an accessibility audit that evaluates if all form fields have valid autocomplete attributes. This title is descriptive of the successful state and is shown to users when no user action is required. */
+      title: "`autocomplete` attributes are used correctly",
+      /** Title of an accessibility audit that evaluates if all form fields have valid autocomplete attributes. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
+      failureTitle: "`autocomplete` attributes are not used correctly",
+      /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
+      description: "The `autocomplete` attribute values must be valid and correctly applied for screen readers to function correctly. [Learn more about valid autocomplete values](https://dequeuniversity.com/rules/axe/4.11/autocomplete-valid)."
+    };
+    str_28 = createIcuMessageFn({ url: "core/audits/accessibility/autocomplete-valid.js" }.url, UIStrings48);
+    AutocompleteValid = class extends axe_audit_default {
+      static {
+        __name(this, "AutocompleteValid");
+      }
+      /**
+       * @return {LH.Audit.Meta}
+       */
+      static get meta() {
+        return {
+          id: "autocomplete-valid",
+          title: str_28(UIStrings48.title),
+          failureTitle: str_28(UIStrings48.failureTitle),
+          description: str_28(UIStrings48.description),
+          requiredArtifacts: ["Accessibility"]
+        };
+      }
+    };
+    autocomplete_valid_default = AutocompleteValid;
+  }
+});
+
 // core/audits/accessibility/button-name.js
 var button_name_exports = {};
 __export(button_name_exports, {
-  UIStrings: () => UIStrings47,
+  UIStrings: () => UIStrings49,
   default: () => button_name_default
 });
-var UIStrings47, str_28, ButtonName, button_name_default;
+var UIStrings49, str_29, ButtonName, button_name_default;
 var init_button_name = __esm({
   "core/audits/accessibility/button-name.js"() {
     "use strict";
@@ -38117,7 +38589,7 @@ var init_button_name = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings47 = {
+    UIStrings49 = {
       /** Title of an accessibility audit that evaluates if all button elements have names accessible to screen readers. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Buttons have an accessible name",
       /** Title of an accessibility audit that evaluates if all button elements have names accessible to screen readers. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38125,7 +38597,7 @@ var init_button_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: `When a button doesn't have an accessible name, screen readers announce it as "button", making it unusable for users who rely on screen readers. [Learn how to make buttons more accessible](https://dequeuniversity.com/rules/axe/4.11/button-name).`
     };
-    str_28 = createIcuMessageFn({ url: "core/audits/accessibility/button-name.js" }.url, UIStrings47);
+    str_29 = createIcuMessageFn({ url: "core/audits/accessibility/button-name.js" }.url, UIStrings49);
     ButtonName = class extends axe_audit_default {
       static {
         __name(this, "ButtonName");
@@ -38136,9 +38608,9 @@ var init_button_name = __esm({
       static get meta() {
         return {
           id: "button-name",
-          title: str_28(UIStrings47.title),
-          failureTitle: str_28(UIStrings47.failureTitle),
-          description: str_28(UIStrings47.description),
+          title: str_29(UIStrings49.title),
+          failureTitle: str_29(UIStrings49.failureTitle),
+          description: str_29(UIStrings49.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38150,10 +38622,10 @@ var init_button_name = __esm({
 // core/audits/accessibility/bypass.js
 var bypass_exports = {};
 __export(bypass_exports, {
-  UIStrings: () => UIStrings48,
+  UIStrings: () => UIStrings50,
   default: () => bypass_default
 });
-var UIStrings48, str_29, Bypass, bypass_default;
+var UIStrings50, str_30, Bypass, bypass_default;
 var init_bypass = __esm({
   "core/audits/accessibility/bypass.js"() {
     "use strict";
@@ -38165,7 +38637,7 @@ var init_bypass = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings48 = {
+    UIStrings50 = {
       /** Title of an accessibility audit that evaluates if the page has elements that let screen reader users skip over repetitive content. `heading`, `skip link`, and `landmark region` are technical terms for the elements that enable quick page navigation. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "The page contains a heading, skip link, or landmark region",
       /** Title of an accessibility audit that evaluates if the page has elements that let screen reader users skip over repetitive content. `heading`, `skip link`, and `landmark region` are technical terms for the elements that enable quick page navigation. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38173,7 +38645,7 @@ var init_bypass = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Adding ways to bypass repetitive content lets keyboard users navigate the page more efficiently. [Learn more about bypass blocks](https://dequeuniversity.com/rules/axe/4.11/bypass)."
     };
-    str_29 = createIcuMessageFn({ url: "core/audits/accessibility/bypass.js" }.url, UIStrings48);
+    str_30 = createIcuMessageFn({ url: "core/audits/accessibility/bypass.js" }.url, UIStrings50);
     Bypass = class extends axe_audit_default {
       static {
         __name(this, "Bypass");
@@ -38184,9 +38656,9 @@ var init_bypass = __esm({
       static get meta() {
         return {
           id: "bypass",
-          title: str_29(UIStrings48.title),
-          failureTitle: str_29(UIStrings48.failureTitle),
-          description: str_29(UIStrings48.description),
+          title: str_30(UIStrings50.title),
+          failureTitle: str_30(UIStrings50.failureTitle),
+          description: str_30(UIStrings50.description),
           scoreDisplayMode: axe_audit_default.SCORING_MODES.INFORMATIVE,
           requiredArtifacts: ["Accessibility"]
         };
@@ -38199,10 +38671,10 @@ var init_bypass = __esm({
 // core/audits/accessibility/color-contrast.js
 var color_contrast_exports = {};
 __export(color_contrast_exports, {
-  UIStrings: () => UIStrings49,
+  UIStrings: () => UIStrings51,
   default: () => color_contrast_default
 });
-var UIStrings49, str_30, ColorContrast, color_contrast_default;
+var UIStrings51, str_31, ColorContrast, color_contrast_default;
 var init_color_contrast = __esm({
   "core/audits/accessibility/color-contrast.js"() {
     "use strict";
@@ -38214,7 +38686,7 @@ var init_color_contrast = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings49 = {
+    UIStrings51 = {
       /** Title of an accessibility audit that evaluates if all foreground colors are distinct enough from their background colors to be legible for users. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Background and foreground colors have a sufficient contrast ratio",
       /** Title of an accessibility audit that evaluates if all foreground colors are distinct enough from their background colors to be legible for users. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38222,7 +38694,7 @@ var init_color_contrast = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Low-contrast text is difficult or impossible for many users to read. [Learn how to provide sufficient color contrast](https://dequeuniversity.com/rules/axe/4.11/color-contrast)."
     };
-    str_30 = createIcuMessageFn({ url: "core/audits/accessibility/color-contrast.js" }.url, UIStrings49);
+    str_31 = createIcuMessageFn({ url: "core/audits/accessibility/color-contrast.js" }.url, UIStrings51);
     ColorContrast = class extends axe_audit_default {
       static {
         __name(this, "ColorContrast");
@@ -38233,9 +38705,9 @@ var init_color_contrast = __esm({
       static get meta() {
         return {
           id: "color-contrast",
-          title: str_30(UIStrings49.title),
-          failureTitle: str_30(UIStrings49.failureTitle),
-          description: str_30(UIStrings49.description),
+          title: str_31(UIStrings51.title),
+          failureTitle: str_31(UIStrings51.failureTitle),
+          description: str_31(UIStrings51.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38247,10 +38719,10 @@ var init_color_contrast = __esm({
 // core/audits/accessibility/definition-list.js
 var definition_list_exports = {};
 __export(definition_list_exports, {
-  UIStrings: () => UIStrings50,
+  UIStrings: () => UIStrings52,
   default: () => definition_list_default
 });
-var UIStrings50, str_31, DefinitionList, definition_list_default;
+var UIStrings52, str_32, DefinitionList, definition_list_default;
 var init_definition_list = __esm({
   "core/audits/accessibility/definition-list.js"() {
     "use strict";
@@ -38262,7 +38734,7 @@ var init_definition_list = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings50 = {
+    UIStrings52 = {
       /** Title of an accessibility audit that evaluates if all the definition list elements have valid markup for screen readers. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`<dl>`'s contain only properly-ordered `<dt>` and `<dd>` groups, `<script>`, `<template>` or `<div>` elements.",
       /** Title of an accessibility audit that evaluates if all the definition list elements have valid markup for screen readers. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38270,7 +38742,7 @@ var init_definition_list = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "When definition lists are not properly marked up, screen readers may produce confusing or inaccurate output. [Learn how to structure definition lists correctly](https://dequeuniversity.com/rules/axe/4.11/definition-list)."
     };
-    str_31 = createIcuMessageFn({ url: "core/audits/accessibility/definition-list.js" }.url, UIStrings50);
+    str_32 = createIcuMessageFn({ url: "core/audits/accessibility/definition-list.js" }.url, UIStrings52);
     DefinitionList = class extends axe_audit_default {
       static {
         __name(this, "DefinitionList");
@@ -38281,9 +38753,9 @@ var init_definition_list = __esm({
       static get meta() {
         return {
           id: "definition-list",
-          title: str_31(UIStrings50.title),
-          failureTitle: str_31(UIStrings50.failureTitle),
-          description: str_31(UIStrings50.description),
+          title: str_32(UIStrings52.title),
+          failureTitle: str_32(UIStrings52.failureTitle),
+          description: str_32(UIStrings52.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38295,10 +38767,10 @@ var init_definition_list = __esm({
 // core/audits/accessibility/dlitem.js
 var dlitem_exports = {};
 __export(dlitem_exports, {
-  UIStrings: () => UIStrings51,
+  UIStrings: () => UIStrings53,
   default: () => dlitem_default
 });
-var UIStrings51, str_32, DLItem, dlitem_default;
+var UIStrings53, str_33, DLItem, dlitem_default;
 var init_dlitem = __esm({
   "core/audits/accessibility/dlitem.js"() {
     "use strict";
@@ -38310,7 +38782,7 @@ var init_dlitem = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings51 = {
+    UIStrings53 = {
       /** Title of an accessibility audit that evaluates if all definition list item elements (`<dt>`/`<dd>`) have a definition list parent element (`<dl>`). This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Definition list items are wrapped in `<dl>` elements",
       /** Title of an accessibility audit that evaluates if all definition list item elements (`<dt>`/`<dd>`) have a definition list parent element (`<dl>`). This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38318,7 +38790,7 @@ var init_dlitem = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Definition list items (`<dt>` and `<dd>`) must be wrapped in a parent `<dl>` element to ensure that screen readers can properly announce them. [Learn how to structure definition lists correctly](https://dequeuniversity.com/rules/axe/4.11/dlitem)."
     };
-    str_32 = createIcuMessageFn({ url: "core/audits/accessibility/dlitem.js" }.url, UIStrings51);
+    str_33 = createIcuMessageFn({ url: "core/audits/accessibility/dlitem.js" }.url, UIStrings53);
     DLItem = class extends axe_audit_default {
       static {
         __name(this, "DLItem");
@@ -38329,9 +38801,9 @@ var init_dlitem = __esm({
       static get meta() {
         return {
           id: "dlitem",
-          title: str_32(UIStrings51.title),
-          failureTitle: str_32(UIStrings51.failureTitle),
-          description: str_32(UIStrings51.description),
+          title: str_33(UIStrings53.title),
+          failureTitle: str_33(UIStrings53.failureTitle),
+          description: str_33(UIStrings53.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38343,10 +38815,10 @@ var init_dlitem = __esm({
 // core/audits/accessibility/document-title.js
 var document_title_exports = {};
 __export(document_title_exports, {
-  UIStrings: () => UIStrings52,
+  UIStrings: () => UIStrings54,
   default: () => document_title_default
 });
-var UIStrings52, str_33, DocumentTitle, document_title_default;
+var UIStrings54, str_34, DocumentTitle, document_title_default;
 var init_document_title = __esm({
   "core/audits/accessibility/document-title.js"() {
     "use strict";
@@ -38358,7 +38830,7 @@ var init_document_title = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings52 = {
+    UIStrings54 = {
       /** Title of an accessibility audit that evaluates if the page has a <title> element that describes the page. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Document has a `<title>` element",
       /** Title of an accessibility audit that evaluates if the page has a <title> element that describes the page. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38366,7 +38838,7 @@ var init_document_title = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "The title gives screen reader users an overview of the page, and search engine users rely on it heavily to determine if a page is relevant to their search. [Learn more about document titles](https://dequeuniversity.com/rules/axe/4.11/document-title)."
     };
-    str_33 = createIcuMessageFn({ url: "core/audits/accessibility/document-title.js" }.url, UIStrings52);
+    str_34 = createIcuMessageFn({ url: "core/audits/accessibility/document-title.js" }.url, UIStrings54);
     DocumentTitle = class extends axe_audit_default {
       static {
         __name(this, "DocumentTitle");
@@ -38377,9 +38849,9 @@ var init_document_title = __esm({
       static get meta() {
         return {
           id: "document-title",
-          title: str_33(UIStrings52.title),
-          failureTitle: str_33(UIStrings52.failureTitle),
-          description: str_33(UIStrings52.description),
+          title: str_34(UIStrings54.title),
+          failureTitle: str_34(UIStrings54.failureTitle),
+          description: str_34(UIStrings54.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38391,10 +38863,10 @@ var init_document_title = __esm({
 // core/audits/accessibility/duplicate-id-aria.js
 var duplicate_id_aria_exports = {};
 __export(duplicate_id_aria_exports, {
-  UIStrings: () => UIStrings53,
+  UIStrings: () => UIStrings55,
   default: () => duplicate_id_aria_default
 });
-var UIStrings53, str_34, DuplicateIdAria, duplicate_id_aria_default;
+var UIStrings55, str_35, DuplicateIdAria, duplicate_id_aria_default;
 var init_duplicate_id_aria = __esm({
   "core/audits/accessibility/duplicate-id-aria.js"() {
     "use strict";
@@ -38406,7 +38878,7 @@ var init_duplicate_id_aria = __esm({
      * Copyright 2019 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings53 = {
+    UIStrings55 = {
       /** Title of an accessibility audit that checks if there are any duplicate ARIA IDs on the page. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "ARIA IDs are unique",
       /** Title of an accessibility audit that checks if there are any duplicate ARIA IDs on the page. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38414,7 +38886,7 @@ var init_duplicate_id_aria = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "The value of an ARIA ID must be unique to prevent other instances from being overlooked by assistive technologies. [Learn how to fix duplicate ARIA IDs](https://dequeuniversity.com/rules/axe/4.11/duplicate-id-aria)."
     };
-    str_34 = createIcuMessageFn({ url: "core/audits/accessibility/duplicate-id-aria.js" }.url, UIStrings53);
+    str_35 = createIcuMessageFn({ url: "core/audits/accessibility/duplicate-id-aria.js" }.url, UIStrings55);
     DuplicateIdAria = class extends axe_audit_default {
       static {
         __name(this, "DuplicateIdAria");
@@ -38425,9 +38897,9 @@ var init_duplicate_id_aria = __esm({
       static get meta() {
         return {
           id: "duplicate-id-aria",
-          title: str_34(UIStrings53.title),
-          failureTitle: str_34(UIStrings53.failureTitle),
-          description: str_34(UIStrings53.description),
+          title: str_35(UIStrings55.title),
+          failureTitle: str_35(UIStrings55.failureTitle),
+          description: str_35(UIStrings55.description),
           scoreDisplayMode: axe_audit_default.SCORING_MODES.INFORMATIVE,
           requiredArtifacts: ["Accessibility"]
         };
@@ -38440,10 +38912,10 @@ var init_duplicate_id_aria = __esm({
 // core/audits/accessibility/empty-heading.js
 var empty_heading_exports = {};
 __export(empty_heading_exports, {
-  UIStrings: () => UIStrings54,
+  UIStrings: () => UIStrings56,
   default: () => empty_heading_default
 });
-var UIStrings54, str_35, EmptyHeading, empty_heading_default;
+var UIStrings56, str_36, EmptyHeading, empty_heading_default;
 var init_empty_heading = __esm({
   "core/audits/accessibility/empty-heading.js"() {
     "use strict";
@@ -38455,7 +38927,7 @@ var init_empty_heading = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings54 = {
+    UIStrings56 = {
       /** Title of an accessibility audit that checks if all heading elements have content. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "All heading elements contain content.",
       /** Title of an accessibility audit that checks if all heading elements have content. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38463,7 +38935,7 @@ var init_empty_heading = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "A heading with no content or inaccessible text prevent screen reader users from accessing information on the page's structure. [Learn more about headings](https://dequeuniversity.com/rules/axe/4.11/empty-heading)."
     };
-    str_35 = createIcuMessageFn({ url: "core/audits/accessibility/empty-heading.js" }.url, UIStrings54);
+    str_36 = createIcuMessageFn({ url: "core/audits/accessibility/empty-heading.js" }.url, UIStrings56);
     EmptyHeading = class extends axe_audit_default {
       static {
         __name(this, "EmptyHeading");
@@ -38474,9 +38946,9 @@ var init_empty_heading = __esm({
       static get meta() {
         return {
           id: "empty-heading",
-          title: str_35(UIStrings54.title),
-          failureTitle: str_35(UIStrings54.failureTitle),
-          description: str_35(UIStrings54.description),
+          title: str_36(UIStrings56.title),
+          failureTitle: str_36(UIStrings56.failureTitle),
+          description: str_36(UIStrings56.description),
           scoreDisplayMode: axe_audit_default.SCORING_MODES.INFORMATIVE,
           requiredArtifacts: ["Accessibility"]
         };
@@ -38489,10 +38961,10 @@ var init_empty_heading = __esm({
 // core/audits/accessibility/form-field-multiple-labels.js
 var form_field_multiple_labels_exports = {};
 __export(form_field_multiple_labels_exports, {
-  UIStrings: () => UIStrings55,
+  UIStrings: () => UIStrings57,
   default: () => form_field_multiple_labels_default
 });
-var UIStrings55, str_36, FormFieldMultipleLabels, form_field_multiple_labels_default;
+var UIStrings57, str_37, FormFieldMultipleLabels, form_field_multiple_labels_default;
 var init_form_field_multiple_labels = __esm({
   "core/audits/accessibility/form-field-multiple-labels.js"() {
     "use strict";
@@ -38504,7 +38976,7 @@ var init_form_field_multiple_labels = __esm({
      * Copyright 2019 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings55 = {
+    UIStrings57 = {
       /** Title of an accessibility audit that checks if any form fields have multiple label elements. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "No form fields have multiple labels",
       /** Title of an accessibility audit that checks if any form fields have multiple label elements. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38512,7 +38984,7 @@ var init_form_field_multiple_labels = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Form fields with multiple labels can be confusingly announced by assistive technologies like screen readers which use either the first, the last, or all of the labels. [Learn how to use form labels](https://dequeuniversity.com/rules/axe/4.11/form-field-multiple-labels)."
     };
-    str_36 = createIcuMessageFn({ url: "core/audits/accessibility/form-field-multiple-labels.js" }.url, UIStrings55);
+    str_37 = createIcuMessageFn({ url: "core/audits/accessibility/form-field-multiple-labels.js" }.url, UIStrings57);
     FormFieldMultipleLabels = class extends axe_audit_default {
       static {
         __name(this, "FormFieldMultipleLabels");
@@ -38523,9 +38995,9 @@ var init_form_field_multiple_labels = __esm({
       static get meta() {
         return {
           id: "form-field-multiple-labels",
-          title: str_36(UIStrings55.title),
-          failureTitle: str_36(UIStrings55.failureTitle),
-          description: str_36(UIStrings55.description),
+          title: str_37(UIStrings57.title),
+          failureTitle: str_37(UIStrings57.failureTitle),
+          description: str_37(UIStrings57.description),
           scoreDisplayMode: axe_audit_default.SCORING_MODES.INFORMATIVE,
           requiredArtifacts: ["Accessibility"]
         };
@@ -38538,10 +39010,10 @@ var init_form_field_multiple_labels = __esm({
 // core/audits/accessibility/frame-title.js
 var frame_title_exports = {};
 __export(frame_title_exports, {
-  UIStrings: () => UIStrings56,
+  UIStrings: () => UIStrings58,
   default: () => frame_title_default
 });
-var UIStrings56, str_37, FrameTitle, frame_title_default;
+var UIStrings58, str_38, FrameTitle, frame_title_default;
 var init_frame_title = __esm({
   "core/audits/accessibility/frame-title.js"() {
     "use strict";
@@ -38553,7 +39025,7 @@ var init_frame_title = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings56 = {
+    UIStrings58 = {
       /** Title of an accessibility audit that evaluates if all `<frame>` and `<iframe>` elements on the page have a title HTML attribute to describe their contents. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`<frame>` or `<iframe>` elements have a title",
       /** Title of an accessibility audit that evaluates if all `<frame>` and `<iframe>` elements on the page have a title HTML attribute to describe their contents. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38561,7 +39033,7 @@ var init_frame_title = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Screen reader users rely on frame titles to describe the contents of frames. [Learn more about frame titles](https://dequeuniversity.com/rules/axe/4.11/frame-title)."
     };
-    str_37 = createIcuMessageFn({ url: "core/audits/accessibility/frame-title.js" }.url, UIStrings56);
+    str_38 = createIcuMessageFn({ url: "core/audits/accessibility/frame-title.js" }.url, UIStrings58);
     FrameTitle = class extends axe_audit_default {
       static {
         __name(this, "FrameTitle");
@@ -38572,9 +39044,9 @@ var init_frame_title = __esm({
       static get meta() {
         return {
           id: "frame-title",
-          title: str_37(UIStrings56.title),
-          failureTitle: str_37(UIStrings56.failureTitle),
-          description: str_37(UIStrings56.description),
+          title: str_38(UIStrings58.title),
+          failureTitle: str_38(UIStrings58.failureTitle),
+          description: str_38(UIStrings58.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38586,10 +39058,10 @@ var init_frame_title = __esm({
 // core/audits/accessibility/heading-order.js
 var heading_order_exports = {};
 __export(heading_order_exports, {
-  UIStrings: () => UIStrings57,
+  UIStrings: () => UIStrings59,
   default: () => heading_order_default
 });
-var UIStrings57, str_38, HeadingOrder, heading_order_default;
+var UIStrings59, str_39, HeadingOrder, heading_order_default;
 var init_heading_order = __esm({
   "core/audits/accessibility/heading-order.js"() {
     "use strict";
@@ -38601,7 +39073,7 @@ var init_heading_order = __esm({
      * Copyright 2019 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings57 = {
+    UIStrings59 = {
       /** Title of an accessibility audit that checks if heading elements (<h1>, <h2>, etc) appear in numeric order and only ever increase in steps of 1. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Heading elements appear in a sequentially-descending order",
       /** Title of an accessibility audit that checks if heading elements (<h1>, <h2>, etc) appear in numeric order and only ever increase in steps of 1. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38609,7 +39081,7 @@ var init_heading_order = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Properly ordered headings that do not skip levels convey the semantic structure of the page, making it easier to navigate and understand when using assistive technologies. [Learn more about heading order](https://dequeuniversity.com/rules/axe/4.11/heading-order)."
     };
-    str_38 = createIcuMessageFn({ url: "core/audits/accessibility/heading-order.js" }.url, UIStrings57);
+    str_39 = createIcuMessageFn({ url: "core/audits/accessibility/heading-order.js" }.url, UIStrings59);
     HeadingOrder = class extends axe_audit_default {
       static {
         __name(this, "HeadingOrder");
@@ -38620,9 +39092,9 @@ var init_heading_order = __esm({
       static get meta() {
         return {
           id: "heading-order",
-          title: str_38(UIStrings57.title),
-          failureTitle: str_38(UIStrings57.failureTitle),
-          description: str_38(UIStrings57.description),
+          title: str_39(UIStrings59.title),
+          failureTitle: str_39(UIStrings59.failureTitle),
+          description: str_39(UIStrings59.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38634,10 +39106,10 @@ var init_heading_order = __esm({
 // core/audits/accessibility/html-has-lang.js
 var html_has_lang_exports = {};
 __export(html_has_lang_exports, {
-  UIStrings: () => UIStrings58,
+  UIStrings: () => UIStrings60,
   default: () => html_has_lang_default
 });
-var UIStrings58, str_39, HTMLHasLang, html_has_lang_default;
+var UIStrings60, str_40, HTMLHasLang, html_has_lang_default;
 var init_html_has_lang = __esm({
   "core/audits/accessibility/html-has-lang.js"() {
     "use strict";
@@ -38649,7 +39121,7 @@ var init_html_has_lang = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings58 = {
+    UIStrings60 = {
       /** Title of an accessibility audit that evaluates if the root HTML tag has a lang attribute identifying the page's language. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`<html>` element has a `[lang]` attribute",
       /** Title of an accessibility audit that evaluates if the root HTML tag has a lang attribute identifying the page's language. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38657,7 +39129,7 @@ var init_html_has_lang = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "If a page doesn't specify a `lang` attribute, a screen reader assumes that the page is in the default language that the user chose when setting up the screen reader. If the page isn't actually in the default language, then the screen reader might not announce the page's text correctly. [Learn more about the `lang` attribute](https://dequeuniversity.com/rules/axe/4.11/html-has-lang)."
     };
-    str_39 = createIcuMessageFn({ url: "core/audits/accessibility/html-has-lang.js" }.url, UIStrings58);
+    str_40 = createIcuMessageFn({ url: "core/audits/accessibility/html-has-lang.js" }.url, UIStrings60);
     HTMLHasLang = class extends axe_audit_default {
       static {
         __name(this, "HTMLHasLang");
@@ -38668,9 +39140,9 @@ var init_html_has_lang = __esm({
       static get meta() {
         return {
           id: "html-has-lang",
-          title: str_39(UIStrings58.title),
-          failureTitle: str_39(UIStrings58.failureTitle),
-          description: str_39(UIStrings58.description),
+          title: str_40(UIStrings60.title),
+          failureTitle: str_40(UIStrings60.failureTitle),
+          description: str_40(UIStrings60.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38682,10 +39154,10 @@ var init_html_has_lang = __esm({
 // core/audits/accessibility/html-lang-valid.js
 var html_lang_valid_exports = {};
 __export(html_lang_valid_exports, {
-  UIStrings: () => UIStrings59,
+  UIStrings: () => UIStrings61,
   default: () => html_lang_valid_default
 });
-var UIStrings59, str_40, HTMLLangValid, html_lang_valid_default;
+var UIStrings61, str_41, HTMLLangValid, html_lang_valid_default;
 var init_html_lang_valid = __esm({
   "core/audits/accessibility/html-lang-valid.js"() {
     "use strict";
@@ -38697,7 +39169,7 @@ var init_html_lang_valid = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings59 = {
+    UIStrings61 = {
       /** Title of an accessibility audit that evaluates if the value for root HTML tag's lang attribute is a valid BCP 47 language. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`<html>` element has a valid value for its `[lang]` attribute",
       /** Title of an accessibility audit that evaluates if the value for root HTML tag's lang attribute is a valid BCP 47 language. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38705,7 +39177,7 @@ var init_html_lang_valid = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Specifying a valid [BCP 47 language](https://www.w3.org/International/questions/qa-choosing-language-tags#question) helps screen readers announce text properly. [Learn how to use the `lang` attribute](https://dequeuniversity.com/rules/axe/4.11/html-lang-valid)."
     };
-    str_40 = createIcuMessageFn({ url: "core/audits/accessibility/html-lang-valid.js" }.url, UIStrings59);
+    str_41 = createIcuMessageFn({ url: "core/audits/accessibility/html-lang-valid.js" }.url, UIStrings61);
     HTMLLangValid = class extends axe_audit_default {
       static {
         __name(this, "HTMLLangValid");
@@ -38716,9 +39188,9 @@ var init_html_lang_valid = __esm({
       static get meta() {
         return {
           id: "html-lang-valid",
-          title: str_40(UIStrings59.title),
-          failureTitle: str_40(UIStrings59.failureTitle),
-          description: str_40(UIStrings59.description),
+          title: str_41(UIStrings61.title),
+          failureTitle: str_41(UIStrings61.failureTitle),
+          description: str_41(UIStrings61.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38730,10 +39202,10 @@ var init_html_lang_valid = __esm({
 // core/audits/accessibility/html-xml-lang-mismatch.js
 var html_xml_lang_mismatch_exports = {};
 __export(html_xml_lang_mismatch_exports, {
-  UIStrings: () => UIStrings60,
+  UIStrings: () => UIStrings62,
   default: () => html_xml_lang_mismatch_default
 });
-var UIStrings60, str_41, HTMLXMLLangMismatch, html_xml_lang_mismatch_default;
+var UIStrings62, str_42, HTMLXMLLangMismatch, html_xml_lang_mismatch_default;
 var init_html_xml_lang_mismatch = __esm({
   "core/audits/accessibility/html-xml-lang-mismatch.js"() {
     "use strict";
@@ -38745,7 +39217,7 @@ var init_html_xml_lang_mismatch = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings60 = {
+    UIStrings62 = {
       /** Title of an accessibility audit that evaluates if the xml:lang attribute, if present, has the same base language as the `lang` attribute. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`<html>` element has an `[xml:lang]` attribute with the same base language as the `[lang]` attribute.",
       /** Title of an accessibility audit that evaluates if the xml:lang attribute, if present, has the same base language as the `lang` attribute. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38753,7 +39225,7 @@ var init_html_xml_lang_mismatch = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "If the webpage does not specify a consistent language, then the screen reader might not announce the page's text correctly. [Learn more about the `lang` attribute](https://dequeuniversity.com/rules/axe/4.11/html-xml-lang-mismatch)."
     };
-    str_41 = createIcuMessageFn({ url: "core/audits/accessibility/html-xml-lang-mismatch.js" }.url, UIStrings60);
+    str_42 = createIcuMessageFn({ url: "core/audits/accessibility/html-xml-lang-mismatch.js" }.url, UIStrings62);
     HTMLXMLLangMismatch = class extends axe_audit_default {
       static {
         __name(this, "HTMLXMLLangMismatch");
@@ -38764,9 +39236,9 @@ var init_html_xml_lang_mismatch = __esm({
       static get meta() {
         return {
           id: "html-xml-lang-mismatch",
-          title: str_41(UIStrings60.title),
-          failureTitle: str_41(UIStrings60.failureTitle),
-          description: str_41(UIStrings60.description),
+          title: str_42(UIStrings62.title),
+          failureTitle: str_42(UIStrings62.failureTitle),
+          description: str_42(UIStrings62.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38778,10 +39250,10 @@ var init_html_xml_lang_mismatch = __esm({
 // core/audits/accessibility/identical-links-same-purpose.js
 var identical_links_same_purpose_exports = {};
 __export(identical_links_same_purpose_exports, {
-  UIStrings: () => UIStrings61,
+  UIStrings: () => UIStrings63,
   default: () => identical_links_same_purpose_default
 });
-var UIStrings61, str_42, IdenticalLinksSamePurpose, identical_links_same_purpose_default;
+var UIStrings63, str_43, IdenticalLinksSamePurpose, identical_links_same_purpose_default;
 var init_identical_links_same_purpose = __esm({
   "core/audits/accessibility/identical-links-same-purpose.js"() {
     "use strict";
@@ -38793,7 +39265,7 @@ var init_identical_links_same_purpose = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings61 = {
+    UIStrings63 = {
       /** Title of an accessibility audit that checks if identical links have the same purpose. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Identical links have the same purpose.",
       /** Title of an accessibility audit that checks if identical links have the same purpose. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38801,7 +39273,7 @@ var init_identical_links_same_purpose = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Links with the same destination should have the same description, to help users understand the link's purpose and decide whether to follow it. [Learn more about identical links](https://dequeuniversity.com/rules/axe/4.11/identical-links-same-purpose)."
     };
-    str_42 = createIcuMessageFn({ url: "core/audits/accessibility/identical-links-same-purpose.js" }.url, UIStrings61);
+    str_43 = createIcuMessageFn({ url: "core/audits/accessibility/identical-links-same-purpose.js" }.url, UIStrings63);
     IdenticalLinksSamePurpose = class extends axe_audit_default {
       static {
         __name(this, "IdenticalLinksSamePurpose");
@@ -38812,9 +39284,9 @@ var init_identical_links_same_purpose = __esm({
       static get meta() {
         return {
           id: "identical-links-same-purpose",
-          title: str_42(UIStrings61.title),
-          failureTitle: str_42(UIStrings61.failureTitle),
-          description: str_42(UIStrings61.description),
+          title: str_43(UIStrings63.title),
+          failureTitle: str_43(UIStrings63.failureTitle),
+          description: str_43(UIStrings63.description),
           scoreDisplayMode: axe_audit_default.SCORING_MODES.INFORMATIVE,
           requiredArtifacts: ["Accessibility"]
         };
@@ -38827,10 +39299,10 @@ var init_identical_links_same_purpose = __esm({
 // core/audits/accessibility/image-alt.js
 var image_alt_exports = {};
 __export(image_alt_exports, {
-  UIStrings: () => UIStrings62,
+  UIStrings: () => UIStrings64,
   default: () => image_alt_default
 });
-var UIStrings62, str_43, ImageAlt, image_alt_default;
+var UIStrings64, str_44, ImageAlt, image_alt_default;
 var init_image_alt = __esm({
   "core/audits/accessibility/image-alt.js"() {
     "use strict";
@@ -38842,7 +39314,7 @@ var init_image_alt = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings62 = {
+    UIStrings64 = {
       /** Title of an accessibility audit that evaluates if all image elements have the alt HTML attribute to describe their contents. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Image elements have `[alt]` attributes",
       /** Title of an accessibility audit that evaluates if all image elements have the alt HTML attribute to describe their contents. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38850,7 +39322,7 @@ var init_image_alt = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Informative elements should aim for short, descriptive alternate text. Decorative elements can be ignored with an empty alt attribute. [Learn more about the `alt` attribute](https://dequeuniversity.com/rules/axe/4.11/image-alt)."
     };
-    str_43 = createIcuMessageFn({ url: "core/audits/accessibility/image-alt.js" }.url, UIStrings62);
+    str_44 = createIcuMessageFn({ url: "core/audits/accessibility/image-alt.js" }.url, UIStrings64);
     ImageAlt = class extends axe_audit_default {
       static {
         __name(this, "ImageAlt");
@@ -38861,9 +39333,9 @@ var init_image_alt = __esm({
       static get meta() {
         return {
           id: "image-alt",
-          title: str_43(UIStrings62.title),
-          failureTitle: str_43(UIStrings62.failureTitle),
-          description: str_43(UIStrings62.description),
+          title: str_44(UIStrings64.title),
+          failureTitle: str_44(UIStrings64.failureTitle),
+          description: str_44(UIStrings64.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38875,10 +39347,10 @@ var init_image_alt = __esm({
 // core/audits/accessibility/image-redundant-alt.js
 var image_redundant_alt_exports = {};
 __export(image_redundant_alt_exports, {
-  UIStrings: () => UIStrings63,
+  UIStrings: () => UIStrings65,
   default: () => image_redundant_alt_default
 });
-var UIStrings63, str_44, ImageRedundantAlt, image_redundant_alt_default;
+var UIStrings65, str_45, ImageRedundantAlt, image_redundant_alt_default;
 var init_image_redundant_alt = __esm({
   "core/audits/accessibility/image-redundant-alt.js"() {
     "use strict";
@@ -38890,7 +39362,7 @@ var init_image_redundant_alt = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings63 = {
+    UIStrings65 = {
       /** Title of an accessibility audit that evaluates if all image elements have the alt HTML attribute that is not redundant. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Image elements do not have `[alt]` attributes that are redundant text.",
       /** Title of an accessibility audit that evaluates if all image elements have the alt HTML attribute that is not redundant. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38898,7 +39370,7 @@ var init_image_redundant_alt = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Informative elements should aim for short, descriptive alternative text. Alternative text that is exactly the same as the text adjacent to the link or image is potentially confusing for screen reader users, because the text will be read twice. [Learn more about the `alt` attribute](https://dequeuniversity.com/rules/axe/4.11/image-redundant-alt)."
     };
-    str_44 = createIcuMessageFn({ url: "core/audits/accessibility/image-redundant-alt.js" }.url, UIStrings63);
+    str_45 = createIcuMessageFn({ url: "core/audits/accessibility/image-redundant-alt.js" }.url, UIStrings65);
     ImageRedundantAlt = class extends axe_audit_default {
       static {
         __name(this, "ImageRedundantAlt");
@@ -38909,9 +39381,9 @@ var init_image_redundant_alt = __esm({
       static get meta() {
         return {
           id: "image-redundant-alt",
-          title: str_44(UIStrings63.title),
-          failureTitle: str_44(UIStrings63.failureTitle),
-          description: str_44(UIStrings63.description),
+          title: str_45(UIStrings65.title),
+          failureTitle: str_45(UIStrings65.failureTitle),
+          description: str_45(UIStrings65.description),
           scoreDisplayMode: axe_audit_default.SCORING_MODES.INFORMATIVE,
           requiredArtifacts: ["Accessibility"]
         };
@@ -38924,10 +39396,10 @@ var init_image_redundant_alt = __esm({
 // core/audits/accessibility/input-button-name.js
 var input_button_name_exports = {};
 __export(input_button_name_exports, {
-  UIStrings: () => UIStrings64,
+  UIStrings: () => UIStrings66,
   default: () => input_button_name_default
 });
-var UIStrings64, str_45, InputButtonName, input_button_name_default;
+var UIStrings66, str_46, InputButtonName, input_button_name_default;
 var init_input_button_name = __esm({
   "core/audits/accessibility/input-button-name.js"() {
     "use strict";
@@ -38939,7 +39411,7 @@ var init_input_button_name = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings64 = {
+    UIStrings66 = {
       /** Title of an accessibility audit that evaluates if all input buttons have discernible text. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Input buttons have discernible text.",
       /** Title of an accessibility audit that evaluates if all input buttons have discernible text. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38947,7 +39419,7 @@ var init_input_button_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Adding discernable and accessible text to input buttons may help screen reader users understand the purpose of the input button. [Learn more about input buttons](https://dequeuniversity.com/rules/axe/4.11/input-button-name)."
     };
-    str_45 = createIcuMessageFn({ url: "core/audits/accessibility/input-button-name.js" }.url, UIStrings64);
+    str_46 = createIcuMessageFn({ url: "core/audits/accessibility/input-button-name.js" }.url, UIStrings66);
     InputButtonName = class extends axe_audit_default {
       static {
         __name(this, "InputButtonName");
@@ -38958,9 +39430,9 @@ var init_input_button_name = __esm({
       static get meta() {
         return {
           id: "input-button-name",
-          title: str_45(UIStrings64.title),
-          failureTitle: str_45(UIStrings64.failureTitle),
-          description: str_45(UIStrings64.description),
+          title: str_46(UIStrings66.title),
+          failureTitle: str_46(UIStrings66.failureTitle),
+          description: str_46(UIStrings66.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -38972,10 +39444,10 @@ var init_input_button_name = __esm({
 // core/audits/accessibility/input-image-alt.js
 var input_image_alt_exports = {};
 __export(input_image_alt_exports, {
-  UIStrings: () => UIStrings65,
+  UIStrings: () => UIStrings67,
   default: () => input_image_alt_default
 });
-var UIStrings65, str_46, InputImageAlt, input_image_alt_default;
+var UIStrings67, str_47, InputImageAlt, input_image_alt_default;
 var init_input_image_alt = __esm({
   "core/audits/accessibility/input-image-alt.js"() {
     "use strict";
@@ -38987,7 +39459,7 @@ var init_input_image_alt = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings65 = {
+    UIStrings67 = {
       /** Title of an accessibility audit that evaluates if all input elements of type image have an alt HTML attribute to describe their contents. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: '`<input type="image">` elements have `[alt]` text',
       /** Title of an accessibility audit that evaluates if all input elements of type image have an alt HTML attribute to describe their contents. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -38995,7 +39467,7 @@ var init_input_image_alt = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "When an image is being used as an `<input>` button, providing alternative text can help screen reader users understand the purpose of the button. [Learn about input image alt text](https://dequeuniversity.com/rules/axe/4.11/input-image-alt)."
     };
-    str_46 = createIcuMessageFn({ url: "core/audits/accessibility/input-image-alt.js" }.url, UIStrings65);
+    str_47 = createIcuMessageFn({ url: "core/audits/accessibility/input-image-alt.js" }.url, UIStrings67);
     InputImageAlt = class extends axe_audit_default {
       static {
         __name(this, "InputImageAlt");
@@ -39006,9 +39478,9 @@ var init_input_image_alt = __esm({
       static get meta() {
         return {
           id: "input-image-alt",
-          title: str_46(UIStrings65.title),
-          failureTitle: str_46(UIStrings65.failureTitle),
-          description: str_46(UIStrings65.description),
+          title: str_47(UIStrings67.title),
+          failureTitle: str_47(UIStrings67.failureTitle),
+          description: str_47(UIStrings67.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39020,10 +39492,10 @@ var init_input_image_alt = __esm({
 // core/audits/accessibility/label-content-name-mismatch.js
 var label_content_name_mismatch_exports = {};
 __export(label_content_name_mismatch_exports, {
-  UIStrings: () => UIStrings66,
+  UIStrings: () => UIStrings68,
   default: () => label_content_name_mismatch_default
 });
-var UIStrings66, str_47, LabelContentNameMismatch, label_content_name_mismatch_default;
+var UIStrings68, str_48, LabelContentNameMismatch, label_content_name_mismatch_default;
 var init_label_content_name_mismatch = __esm({
   "core/audits/accessibility/label-content-name-mismatch.js"() {
     "use strict";
@@ -39035,7 +39507,7 @@ var init_label_content_name_mismatch = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings66 = {
+    UIStrings68 = {
       /** Title of an accessibility audit that evaluates if elements labeled through their content have their visible text as part of their accessible name. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Elements with visible text labels have matching accessible names.",
       /** Title of an accessibility audit that evaluates if elements labeled through their content have their visible text as part of their accessible name. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39043,7 +39515,7 @@ var init_label_content_name_mismatch = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Visible text labels that do not match the accessible name can result in a confusing experience for screen reader users. [Learn more about accessible names](https://dequeuniversity.com/rules/axe/4.11/label-content-name-mismatch)."
     };
-    str_47 = createIcuMessageFn({ url: "core/audits/accessibility/label-content-name-mismatch.js" }.url, UIStrings66);
+    str_48 = createIcuMessageFn({ url: "core/audits/accessibility/label-content-name-mismatch.js" }.url, UIStrings68);
     LabelContentNameMismatch = class extends axe_audit_default {
       static {
         __name(this, "LabelContentNameMismatch");
@@ -39054,9 +39526,9 @@ var init_label_content_name_mismatch = __esm({
       static get meta() {
         return {
           id: "label-content-name-mismatch",
-          title: str_47(UIStrings66.title),
-          failureTitle: str_47(UIStrings66.failureTitle),
-          description: str_47(UIStrings66.description),
+          title: str_48(UIStrings68.title),
+          failureTitle: str_48(UIStrings68.failureTitle),
+          description: str_48(UIStrings68.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39068,10 +39540,10 @@ var init_label_content_name_mismatch = __esm({
 // core/audits/accessibility/label.js
 var label_exports = {};
 __export(label_exports, {
-  UIStrings: () => UIStrings67,
+  UIStrings: () => UIStrings69,
   default: () => label_default
 });
-var UIStrings67, str_48, Label, label_default;
+var UIStrings69, str_49, Label, label_default;
 var init_label = __esm({
   "core/audits/accessibility/label.js"() {
     "use strict";
@@ -39083,7 +39555,7 @@ var init_label = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings67 = {
+    UIStrings69 = {
       /** Title of an accessibility audit that evaluates if all form elements have corresponding label elements. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Form elements have associated labels",
       /** Title of an accessibility audit that evaluates if all form elements have corresponding label elements. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39091,7 +39563,7 @@ var init_label = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Labels ensure that form controls are announced properly by assistive technologies, like screen readers. [Learn more about form element labels](https://dequeuniversity.com/rules/axe/4.11/label)."
     };
-    str_48 = createIcuMessageFn({ url: "core/audits/accessibility/label.js" }.url, UIStrings67);
+    str_49 = createIcuMessageFn({ url: "core/audits/accessibility/label.js" }.url, UIStrings69);
     Label = class extends axe_audit_default {
       static {
         __name(this, "Label");
@@ -39102,9 +39574,9 @@ var init_label = __esm({
       static get meta() {
         return {
           id: "label",
-          title: str_48(UIStrings67.title),
-          failureTitle: str_48(UIStrings67.failureTitle),
-          description: str_48(UIStrings67.description),
+          title: str_49(UIStrings69.title),
+          failureTitle: str_49(UIStrings69.failureTitle),
+          description: str_49(UIStrings69.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39116,10 +39588,10 @@ var init_label = __esm({
 // core/audits/accessibility/landmark-one-main.js
 var landmark_one_main_exports = {};
 __export(landmark_one_main_exports, {
-  UIStrings: () => UIStrings68,
+  UIStrings: () => UIStrings70,
   default: () => landmark_one_main_default
 });
-var UIStrings68, str_49, LandmarkOneMain, landmark_one_main_default;
+var UIStrings70, str_50, LandmarkOneMain, landmark_one_main_default;
 var init_landmark_one_main = __esm({
   "core/audits/accessibility/landmark-one-main.js"() {
     "use strict";
@@ -39131,7 +39603,7 @@ var init_landmark_one_main = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings68 = {
+    UIStrings70 = {
       /** Title of an accessibility audit that checks if the document has a main landmark. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Document has a main landmark.",
       /** Title of an accessibility audit that checks if the document has a main landmark. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39139,7 +39611,7 @@ var init_landmark_one_main = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "One main landmark helps screen reader users navigate a web page. [Learn more about landmarks](https://dequeuniversity.com/rules/axe/4.11/landmark-one-main)."
     };
-    str_49 = createIcuMessageFn({ url: "core/audits/accessibility/landmark-one-main.js" }.url, UIStrings68);
+    str_50 = createIcuMessageFn({ url: "core/audits/accessibility/landmark-one-main.js" }.url, UIStrings70);
     LandmarkOneMain = class extends axe_audit_default {
       static {
         __name(this, "LandmarkOneMain");
@@ -39150,9 +39622,9 @@ var init_landmark_one_main = __esm({
       static get meta() {
         return {
           id: "landmark-one-main",
-          title: str_49(UIStrings68.title),
-          failureTitle: str_49(UIStrings68.failureTitle),
-          description: str_49(UIStrings68.description),
+          title: str_50(UIStrings70.title),
+          failureTitle: str_50(UIStrings70.failureTitle),
+          description: str_50(UIStrings70.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39164,10 +39636,10 @@ var init_landmark_one_main = __esm({
 // core/audits/accessibility/link-in-text-block.js
 var link_in_text_block_exports = {};
 __export(link_in_text_block_exports, {
-  UIStrings: () => UIStrings69,
+  UIStrings: () => UIStrings71,
   default: () => link_in_text_block_default
 });
-var UIStrings69, str_50, LinkInTextBlock, link_in_text_block_default;
+var UIStrings71, str_51, LinkInTextBlock, link_in_text_block_default;
 var init_link_in_text_block = __esm({
   "core/audits/accessibility/link-in-text-block.js"() {
     "use strict";
@@ -39179,7 +39651,7 @@ var init_link_in_text_block = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings69 = {
+    UIStrings71 = {
       /** Title of an accessibility audit that evaluates if all link elements can be distinguished without relying on color. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Links are distinguishable without relying on color.",
       /** Title of an accessibility audit that evaluates if all link elements can be distinguished without relying on color. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39187,7 +39659,7 @@ var init_link_in_text_block = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Low-contrast text is difficult or impossible for many users to read. Link text that is discernible improves the experience for users with low vision. [Learn how to make links distinguishable](https://dequeuniversity.com/rules/axe/4.11/link-in-text-block)."
     };
-    str_50 = createIcuMessageFn({ url: "core/audits/accessibility/link-in-text-block.js" }.url, UIStrings69);
+    str_51 = createIcuMessageFn({ url: "core/audits/accessibility/link-in-text-block.js" }.url, UIStrings71);
     LinkInTextBlock = class extends axe_audit_default {
       static {
         __name(this, "LinkInTextBlock");
@@ -39198,9 +39670,9 @@ var init_link_in_text_block = __esm({
       static get meta() {
         return {
           id: "link-in-text-block",
-          title: str_50(UIStrings69.title),
-          failureTitle: str_50(UIStrings69.failureTitle),
-          description: str_50(UIStrings69.description),
+          title: str_51(UIStrings71.title),
+          failureTitle: str_51(UIStrings71.failureTitle),
+          description: str_51(UIStrings71.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39212,10 +39684,10 @@ var init_link_in_text_block = __esm({
 // core/audits/accessibility/link-name.js
 var link_name_exports = {};
 __export(link_name_exports, {
-  UIStrings: () => UIStrings70,
+  UIStrings: () => UIStrings72,
   default: () => link_name_default
 });
-var UIStrings70, str_51, LinkName, link_name_default;
+var UIStrings72, str_52, LinkName, link_name_default;
 var init_link_name = __esm({
   "core/audits/accessibility/link-name.js"() {
     "use strict";
@@ -39227,7 +39699,7 @@ var init_link_name = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings70 = {
+    UIStrings72 = {
       /** Title of an accessibility audit that evaluates if all link elements have a non-generic name to screen readers. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Links have a discernible name",
       /** Title of an accessibility audit that evaluates if all link elements have a non-generic name to screen readers. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39235,7 +39707,7 @@ var init_link_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Link text (and alternate text for images, when used as links) that is discernible, unique, and focusable improves the navigation experience for screen reader users. [Learn how to make links accessible](https://dequeuniversity.com/rules/axe/4.11/link-name)."
     };
-    str_51 = createIcuMessageFn({ url: "core/audits/accessibility/link-name.js" }.url, UIStrings70);
+    str_52 = createIcuMessageFn({ url: "core/audits/accessibility/link-name.js" }.url, UIStrings72);
     LinkName = class extends axe_audit_default {
       static {
         __name(this, "LinkName");
@@ -39246,9 +39718,9 @@ var init_link_name = __esm({
       static get meta() {
         return {
           id: "link-name",
-          title: str_51(UIStrings70.title),
-          failureTitle: str_51(UIStrings70.failureTitle),
-          description: str_51(UIStrings70.description),
+          title: str_52(UIStrings72.title),
+          failureTitle: str_52(UIStrings72.failureTitle),
+          description: str_52(UIStrings72.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39260,10 +39732,10 @@ var init_link_name = __esm({
 // core/audits/accessibility/list.js
 var list_exports = {};
 __export(list_exports, {
-  UIStrings: () => UIStrings71,
+  UIStrings: () => UIStrings73,
   default: () => list_default
 });
-var UIStrings71, str_52, List, list_default;
+var UIStrings73, str_53, List, list_default;
 var init_list = __esm({
   "core/audits/accessibility/list.js"() {
     "use strict";
@@ -39275,7 +39747,7 @@ var init_list = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings71 = {
+    UIStrings73 = {
       /** Title of an accessibility audit that evaluates if all list elements have a valid structure containing only list items. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Lists contain only `<li>` elements and script supporting elements (`<script>` and `<template>`).",
       /** Title of an accessibility audit that evaluates if all list elements have a valid structure containing only list items. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39283,7 +39755,7 @@ var init_list = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Screen readers have a specific way of announcing lists. Ensuring proper list structure aids screen reader output. [Learn more about proper list structure](https://dequeuniversity.com/rules/axe/4.11/list)."
     };
-    str_52 = createIcuMessageFn({ url: "core/audits/accessibility/list.js" }.url, UIStrings71);
+    str_53 = createIcuMessageFn({ url: "core/audits/accessibility/list.js" }.url, UIStrings73);
     List = class extends axe_audit_default {
       static {
         __name(this, "List");
@@ -39294,9 +39766,9 @@ var init_list = __esm({
       static get meta() {
         return {
           id: "list",
-          title: str_52(UIStrings71.title),
-          failureTitle: str_52(UIStrings71.failureTitle),
-          description: str_52(UIStrings71.description),
+          title: str_53(UIStrings73.title),
+          failureTitle: str_53(UIStrings73.failureTitle),
+          description: str_53(UIStrings73.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39308,10 +39780,10 @@ var init_list = __esm({
 // core/audits/accessibility/listitem.js
 var listitem_exports = {};
 __export(listitem_exports, {
-  UIStrings: () => UIStrings72,
+  UIStrings: () => UIStrings74,
   default: () => listitem_default
 });
-var UIStrings72, str_53, ListItem, listitem_default;
+var UIStrings74, str_54, ListItem, listitem_default;
 var init_listitem = __esm({
   "core/audits/accessibility/listitem.js"() {
     "use strict";
@@ -39323,7 +39795,7 @@ var init_listitem = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings72 = {
+    UIStrings74 = {
       /** Title of an accessibility audit that evaluates if any list item elements do not have list parent elements. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "List items (`<li>`) are contained within `<ul>`, `<ol>` or `<menu>` parent elements",
       /** Title of an accessibility audit that evaluates if any list item elements do not have list parent elements. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39331,7 +39803,7 @@ var init_listitem = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Screen readers require list items (`<li>`) to be contained within a parent `<ul>`, `<ol>` or `<menu>` to be announced properly. [Learn more about proper list structure](https://dequeuniversity.com/rules/axe/4.11/listitem)."
     };
-    str_53 = createIcuMessageFn({ url: "core/audits/accessibility/listitem.js" }.url, UIStrings72);
+    str_54 = createIcuMessageFn({ url: "core/audits/accessibility/listitem.js" }.url, UIStrings74);
     ListItem = class extends axe_audit_default {
       static {
         __name(this, "ListItem");
@@ -39342,9 +39814,9 @@ var init_listitem = __esm({
       static get meta() {
         return {
           id: "listitem",
-          title: str_53(UIStrings72.title),
-          failureTitle: str_53(UIStrings72.failureTitle),
-          description: str_53(UIStrings72.description),
+          title: str_54(UIStrings74.title),
+          failureTitle: str_54(UIStrings74.failureTitle),
+          description: str_54(UIStrings74.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39745,10 +40217,10 @@ var init_visual_order_follows_dom = __esm({
 // core/audits/accessibility/meta-refresh.js
 var meta_refresh_exports = {};
 __export(meta_refresh_exports, {
-  UIStrings: () => UIStrings73,
+  UIStrings: () => UIStrings75,
   default: () => meta_refresh_default
 });
-var UIStrings73, str_54, MetaRefresh, meta_refresh_default;
+var UIStrings75, str_55, MetaRefresh, meta_refresh_default;
 var init_meta_refresh = __esm({
   "core/audits/accessibility/meta-refresh.js"() {
     "use strict";
@@ -39760,7 +40232,7 @@ var init_meta_refresh = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings73 = {
+    UIStrings75 = {
       /** Title of an accessibility audit that evaluates if the page uses a meta tag that refreshes the page automatically. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: 'The document does not use `<meta http-equiv="refresh">`',
       /** Title of an accessibility audit that evaluates if the page uses a meta tag that refreshes the page automatically. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39768,7 +40240,7 @@ var init_meta_refresh = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Users do not expect a page to refresh automatically, and doing so will move focus back to the top of the page. This may create a frustrating or confusing experience. [Learn more about the refresh meta tag](https://dequeuniversity.com/rules/axe/4.11/meta-refresh)."
     };
-    str_54 = createIcuMessageFn({ url: "core/audits/accessibility/meta-refresh.js" }.url, UIStrings73);
+    str_55 = createIcuMessageFn({ url: "core/audits/accessibility/meta-refresh.js" }.url, UIStrings75);
     MetaRefresh = class extends axe_audit_default {
       static {
         __name(this, "MetaRefresh");
@@ -39779,9 +40251,9 @@ var init_meta_refresh = __esm({
       static get meta() {
         return {
           id: "meta-refresh",
-          title: str_54(UIStrings73.title),
-          failureTitle: str_54(UIStrings73.failureTitle),
-          description: str_54(UIStrings73.description),
+          title: str_55(UIStrings75.title),
+          failureTitle: str_55(UIStrings75.failureTitle),
+          description: str_55(UIStrings75.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39793,10 +40265,10 @@ var init_meta_refresh = __esm({
 // core/audits/accessibility/meta-viewport.js
 var meta_viewport_exports = {};
 __export(meta_viewport_exports, {
-  UIStrings: () => UIStrings74,
+  UIStrings: () => UIStrings76,
   default: () => meta_viewport_default
 });
-var UIStrings74, str_55, MetaViewport, meta_viewport_default;
+var UIStrings76, str_56, MetaViewport, meta_viewport_default;
 var init_meta_viewport = __esm({
   "core/audits/accessibility/meta-viewport.js"() {
     "use strict";
@@ -39808,7 +40280,7 @@ var init_meta_viewport = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings74 = {
+    UIStrings76 = {
       /** Title of an accessibility audit that evaluates if the page has limited the scaling properties of the page in a way that harms users with low vision. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: '`[user-scalable="no"]` is not used in the `<meta name="viewport">` element and the `[maximum-scale]` attribute is not less than 5.',
       /** Title of an accessibility audit that evaluates if the page has limited the scaling properties of the page in a way that harms users with low vision. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39816,7 +40288,7 @@ var init_meta_viewport = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Disabling zooming is problematic for users with low vision who rely on screen magnification to properly see the contents of a web page. [Learn more about the viewport meta tag](https://dequeuniversity.com/rules/axe/4.11/meta-viewport)."
     };
-    str_55 = createIcuMessageFn({ url: "core/audits/accessibility/meta-viewport.js" }.url, UIStrings74);
+    str_56 = createIcuMessageFn({ url: "core/audits/accessibility/meta-viewport.js" }.url, UIStrings76);
     MetaViewport = class extends axe_audit_default {
       static {
         __name(this, "MetaViewport");
@@ -39827,9 +40299,9 @@ var init_meta_viewport = __esm({
       static get meta() {
         return {
           id: "meta-viewport",
-          title: str_55(UIStrings74.title),
-          failureTitle: str_55(UIStrings74.failureTitle),
-          description: str_55(UIStrings74.description),
+          title: str_56(UIStrings76.title),
+          failureTitle: str_56(UIStrings76.failureTitle),
+          description: str_56(UIStrings76.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39841,10 +40313,10 @@ var init_meta_viewport = __esm({
 // core/audits/accessibility/object-alt.js
 var object_alt_exports = {};
 __export(object_alt_exports, {
-  UIStrings: () => UIStrings75,
+  UIStrings: () => UIStrings77,
   default: () => object_alt_default
 });
-var UIStrings75, str_56, ObjectAlt, object_alt_default;
+var UIStrings77, str_57, ObjectAlt, object_alt_default;
 var init_object_alt = __esm({
   "core/audits/accessibility/object-alt.js"() {
     "use strict";
@@ -39856,7 +40328,7 @@ var init_object_alt = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings75 = {
+    UIStrings77 = {
       /** Title of an accessibility audit that evaluates if all object elements have an alt HTML attribute that describes their contents. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`<object>` elements have alternate text",
       /** Title of an accessibility audit that evaluates if all object elements have an alt HTML attribute that describes their contents. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39864,7 +40336,7 @@ var init_object_alt = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Screen readers cannot translate non-text content. Adding alternate text to `<object>` elements helps screen readers convey meaning to users. [Learn more about alt text for `object` elements](https://dequeuniversity.com/rules/axe/4.11/object-alt)."
     };
-    str_56 = createIcuMessageFn({ url: "core/audits/accessibility/object-alt.js" }.url, UIStrings75);
+    str_57 = createIcuMessageFn({ url: "core/audits/accessibility/object-alt.js" }.url, UIStrings77);
     ObjectAlt = class extends axe_audit_default {
       static {
         __name(this, "ObjectAlt");
@@ -39875,9 +40347,9 @@ var init_object_alt = __esm({
       static get meta() {
         return {
           id: "object-alt",
-          title: str_56(UIStrings75.title),
-          failureTitle: str_56(UIStrings75.failureTitle),
-          description: str_56(UIStrings75.description),
+          title: str_57(UIStrings77.title),
+          failureTitle: str_57(UIStrings77.failureTitle),
+          description: str_57(UIStrings77.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39886,13 +40358,61 @@ var init_object_alt = __esm({
   }
 });
 
+// core/audits/accessibility/presentation-role-conflict.js
+var presentation_role_conflict_exports = {};
+__export(presentation_role_conflict_exports, {
+  UIStrings: () => UIStrings78,
+  default: () => presentation_role_conflict_default
+});
+var UIStrings78, str_58, PresentationRoleConflict, presentation_role_conflict_default;
+var init_presentation_role_conflict = __esm({
+  "core/audits/accessibility/presentation-role-conflict.js"() {
+    "use strict";
+    init_process_global();
+    init_axe_audit();
+    init_i18n();
+    /**
+     * @license
+     * Copyright 2026 Google LLC
+     * SPDX-License-Identifier: Apache-2.0
+     */
+    UIStrings78 = {
+      /** Title of an accessibility audit that evaluates if elements with presentation role have conflicts. This title is descriptive of the successful state and is shown to users when no user action is required. */
+      title: 'Elements with `role="none"` or `role="presentation"` do not have conflicts',
+      /** Title of an accessibility audit that evaluates if elements with presentation role have conflicts. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
+      failureTitle: 'Elements with `role="none"` or `role="presentation"` have conflicts',
+      /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with \'Learn\' becomes link text to additional documentation. */
+      description: 'There are certain cases where the semantic role of an element with `role="none"` or `role="presentation"` does not resolve to none or presentation. To ensure the element remains removed from the accessibility tree, you should not add any global ARIA attributes to the element or make it focusable. [Learn more about presentation role conflict](https://dequeuniversity.com/rules/axe/4.11/presentation-role-conflict).'
+    };
+    str_58 = createIcuMessageFn({ url: "core/audits/accessibility/presentation-role-conflict.js" }.url, UIStrings78);
+    PresentationRoleConflict = class extends axe_audit_default {
+      static {
+        __name(this, "PresentationRoleConflict");
+      }
+      /**
+       * @return {LH.Audit.Meta}
+       */
+      static get meta() {
+        return {
+          id: "presentation-role-conflict",
+          title: str_58(UIStrings78.title),
+          failureTitle: str_58(UIStrings78.failureTitle),
+          description: str_58(UIStrings78.description),
+          requiredArtifacts: ["Accessibility"]
+        };
+      }
+    };
+    presentation_role_conflict_default = PresentationRoleConflict;
+  }
+});
+
 // core/audits/accessibility/select-name.js
 var select_name_exports = {};
 __export(select_name_exports, {
-  UIStrings: () => UIStrings76,
+  UIStrings: () => UIStrings79,
   default: () => select_name_default
 });
-var UIStrings76, str_57, SelectName, select_name_default;
+var UIStrings79, str_59, SelectName, select_name_default;
 var init_select_name = __esm({
   "core/audits/accessibility/select-name.js"() {
     "use strict";
@@ -39904,7 +40424,7 @@ var init_select_name = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings76 = {
+    UIStrings79 = {
       /** Title of an accessibility audit that evaluates if all select elements have programmatically associated label elements. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Select elements have associated label elements.",
       /** Title of an accessibility audit that evaluates if all select elements have programmatically associated label elements. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39912,7 +40432,7 @@ var init_select_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Form elements without effective labels can create frustrating experiences for screen reader users. [Learn more about the `select` element](https://dequeuniversity.com/rules/axe/4.11/select-name)."
     };
-    str_57 = createIcuMessageFn({ url: "core/audits/accessibility/select-name.js" }.url, UIStrings76);
+    str_59 = createIcuMessageFn({ url: "core/audits/accessibility/select-name.js" }.url, UIStrings79);
     SelectName = class extends axe_audit_default {
       static {
         __name(this, "SelectName");
@@ -39923,9 +40443,9 @@ var init_select_name = __esm({
       static get meta() {
         return {
           id: "select-name",
-          title: str_57(UIStrings76.title),
-          failureTitle: str_57(UIStrings76.failureTitle),
-          description: str_57(UIStrings76.description),
+          title: str_59(UIStrings79.title),
+          failureTitle: str_59(UIStrings79.failureTitle),
+          description: str_59(UIStrings79.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39937,10 +40457,10 @@ var init_select_name = __esm({
 // core/audits/accessibility/skip-link.js
 var skip_link_exports = {};
 __export(skip_link_exports, {
-  UIStrings: () => UIStrings77,
+  UIStrings: () => UIStrings80,
   default: () => skip_link_default
 });
-var UIStrings77, str_58, SkipLink, skip_link_default;
+var UIStrings80, str_60, SkipLink, skip_link_default;
 var init_skip_link = __esm({
   "core/audits/accessibility/skip-link.js"() {
     "use strict";
@@ -39952,7 +40472,7 @@ var init_skip_link = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings77 = {
+    UIStrings80 = {
       /** Title of an accessibility audit that evaluates if the skip link is focusable. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Skip links are focusable.",
       /** Title of an accessibility audit that evaluates if the skip link is focusable. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -39960,7 +40480,7 @@ var init_skip_link = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Including a skip link can help users skip to the main content to save time. [Learn more about skip links](https://dequeuniversity.com/rules/axe/4.11/skip-link)."
     };
-    str_58 = createIcuMessageFn({ url: "core/audits/accessibility/skip-link.js" }.url, UIStrings77);
+    str_60 = createIcuMessageFn({ url: "core/audits/accessibility/skip-link.js" }.url, UIStrings80);
     SkipLink = class extends axe_audit_default {
       static {
         __name(this, "SkipLink");
@@ -39971,9 +40491,9 @@ var init_skip_link = __esm({
       static get meta() {
         return {
           id: "skip-link",
-          title: str_58(UIStrings77.title),
-          failureTitle: str_58(UIStrings77.failureTitle),
-          description: str_58(UIStrings77.description),
+          title: str_60(UIStrings80.title),
+          failureTitle: str_60(UIStrings80.failureTitle),
+          description: str_60(UIStrings80.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -39982,13 +40502,61 @@ var init_skip_link = __esm({
   }
 });
 
+// core/audits/accessibility/svg-img-alt.js
+var svg_img_alt_exports = {};
+__export(svg_img_alt_exports, {
+  UIStrings: () => UIStrings81,
+  default: () => svg_img_alt_default
+});
+var UIStrings81, str_61, SvgImgAlt, svg_img_alt_default;
+var init_svg_img_alt = __esm({
+  "core/audits/accessibility/svg-img-alt.js"() {
+    "use strict";
+    init_process_global();
+    init_axe_audit();
+    init_i18n();
+    /**
+     * @license
+     * Copyright 2026 Google LLC
+     * SPDX-License-Identifier: Apache-2.0
+     */
+    UIStrings81 = {
+      /** Title of an accessibility audit that evaluates if SVG elements with an img role have an accessible text alternative. This title is descriptive of the successful state and is shown to users when no user action is required. */
+      title: "SVG elements with an `img` role have an accessible text alternative",
+      /** Title of an accessibility audit that evaluates if SVG elements with an img role have an accessible text alternative. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
+      failureTitle: "SVG elements with an `img` role do not have an accessible text alternative",
+      /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with \'Learn\' becomes link text to additional documentation. */
+      description: "Ensures SVG elements with an `img`, `graphics-document` or `graphics-symbol` role have an accessible text alternative. [Learn more about SVG alt text](https://dequeuniversity.com/rules/axe/4.11/svg-img-alt)."
+    };
+    str_61 = createIcuMessageFn({ url: "core/audits/accessibility/svg-img-alt.js" }.url, UIStrings81);
+    SvgImgAlt = class extends axe_audit_default {
+      static {
+        __name(this, "SvgImgAlt");
+      }
+      /**
+       * @return {LH.Audit.Meta}
+       */
+      static get meta() {
+        return {
+          id: "svg-img-alt",
+          title: str_61(UIStrings81.title),
+          failureTitle: str_61(UIStrings81.failureTitle),
+          description: str_61(UIStrings81.description),
+          requiredArtifacts: ["Accessibility"]
+        };
+      }
+    };
+    svg_img_alt_default = SvgImgAlt;
+  }
+});
+
 // core/audits/accessibility/tabindex.js
 var tabindex_exports = {};
 __export(tabindex_exports, {
-  UIStrings: () => UIStrings78,
+  UIStrings: () => UIStrings82,
   default: () => tabindex_default
 });
-var UIStrings78, str_59, TabIndex, tabindex_default;
+var UIStrings82, str_62, TabIndex, tabindex_default;
 var init_tabindex = __esm({
   "core/audits/accessibility/tabindex.js"() {
     "use strict";
@@ -40000,7 +40568,7 @@ var init_tabindex = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings78 = {
+    UIStrings82 = {
       /** Title of an accessibility audit that evaluates if any elements have custom tabindex HTML attributes that might frustrate users of assitive technology. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "No element has a `[tabindex]` value greater than 0",
       /** Title of an accessibility audit that evaluates if any elements have custom tabindex HTML attributes that might frustrate users of assitive technology. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -40008,7 +40576,7 @@ var init_tabindex = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "A value greater than 0 implies an explicit navigation ordering. Although technically valid, this often creates frustrating experiences for users who rely on assistive technologies. [Learn more about the `tabindex` attribute](https://dequeuniversity.com/rules/axe/4.11/tabindex)."
     };
-    str_59 = createIcuMessageFn({ url: "core/audits/accessibility/tabindex.js" }.url, UIStrings78);
+    str_62 = createIcuMessageFn({ url: "core/audits/accessibility/tabindex.js" }.url, UIStrings82);
     TabIndex = class extends axe_audit_default {
       static {
         __name(this, "TabIndex");
@@ -40019,9 +40587,9 @@ var init_tabindex = __esm({
       static get meta() {
         return {
           id: "tabindex",
-          title: str_59(UIStrings78.title),
-          failureTitle: str_59(UIStrings78.failureTitle),
-          description: str_59(UIStrings78.description),
+          title: str_62(UIStrings82.title),
+          failureTitle: str_62(UIStrings82.failureTitle),
+          description: str_62(UIStrings82.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -40033,10 +40601,10 @@ var init_tabindex = __esm({
 // core/audits/accessibility/table-duplicate-name.js
 var table_duplicate_name_exports = {};
 __export(table_duplicate_name_exports, {
-  UIStrings: () => UIStrings79,
+  UIStrings: () => UIStrings83,
   default: () => table_duplicate_name_default
 });
-var UIStrings79, str_60, TableDuplicateName, table_duplicate_name_default;
+var UIStrings83, str_63, TableDuplicateName, table_duplicate_name_default;
 var init_table_duplicate_name = __esm({
   "core/audits/accessibility/table-duplicate-name.js"() {
     "use strict";
@@ -40048,7 +40616,7 @@ var init_table_duplicate_name = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings79 = {
+    UIStrings83 = {
       /** Title of an accessibility audit that evaluates if tables have different content in the summary attribute and caption element. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Tables have different content in the summary attribute and `<caption>`.",
       /** Title of an accessibility audit that evaluates if tables have different content in the summary attribute and caption element. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -40056,7 +40624,7 @@ var init_table_duplicate_name = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "The summary attribute should describe the table structure, while `<caption>` should have the onscreen title. Accurate table mark-up helps users of screen readers. [Learn more about summary and caption](https://dequeuniversity.com/rules/axe/4.11/table-duplicate-name)."
     };
-    str_60 = createIcuMessageFn({ url: "core/audits/accessibility/table-duplicate-name.js" }.url, UIStrings79);
+    str_63 = createIcuMessageFn({ url: "core/audits/accessibility/table-duplicate-name.js" }.url, UIStrings83);
     TableDuplicateName = class extends axe_audit_default {
       static {
         __name(this, "TableDuplicateName");
@@ -40067,9 +40635,9 @@ var init_table_duplicate_name = __esm({
       static get meta() {
         return {
           id: "table-duplicate-name",
-          title: str_60(UIStrings79.title),
-          failureTitle: str_60(UIStrings79.failureTitle),
-          description: str_60(UIStrings79.description),
+          title: str_63(UIStrings83.title),
+          failureTitle: str_63(UIStrings83.failureTitle),
+          description: str_63(UIStrings83.description),
           scoreDisplayMode: axe_audit_default.SCORING_MODES.INFORMATIVE,
           requiredArtifacts: ["Accessibility"]
         };
@@ -40082,10 +40650,10 @@ var init_table_duplicate_name = __esm({
 // core/audits/accessibility/table-fake-caption.js
 var table_fake_caption_exports = {};
 __export(table_fake_caption_exports, {
-  UIStrings: () => UIStrings80,
+  UIStrings: () => UIStrings84,
   default: () => table_fake_caption_default
 });
-var UIStrings80, str_61, TableFakeCaption, table_fake_caption_default;
+var UIStrings84, str_64, TableFakeCaption, table_fake_caption_default;
 var init_table_fake_caption = __esm({
   "core/audits/accessibility/table-fake-caption.js"() {
     "use strict";
@@ -40097,7 +40665,7 @@ var init_table_fake_caption = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings80 = {
+    UIStrings84 = {
       /** Title of an accessibility audit that evaluates if all tables use caption instead of colspan to indicate a caption. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Tables use `<caption>` instead of cells with the `[colspan]` attribute to indicate a caption.",
       /** Title of an accessibility audit that evaluates if all tables use caption instead of colspan to indicate a caption. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -40105,7 +40673,7 @@ var init_table_fake_caption = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Screen readers have features to make navigating tables easier. Ensuring that tables use the actual caption element instead of cells with the `[colspan]` attribute may improve the experience for screen reader users. [Learn more about captions](https://dequeuniversity.com/rules/axe/4.11/table-fake-caption)."
     };
-    str_61 = createIcuMessageFn({ url: "core/audits/accessibility/table-fake-caption.js" }.url, UIStrings80);
+    str_64 = createIcuMessageFn({ url: "core/audits/accessibility/table-fake-caption.js" }.url, UIStrings84);
     TableFakeCaption = class extends axe_audit_default {
       static {
         __name(this, "TableFakeCaption");
@@ -40116,9 +40684,9 @@ var init_table_fake_caption = __esm({
       static get meta() {
         return {
           id: "table-fake-caption",
-          title: str_61(UIStrings80.title),
-          failureTitle: str_61(UIStrings80.failureTitle),
-          description: str_61(UIStrings80.description),
+          title: str_64(UIStrings84.title),
+          failureTitle: str_64(UIStrings84.failureTitle),
+          description: str_64(UIStrings84.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -40130,10 +40698,10 @@ var init_table_fake_caption = __esm({
 // core/audits/accessibility/target-size.js
 var target_size_exports = {};
 __export(target_size_exports, {
-  UIStrings: () => UIStrings81,
+  UIStrings: () => UIStrings85,
   default: () => target_size_default
 });
-var UIStrings81, str_62, TargetSize, target_size_default;
+var UIStrings85, str_65, TargetSize, target_size_default;
 var init_target_size = __esm({
   "core/audits/accessibility/target-size.js"() {
     "use strict";
@@ -40145,7 +40713,7 @@ var init_target_size = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings81 = {
+    UIStrings85 = {
       /** Title of an accessibility audit that checks if all touch targets have sufficient size and spacing. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Touch targets have sufficient size and spacing.",
       /** Title of an accessibility audit that checks if all touch targets have sufficient size and spacing. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -40153,7 +40721,7 @@ var init_target_size = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Touch targets with sufficient size and spacing help users who may have difficulty targeting small controls to activate the targets. [Learn more about touch targets](https://dequeuniversity.com/rules/axe/4.11/target-size)."
     };
-    str_62 = createIcuMessageFn({ url: "core/audits/accessibility/target-size.js" }.url, UIStrings81);
+    str_65 = createIcuMessageFn({ url: "core/audits/accessibility/target-size.js" }.url, UIStrings85);
     TargetSize = class extends axe_audit_default {
       static {
         __name(this, "TargetSize");
@@ -40164,9 +40732,9 @@ var init_target_size = __esm({
       static get meta() {
         return {
           id: "target-size",
-          title: str_62(UIStrings81.title),
-          failureTitle: str_62(UIStrings81.failureTitle),
-          description: str_62(UIStrings81.description),
+          title: str_65(UIStrings85.title),
+          failureTitle: str_65(UIStrings85.failureTitle),
+          description: str_65(UIStrings85.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -40178,10 +40746,10 @@ var init_target_size = __esm({
 // core/audits/accessibility/td-has-header.js
 var td_has_header_exports = {};
 __export(td_has_header_exports, {
-  UIStrings: () => UIStrings82,
+  UIStrings: () => UIStrings86,
   default: () => td_has_header_default
 });
-var UIStrings82, str_63, TDHasHeader, td_has_header_default;
+var UIStrings86, str_66, TDHasHeader, td_has_header_default;
 var init_td_has_header = __esm({
   "core/audits/accessibility/td-has-header.js"() {
     "use strict";
@@ -40193,7 +40761,7 @@ var init_td_has_header = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings82 = {
+    UIStrings86 = {
       /** Title of an accessibility audit that evaluates if all large table elements use the headers HTML attribute. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`<td>` elements in a large `<table>` have one or more table headers.",
       /** Title of an accessibility audit that evaluates if all large table elements use the headers HTML attribute. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -40201,7 +40769,7 @@ var init_td_has_header = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Screen readers have features to make navigating tables easier. Ensuring that `<td>` elements in a large table (3 or more cells in width and height) have an associated table header may improve the experience for screen reader users. [Learn more about table headers](https://dequeuniversity.com/rules/axe/4.11/td-has-header)."
     };
-    str_63 = createIcuMessageFn({ url: "core/audits/accessibility/td-has-header.js" }.url, UIStrings82);
+    str_66 = createIcuMessageFn({ url: "core/audits/accessibility/td-has-header.js" }.url, UIStrings86);
     TDHasHeader = class extends axe_audit_default {
       static {
         __name(this, "TDHasHeader");
@@ -40212,9 +40780,9 @@ var init_td_has_header = __esm({
       static get meta() {
         return {
           id: "td-has-header",
-          title: str_63(UIStrings82.title),
-          failureTitle: str_63(UIStrings82.failureTitle),
-          description: str_63(UIStrings82.description),
+          title: str_66(UIStrings86.title),
+          failureTitle: str_66(UIStrings86.failureTitle),
+          description: str_66(UIStrings86.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -40226,10 +40794,10 @@ var init_td_has_header = __esm({
 // core/audits/accessibility/td-headers-attr.js
 var td_headers_attr_exports = {};
 __export(td_headers_attr_exports, {
-  UIStrings: () => UIStrings83,
+  UIStrings: () => UIStrings87,
   default: () => td_headers_attr_default
 });
-var UIStrings83, str_64, TDHeadersAttr, td_headers_attr_default;
+var UIStrings87, str_67, TDHeadersAttr, td_headers_attr_default;
 var init_td_headers_attr = __esm({
   "core/audits/accessibility/td-headers-attr.js"() {
     "use strict";
@@ -40241,7 +40809,7 @@ var init_td_headers_attr = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings83 = {
+    UIStrings87 = {
       /** Title of an accessibility audit that evaluates if all table cell elements in a table that use the headers HTML attribute use it correctly to refer to header cells within the same table. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "Cells in a `<table>` element that use the `[headers]` attribute refer to table cells within the same table.",
       /** Title of an accessibility audit that evaluates if all table cell elements in a table that use the headers HTML attribute use it correctly to refer to header cells within the same table. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -40249,7 +40817,7 @@ var init_td_headers_attr = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Screen readers have features to make navigating tables easier. Ensuring `<td>` cells using the `[headers]` attribute only refer to other cells in the same table may improve the experience for screen reader users. [Learn more about the `headers` attribute](https://dequeuniversity.com/rules/axe/4.11/td-headers-attr)."
     };
-    str_64 = createIcuMessageFn({ url: "core/audits/accessibility/td-headers-attr.js" }.url, UIStrings83);
+    str_67 = createIcuMessageFn({ url: "core/audits/accessibility/td-headers-attr.js" }.url, UIStrings87);
     TDHeadersAttr = class extends axe_audit_default {
       static {
         __name(this, "TDHeadersAttr");
@@ -40260,9 +40828,9 @@ var init_td_headers_attr = __esm({
       static get meta() {
         return {
           id: "td-headers-attr",
-          title: str_64(UIStrings83.title),
-          failureTitle: str_64(UIStrings83.failureTitle),
-          description: str_64(UIStrings83.description),
+          title: str_67(UIStrings87.title),
+          failureTitle: str_67(UIStrings87.failureTitle),
+          description: str_67(UIStrings87.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -40274,10 +40842,10 @@ var init_td_headers_attr = __esm({
 // core/audits/accessibility/th-has-data-cells.js
 var th_has_data_cells_exports = {};
 __export(th_has_data_cells_exports, {
-  UIStrings: () => UIStrings84,
+  UIStrings: () => UIStrings88,
   default: () => th_has_data_cells_default
 });
-var UIStrings84, str_65, THHasDataCells, th_has_data_cells_default;
+var UIStrings88, str_68, THHasDataCells, th_has_data_cells_default;
 var init_th_has_data_cells = __esm({
   "core/audits/accessibility/th-has-data-cells.js"() {
     "use strict";
@@ -40289,7 +40857,7 @@ var init_th_has_data_cells = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings84 = {
+    UIStrings88 = {
       /** Title of an accessibility audit that evaluates if all table header elements have children. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: '`<th>` elements and elements with `[role="columnheader"/"rowheader"]` have data cells they describe.',
       /** Title of an accessibility audit that evaluates if all table header elements have children. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -40297,7 +40865,7 @@ var init_th_has_data_cells = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Screen readers have features to make navigating tables easier. Ensuring table headers always refer to some set of cells may improve the experience for screen reader users. [Learn more about table headers](https://dequeuniversity.com/rules/axe/4.11/th-has-data-cells)."
     };
-    str_65 = createIcuMessageFn({ url: "core/audits/accessibility/th-has-data-cells.js" }.url, UIStrings84);
+    str_68 = createIcuMessageFn({ url: "core/audits/accessibility/th-has-data-cells.js" }.url, UIStrings88);
     THHasDataCells = class extends axe_audit_default {
       static {
         __name(this, "THHasDataCells");
@@ -40308,9 +40876,9 @@ var init_th_has_data_cells = __esm({
       static get meta() {
         return {
           id: "th-has-data-cells",
-          title: str_65(UIStrings84.title),
-          failureTitle: str_65(UIStrings84.failureTitle),
-          description: str_65(UIStrings84.description),
+          title: str_68(UIStrings88.title),
+          failureTitle: str_68(UIStrings88.failureTitle),
+          description: str_68(UIStrings88.description),
           scoreDisplayMode: axe_audit_default.SCORING_MODES.INFORMATIVE,
           requiredArtifacts: ["Accessibility"]
         };
@@ -40323,10 +40891,10 @@ var init_th_has_data_cells = __esm({
 // core/audits/accessibility/valid-lang.js
 var valid_lang_exports = {};
 __export(valid_lang_exports, {
-  UIStrings: () => UIStrings85,
+  UIStrings: () => UIStrings89,
   default: () => valid_lang_default
 });
-var UIStrings85, str_66, ValidLang, valid_lang_default;
+var UIStrings89, str_69, ValidLang, valid_lang_default;
 var init_valid_lang = __esm({
   "core/audits/accessibility/valid-lang.js"() {
     "use strict";
@@ -40338,7 +40906,7 @@ var init_valid_lang = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings85 = {
+    UIStrings89 = {
       /** Title of an accessibility audit that evaluates if all lang HTML attributes are valid BCP 47 languages. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: "`[lang]` attributes have a valid value",
       /** Title of an accessibility audit that evaluates if all lang HTML attributes are valid BCP 47 languages. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -40346,7 +40914,7 @@ var init_valid_lang = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Specifying a valid [BCP 47 language](https://www.w3.org/International/questions/qa-choosing-language-tags#question) on elements helps ensure that text is pronounced correctly by a screen reader. [Learn how to use the `lang` attribute](https://dequeuniversity.com/rules/axe/4.11/valid-lang)."
     };
-    str_66 = createIcuMessageFn({ url: "core/audits/accessibility/valid-lang.js" }.url, UIStrings85);
+    str_69 = createIcuMessageFn({ url: "core/audits/accessibility/valid-lang.js" }.url, UIStrings89);
     ValidLang = class extends axe_audit_default {
       static {
         __name(this, "ValidLang");
@@ -40357,9 +40925,9 @@ var init_valid_lang = __esm({
       static get meta() {
         return {
           id: "valid-lang",
-          title: str_66(UIStrings85.title),
-          failureTitle: str_66(UIStrings85.failureTitle),
-          description: str_66(UIStrings85.description),
+          title: str_69(UIStrings89.title),
+          failureTitle: str_69(UIStrings89.failureTitle),
+          description: str_69(UIStrings89.description),
           requiredArtifacts: ["Accessibility"]
         };
       }
@@ -40371,10 +40939,10 @@ var init_valid_lang = __esm({
 // core/audits/accessibility/video-caption.js
 var video_caption_exports = {};
 __export(video_caption_exports, {
-  UIStrings: () => UIStrings86,
+  UIStrings: () => UIStrings90,
   default: () => video_caption_default
 });
-var UIStrings86, str_67, VideoCaption, video_caption_default;
+var UIStrings90, str_70, VideoCaption, video_caption_default;
 var init_video_caption = __esm({
   "core/audits/accessibility/video-caption.js"() {
     "use strict";
@@ -40386,7 +40954,7 @@ var init_video_caption = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings86 = {
+    UIStrings90 = {
       /** Title of an accessibility audit that evaluates if all video elements contain a child track element that has captions describing their audio. This title is descriptive of the successful state and is shown to users when no user action is required. */
       title: '`<video>` elements contain a `<track>` element with `[kind="captions"]`',
       /** Title of an accessibility audit that evaluates if all video elements contain a child track element that has captions describing their audio. This title is descriptive of the failing state and is shown to users when there is a failure that needs to be addressed. */
@@ -40394,7 +40962,7 @@ var init_video_caption = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they should try to pass. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "When a video provides a caption it is easier for deaf and hearing impaired users to access its information. [Learn more about video captions](https://dequeuniversity.com/rules/axe/4.11/video-caption)."
     };
-    str_67 = createIcuMessageFn({ url: "core/audits/accessibility/video-caption.js" }.url, UIStrings86);
+    str_70 = createIcuMessageFn({ url: "core/audits/accessibility/video-caption.js" }.url, UIStrings90);
     VideoCaption = class extends axe_audit_default {
       static {
         __name(this, "VideoCaption");
@@ -40405,9 +40973,9 @@ var init_video_caption = __esm({
       static get meta() {
         return {
           id: "video-caption",
-          title: str_67(UIStrings86.title),
-          failureTitle: str_67(UIStrings86.failureTitle),
-          description: str_67(UIStrings86.description),
+          title: str_70(UIStrings90.title),
+          failureTitle: str_70(UIStrings90.failureTitle),
+          description: str_70(UIStrings90.description),
           scoreDisplayMode: axe_audit_default.SCORING_MODES.INFORMATIVE,
           requiredArtifacts: ["Accessibility"]
         };
@@ -44972,10 +45540,10 @@ var init_web_features_metadata = __esm({
 // core/audits/baseline.js
 var baseline_exports = {};
 __export(baseline_exports, {
-  UIStrings: () => UIStrings87,
+  UIStrings: () => UIStrings91,
   default: () => baseline_default
 });
-var UIStrings87, str_68, features, Baseline, baseline_default;
+var UIStrings91, str_71, features, Baseline, baseline_default;
 var init_baseline = __esm({
   "core/audits/baseline.js"() {
     "use strict";
@@ -44989,7 +45557,7 @@ var init_baseline = __esm({
      * Copyright 2026 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings87 = {
+    UIStrings91 = {
       /** Title of the Baseline audit. Shown when the page is compatible with the target baseline. */
       title: "Baseline Features",
       /**
@@ -45002,7 +45570,7 @@ var init_baseline = __esm({
       /** Label for the column displaying the feature\'s baseline status. */
       columnStatus: "Baseline Status"
     };
-    str_68 = createIcuMessageFn({ url: "core/audits/baseline.js" }.url, UIStrings87);
+    str_71 = createIcuMessageFn({ url: "core/audits/baseline.js" }.url, UIStrings91);
     ({ features } = /** @type {any} */
     data_default);
     Baseline = class extends Audit {
@@ -45016,8 +45584,8 @@ var init_baseline = __esm({
         return {
           id: "baseline",
           scoreDisplayMode: Audit.SCORING_MODES.INFORMATIVE,
-          title: str_68(UIStrings87.title),
-          description: str_68(UIStrings87.description, { date: web_features_metadata_default.date }),
+          title: str_71(UIStrings91.title),
+          description: str_71(UIStrings91.description, { date: web_features_metadata_default.date }),
           requiredArtifacts: ["Trace"]
         };
       }
@@ -45089,17 +45657,17 @@ var init_baseline = __esm({
           {
             key: "featureId",
             valueType: "link",
-            label: str_68(UIStrings87.columnFeature)
+            label: str_71(UIStrings91.columnFeature)
           },
           {
             key: "displayStatus",
             valueType: "baseline-status",
-            label: str_68(UIStrings87.columnStatus)
+            label: str_71(UIStrings91.columnStatus)
           },
           {
             key: "source",
             valueType: "source-location",
-            label: str_68(UIStrings.columnSource)
+            label: str_71(UIStrings.columnSource)
           }
         ];
         const getStatusRank = /* @__PURE__ */ __name((status) => {
@@ -45141,10 +45709,10 @@ var init_baseline = __esm({
 // core/audits/clickjacking-mitigation.js
 var clickjacking_mitigation_exports = {};
 __export(clickjacking_mitigation_exports, {
-  UIStrings: () => UIStrings88,
+  UIStrings: () => UIStrings92,
   default: () => clickjacking_mitigation_default
 });
-var UIStrings88, str_69, ClickjackingMitigation, clickjacking_mitigation_default;
+var UIStrings92, str_72, ClickjackingMitigation, clickjacking_mitigation_default;
 var init_clickjacking_mitigation = __esm({
   "core/audits/clickjacking-mitigation.js"() {
     "use strict";
@@ -45157,7 +45725,7 @@ var init_clickjacking_mitigation = __esm({
      * Copyright 2024 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings88 = {
+    UIStrings92 = {
       /** Title of a Lighthouse audit that evaluates whether the set CSP or XFO header is mitigating clickjacking attacks. "XFO" stands for "X-Frame-Options" and should not be translated. "CSP" stands for "Content-Security-Policy" and should not be translated. "clickjacking" should not be translated. */
       title: "Mitigate clickjacking with XFO or CSP",
       /** Description of a Lighthouse audit that evaluates whether the set CSP or XFO header is mitigating clickjacking attacks. This is displayed after a user expands the section to see more. "clickjacking" should not be translated. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. "XFO" stands for "X-Frame-Options" and should not be translated. "CSP" stands for "Content-Security-Policy" and should not be translated. */
@@ -45167,7 +45735,7 @@ var init_clickjacking_mitigation = __esm({
       /** Label for a column in a data table; entries will be the severity of an issue with the page's frame control policy. */
       columnSeverity: "Severity"
     };
-    str_69 = createIcuMessageFn({ url: "core/audits/clickjacking-mitigation.js" }.url, UIStrings88);
+    str_72 = createIcuMessageFn({ url: "core/audits/clickjacking-mitigation.js" }.url, UIStrings92);
     ClickjackingMitigation = class extends Audit {
       static {
         __name(this, "ClickjackingMitigation");
@@ -45179,8 +45747,8 @@ var init_clickjacking_mitigation = __esm({
         return {
           id: "clickjacking-mitigation",
           scoreDisplayMode: Audit.SCORING_MODES.INFORMATIVE,
-          title: str_69(UIStrings88.title),
-          description: str_69(UIStrings88.description),
+          title: str_72(UIStrings92.title),
+          description: str_72(UIStrings92.description),
           requiredArtifacts: ["DevtoolsLog", "URL"],
           supportedModes: ["navigation"]
         };
@@ -45234,8 +45802,8 @@ var init_clickjacking_mitigation = __esm({
         return {
           score: 0,
           results: [{
-            severity: str_69(UIStrings.itemSeverityHigh),
-            description: str_69(UIStrings88.noClickjackingMitigation)
+            severity: str_72(UIStrings.itemSeverityHigh),
+            description: str_72(UIStrings92.noClickjackingMitigation)
           }]
         };
       }
@@ -45249,8 +45817,8 @@ var init_clickjacking_mitigation = __esm({
         const { score, results } = this.constructResults(cspHeaders, xfoHeaders);
         const headings = [
           /* eslint-disable max-len */
-          { key: "description", valueType: "text", subItemsHeading: { key: "description" }, label: str_69(UIStrings.columnDescription) },
-          { key: "severity", valueType: "text", subItemsHeading: { key: "severity" }, label: str_69(UIStrings88.columnSeverity) }
+          { key: "description", valueType: "text", subItemsHeading: { key: "description" }, label: str_72(UIStrings.columnDescription) },
+          { key: "severity", valueType: "text", subItemsHeading: { key: "severity" }, label: str_72(UIStrings92.columnSeverity) }
           /* eslint-enable max-len */
         ];
         const details = Audit.makeTableDetails(headings, results);
@@ -46610,7 +47178,7 @@ function getTranslatedDescription(finding) {
     return finding.description;
   }
   if (isIcuMessage(result)) return result;
-  if (typeof result === "string") return str_70(result, { keyword: finding.value || "" });
+  if (typeof result === "string") return str_73(result, { keyword: finding.value || "" });
   result = result[finding.directive];
   if (!result) {
     lighthouse_logger_default.warn("CSP Evaluator", `No translation found for description: ${finding.description}`);
@@ -46628,7 +47196,7 @@ function evaluateRawCspsForXss(rawCsps) {
   const syntax = (0, import_lighthouse_checks.evaluateForSyntaxErrors)(parsedCsps);
   return { bypasses, warnings, syntax };
 }
-var import_lighthouse_checks, import_finding, import_parser, import_csp, UIStrings89, str_70, FINDING_TO_UI_STRING;
+var import_lighthouse_checks, import_finding, import_parser, import_csp, UIStrings93, str_73, FINDING_TO_UI_STRING;
 var init_csp_evaluator = __esm({
   "core/lib/csp-evaluator.js"() {
     "use strict";
@@ -46645,7 +47213,7 @@ var init_csp_evaluator = __esm({
      * Copyright 2021 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings89 = {
+    UIStrings93 = {
       /** Message shown when a CSP does not have a base-uri directive. Shown in a table with a list of other CSP vulnerabilities and suggestions. "CSP" stands for "Content Security Policy". "base-uri", "'none'", and "'self'" do not need to be translated. */
       missingBaseUri: "Missing `base-uri` allows injected `<base>` tags to set the base URL for all relative URLs (e.g. scripts) to an attacker controlled domain. Consider setting `base-uri` to `'none'` or `'self'`.",
       /** Message shown when a CSP does not have a script-src directive. Shown in a table with a list of other CSP vulnerabilities and suggestions. "CSP" stands for "Content Security Policy". "script-src" does not need to be translated. */
@@ -46697,31 +47265,31 @@ var init_csp_evaluator = __esm({
        */
       plainUrlScheme: "Avoid using plain URL schemes ({keyword}) in this directive. Plain URL schemes allow scripts to be sourced from an unsafe domain."
     };
-    str_70 = createIcuMessageFn({ url: "core/lib/csp-evaluator.js" }.url, UIStrings89);
+    str_73 = createIcuMessageFn({ url: "core/lib/csp-evaluator.js" }.url, UIStrings93);
     FINDING_TO_UI_STRING = {
-      [import_finding.Type.MISSING_SEMICOLON]: UIStrings89.missingSemicolon,
-      [import_finding.Type.UNKNOWN_DIRECTIVE]: str_70(UIStrings89.unknownDirective),
-      [import_finding.Type.INVALID_KEYWORD]: UIStrings89.unknownKeyword,
+      [import_finding.Type.MISSING_SEMICOLON]: UIStrings93.missingSemicolon,
+      [import_finding.Type.UNKNOWN_DIRECTIVE]: str_73(UIStrings93.unknownDirective),
+      [import_finding.Type.INVALID_KEYWORD]: UIStrings93.unknownKeyword,
       [import_finding.Type.MISSING_DIRECTIVES]: {
-        [import_csp.Directive.BASE_URI]: str_70(UIStrings89.missingBaseUri),
-        [import_csp.Directive.SCRIPT_SRC]: str_70(UIStrings89.missingScriptSrc),
-        [import_csp.Directive.OBJECT_SRC]: str_70(UIStrings89.missingObjectSrc)
+        [import_csp.Directive.BASE_URI]: str_73(UIStrings93.missingBaseUri),
+        [import_csp.Directive.SCRIPT_SRC]: str_73(UIStrings93.missingScriptSrc),
+        [import_csp.Directive.OBJECT_SRC]: str_73(UIStrings93.missingObjectSrc)
       },
-      [import_finding.Type.SCRIPT_UNSAFE_INLINE]: str_70(UIStrings89.unsafeInline),
-      [import_finding.Type.PLAIN_WILDCARD]: UIStrings89.plainWildcards,
-      [import_finding.Type.PLAIN_URL_SCHEMES]: UIStrings89.plainUrlScheme,
-      [import_finding.Type.NONCE_LENGTH]: str_70(UIStrings89.nonceLength),
-      [import_finding.Type.NONCE_CHARSET]: str_70(UIStrings89.nonceCharset),
+      [import_finding.Type.SCRIPT_UNSAFE_INLINE]: str_73(UIStrings93.unsafeInline),
+      [import_finding.Type.PLAIN_WILDCARD]: UIStrings93.plainWildcards,
+      [import_finding.Type.PLAIN_URL_SCHEMES]: UIStrings93.plainUrlScheme,
+      [import_finding.Type.NONCE_LENGTH]: str_73(UIStrings93.nonceLength),
+      [import_finding.Type.NONCE_CHARSET]: str_73(UIStrings93.nonceCharset),
       [import_finding.Type.DEPRECATED_DIRECTIVE]: {
-        [import_csp.Directive.REFLECTED_XSS]: str_70(UIStrings89.deprecatedReflectedXSS),
-        [import_csp.Directive.REFERRER]: str_70(UIStrings89.deprecatedReferrer),
-        [import_csp.Directive.DISOWN_OPENER]: str_70(UIStrings89.deprecatedDisownOpener)
+        [import_csp.Directive.REFLECTED_XSS]: str_73(UIStrings93.deprecatedReflectedXSS),
+        [import_csp.Directive.REFERRER]: str_73(UIStrings93.deprecatedReferrer),
+        [import_csp.Directive.DISOWN_OPENER]: str_73(UIStrings93.deprecatedDisownOpener)
       },
-      [import_finding.Type.STRICT_DYNAMIC]: str_70(UIStrings89.strictDynamic),
-      [import_finding.Type.UNSAFE_INLINE_FALLBACK]: str_70(UIStrings89.unsafeInlineFallback),
-      [import_finding.Type.ALLOWLIST_FALLBACK]: str_70(UIStrings89.allowlistFallback),
-      [import_finding.Type.REPORTING_DESTINATION_MISSING]: str_70(UIStrings89.reportingDestinationMissing),
-      [import_finding.Type.REPORT_TO_ONLY]: str_70(UIStrings89.reportToOnly)
+      [import_finding.Type.STRICT_DYNAMIC]: str_73(UIStrings93.strictDynamic),
+      [import_finding.Type.UNSAFE_INLINE_FALLBACK]: str_73(UIStrings93.unsafeInlineFallback),
+      [import_finding.Type.ALLOWLIST_FALLBACK]: str_73(UIStrings93.allowlistFallback),
+      [import_finding.Type.REPORTING_DESTINATION_MISSING]: str_73(UIStrings93.reportingDestinationMissing),
+      [import_finding.Type.REPORT_TO_ONLY]: str_73(UIStrings93.reportToOnly)
     };
     __name(getTranslatedDescription, "getTranslatedDescription");
     __name(parseCsp, "parseCsp");
@@ -46732,10 +47300,10 @@ var init_csp_evaluator = __esm({
 // core/audits/csp-xss.js
 var csp_xss_exports = {};
 __export(csp_xss_exports, {
-  UIStrings: () => UIStrings90,
+  UIStrings: () => UIStrings94,
   default: () => csp_xss_default
 });
-var UIStrings90, str_71, CspXss, csp_xss_default;
+var UIStrings94, str_74, CspXss, csp_xss_default;
 var init_csp_xss = __esm({
   "core/audits/csp-xss.js"() {
     "use strict";
@@ -46749,7 +47317,7 @@ var init_csp_xss = __esm({
      * Copyright 2021 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings90 = {
+    UIStrings94 = {
       /** Title of a Lighthouse audit that evaluates the security of a page's CSP. "CSP" stands for "Content Security Policy". "XSS" stands for "Cross Site Scripting". "CSP" and "XSS" do not need to be translated. */
       title: "Ensure CSP is effective against XSS attacks",
       /** Description of a Lighthouse audit that evaluates the security of a page's CSP. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. "CSP" stands for "Content Security Policy". "XSS" stands for "Cross Site Scripting". "CSP" and "XSS" do not need to be translated. */
@@ -46765,7 +47333,7 @@ var init_csp_xss = __esm({
       /** Table item value calling out the presence of a syntax error. */
       itemSeveritySyntax: "Syntax"
     };
-    str_71 = createIcuMessageFn({ url: "core/audits/csp-xss.js" }.url, UIStrings90);
+    str_74 = createIcuMessageFn({ url: "core/audits/csp-xss.js" }.url, UIStrings94);
     CspXss = class extends Audit {
       static {
         __name(this, "CspXss");
@@ -46777,8 +47345,8 @@ var init_csp_xss = __esm({
         return {
           id: "csp-xss",
           scoreDisplayMode: Audit.SCORING_MODES.INFORMATIVE,
-          title: str_71(UIStrings90.title),
-          description: str_71(UIStrings90.description),
+          title: str_74(UIStrings94.title),
+          description: str_74(UIStrings94.description),
           requiredArtifacts: ["DevtoolsLog", "MetaElements", "URL"]
         };
       }
@@ -46821,7 +47389,7 @@ var init_csp_xss = __esm({
           const items = syntaxFindings[i].map((f) => this.findingToTableItem(f));
           if (!items.length) continue;
           results.push({
-            severity: str_71(UIStrings90.itemSeveritySyntax),
+            severity: str_74(UIStrings94.itemSeveritySyntax),
             description: {
               type: "code",
               value: rawCsps[i]
@@ -46845,8 +47413,8 @@ var init_csp_xss = __esm({
           return {
             score: 0,
             results: [{
-              severity: str_71(UIStrings.itemSeverityHigh),
-              description: str_71(UIStrings90.noCsp),
+              severity: str_74(UIStrings.itemSeverityHigh),
+              description: str_74(UIStrings94.noCsp),
               directive: void 0
             }]
           };
@@ -46854,15 +47422,15 @@ var init_csp_xss = __esm({
         const { bypasses, warnings, syntax } = evaluateRawCspsForXss(rawCsps);
         const results = [
           ...this.constructSyntaxResults(syntax, rawCsps),
-          ...bypasses.map((f) => this.findingToTableItem(f, str_71(UIStrings.itemSeverityHigh))),
-          ...warnings.map((f) => this.findingToTableItem(f, str_71(UIStrings.itemSeverityMedium)))
+          ...bypasses.map((f) => this.findingToTableItem(f, str_74(UIStrings.itemSeverityHigh))),
+          ...warnings.map((f) => this.findingToTableItem(f, str_74(UIStrings.itemSeverityMedium)))
         ];
         const headerOnlyBypasses = evaluateRawCspsForXss(cspHeaders).bypasses;
         const headerOnlyIsInsecure = headerOnlyBypasses.length > 0 || cspHeaders.length === 0;
         if (cspMetaTags.length > 0 && headerOnlyIsInsecure) {
           results.push({
-            severity: str_71(UIStrings.itemSeverityMedium),
-            description: str_71(UIStrings90.metaTagMessage),
+            severity: str_74(UIStrings.itemSeverityMedium),
+            description: str_74(UIStrings94.metaTagMessage),
             directive: void 0
           });
         }
@@ -46878,9 +47446,9 @@ var init_csp_xss = __esm({
         const { score, results } = this.constructResults(cspHeaders, cspMetaTags);
         const headings = [
           /* eslint-disable max-len */
-          { key: "description", valueType: "text", subItemsHeading: { key: "description" }, label: str_71(UIStrings.columnDescription) },
-          { key: "directive", valueType: "code", subItemsHeading: { key: "directive" }, label: str_71(UIStrings90.columnDirective) },
-          { key: "severity", valueType: "text", subItemsHeading: { key: "severity" }, label: str_71(UIStrings90.columnSeverity) }
+          { key: "description", valueType: "text", subItemsHeading: { key: "description" }, label: str_74(UIStrings.columnDescription) },
+          { key: "directive", valueType: "code", subItemsHeading: { key: "directive" }, label: str_74(UIStrings94.columnDirective) },
+          { key: "severity", valueType: "text", subItemsHeading: { key: "severity" }, label: str_74(UIStrings94.columnSeverity) }
           /* eslint-enable max-len */
         ];
         const details = Audit.makeTableDetails(headings, results);
@@ -46989,12 +47557,12 @@ var init_js_bundles = __esm({
 });
 
 // core/lib/deprecations-strings.js
-var UIStrings91, DEPRECATIONS_METADATA;
+var UIStrings95, DEPRECATIONS_METADATA;
 var init_deprecations_strings = __esm({
   "core/lib/deprecations-strings.js"() {
     "use strict";
     init_process_global();
-    UIStrings91 = {
+    UIStrings95 = {
       /**
        * @description This warning occurs when the website uses Attribution Reporting.
        */
@@ -47433,7 +48001,7 @@ function getIssueDetailDescription(issueDetails) {
     /** @type {keyof DEPRECATIONS_METADATA} */
     issueDetails.type
   );
-  const maybeEnglishMessage = UIStrings91[type];
+  const maybeEnglishMessage = UIStrings95[type];
   if (maybeEnglishMessage) {
     message = deprecationsStr_(maybeEnglishMessage);
   }
@@ -47443,26 +48011,26 @@ function getIssueDetailDescription(issueDetails) {
   if (feature !== 0) {
     links.push({
       link: `https://chromestatus.com/feature/${feature}`,
-      linkTitle: str_72(UIStrings92.feature)
+      linkTitle: str_75(UIStrings96.feature)
     });
   }
   const milestone = deprecationMeta?.milestone ?? 0;
   if (milestone !== 0) {
     links.push({
       link: "https://chromiumdash.appspot.com/schedule",
-      linkTitle: str_72(UIStrings92.milestone, { milestone })
+      linkTitle: str_75(UIStrings96.milestone, { milestone })
     });
   }
   return {
     substitutions: /* @__PURE__ */ new Map([
-      ["PLACEHOLDER_title", str_72(UIStrings92.title)],
+      ["PLACEHOLDER_title", str_75(UIStrings96.title)],
       ["PLACEHOLDER_message", message]
     ]),
     links,
     message
   };
 }
-var UIStrings92, str_72, deprecationsStr_;
+var UIStrings96, str_75, deprecationsStr_;
 var init_deprecation_description = __esm({
   "core/lib/deprecation-description.js"() {
     "use strict";
@@ -47474,7 +48042,7 @@ var init_deprecation_description = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings92 = {
+    UIStrings96 = {
       // Store strings used across messages in this block.
       /**
        * @description This links to the chrome feature status page when one exists.
@@ -47490,10 +48058,10 @@ var init_deprecation_description = __esm({
        */
       title: "Deprecated Feature Used"
     };
-    str_72 = createIcuMessageFn({ url: "core/lib/deprecation-description.js" }.url, UIStrings92);
+    str_75 = createIcuMessageFn({ url: "core/lib/deprecation-description.js" }.url, UIStrings96);
     deprecationsStr_ = createIcuMessageFn(
       "node_modules/@paulirish/trace_engine/generated/Deprecation.js",
-      UIStrings91
+      UIStrings95
     );
     __name(getIssueDetailDescription, "getIssueDetailDescription");
   }
@@ -47502,10 +48070,10 @@ var init_deprecation_description = __esm({
 // core/audits/deprecations.js
 var deprecations_exports = {};
 __export(deprecations_exports, {
-  UIStrings: () => UIStrings93,
+  UIStrings: () => UIStrings97,
   default: () => deprecations_default
 });
-var UIStrings93, str_73, Deprecations, deprecations_default;
+var UIStrings97, str_76, Deprecations, deprecations_default;
 var init_deprecations = __esm({
   "core/audits/deprecations.js"() {
     "use strict";
@@ -47519,7 +48087,7 @@ var init_deprecations = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings93 = {
+    UIStrings97 = {
       /** Title of a Lighthouse audit that provides detail on the use of deprecated APIs. This descriptive title is shown to users when the page does not use deprecated APIs. */
       title: "Avoids deprecated APIs",
       /** Title of a Lighthouse audit that provides detail on the use of deprecated APIs. This descriptive title is shown to users when the page uses deprecated APIs. */
@@ -47536,7 +48104,7 @@ var init_deprecations = __esm({
       /** Table column header for line of code (eg. 432) that is using a deprecated API. */
       columnLine: "Line"
     };
-    str_73 = createIcuMessageFn({ url: "core/audits/deprecations.js" }.url, UIStrings93);
+    str_76 = createIcuMessageFn({ url: "core/audits/deprecations.js" }.url, UIStrings97);
     Deprecations = class extends Audit {
       static {
         __name(this, "Deprecations");
@@ -47547,9 +48115,9 @@ var init_deprecations = __esm({
       static get meta() {
         return {
           id: "deprecations",
-          title: str_73(UIStrings93.title),
-          failureTitle: str_73(UIStrings93.failureTitle),
-          description: str_73(UIStrings93.description),
+          title: str_76(UIStrings97.title),
+          failureTitle: str_76(UIStrings97.failureTitle),
+          description: str_76(UIStrings97.description),
           requiredArtifacts: ["InspectorIssues", "SourceMaps", "Scripts"]
         };
       }
@@ -47585,13 +48153,13 @@ var init_deprecations = __esm({
           return item;
         });
         const headings = [
-          { key: "value", valueType: "text", label: str_73(UIStrings93.columnDeprecate) },
-          { key: "source", valueType: "source-location", label: str_73(UIStrings.columnSource) }
+          { key: "value", valueType: "text", label: str_76(UIStrings97.columnDeprecate) },
+          { key: "source", valueType: "source-location", label: str_76(UIStrings.columnSource) }
         ];
         const details = Audit.makeTableDetails(headings, deprecations);
         let displayValue;
         if (deprecations.length > 0) {
-          displayValue = str_73(UIStrings93.displayValue, { itemCount: deprecations.length });
+          displayValue = str_76(UIStrings97.displayValue, { itemCount: deprecations.length });
         }
         return {
           score: Number(deprecations.length === 0),
@@ -47608,12 +48176,12 @@ var init_deprecations = __esm({
 var charset_exports = {};
 __export(charset_exports, {
   CHARSET_HTML_REGEX: () => CHARSET_HTML_REGEX,
-  CHARSET_HTTP_REGEX: () => CHARSET_HTTP_REGEX,
+  CHARSET_HTTP_REGEX: () => CHARSET_HTTP_REGEX2,
   IANA_REGEX: () => IANA_REGEX,
-  UIStrings: () => UIStrings94,
+  UIStrings: () => UIStrings98,
   default: () => charset_default
 });
-var UIStrings94, str_74, CONTENT_TYPE_HEADER, IANA_REGEX, CHARSET_HTML_REGEX, CHARSET_HTTP_REGEX, CharsetDefined, charset_default;
+var UIStrings98, str_77, CONTENT_TYPE_HEADER, IANA_REGEX, CHARSET_HTML_REGEX, CHARSET_HTTP_REGEX2, CharsetDefined, charset_default;
 var init_charset = __esm({
   "core/audits/dobetterweb/charset.js"() {
     "use strict";
@@ -47626,7 +48194,7 @@ var init_charset = __esm({
      * Copyright 2020 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings94 = {
+    UIStrings98 = {
       /** Title of a Lighthouse audit that provides detail on if the charset is set properly for a page. This title is shown when the charset is defined correctly. Charset defines the character encoding (eg UTF-8) of the page content. */
       title: "Properly defines charset",
       /** Title of a Lighthouse audit that provides detail on if the charset is set properly for a page. This title is shown when the charset meta tag is missing or defined too late in the page. */
@@ -47634,11 +48202,11 @@ var init_charset = __esm({
       /** Description of a Lighthouse audit that tells the user why the charset needs to be defined early on. */
       description: "A character encoding declaration is required. It can be done with a `<meta>` tag in the first 1024 bytes of the HTML or in the Content-Type HTTP response header. [Learn more about declaring the character encoding](https://developer.chrome.com/docs/lighthouse/best-practices/charset/)."
     };
-    str_74 = createIcuMessageFn({ url: "core/audits/dobetterweb/charset.js" }.url, UIStrings94);
+    str_77 = createIcuMessageFn({ url: "core/audits/dobetterweb/charset.js" }.url, UIStrings98);
     CONTENT_TYPE_HEADER = "content-type";
     IANA_REGEX = /^[a-zA-Z0-9-_:.()]{2,}$/;
     CHARSET_HTML_REGEX = /<meta[^>]+charset[^<]+>/i;
-    CHARSET_HTTP_REGEX = /charset\s*=\s*[a-zA-Z0-9-_:.()]{2,}/i;
+    CHARSET_HTTP_REGEX2 = /charset\s*=\s*[a-zA-Z0-9-_:.()]{2,}/i;
     CharsetDefined = class extends Audit {
       static {
         __name(this, "CharsetDefined");
@@ -47649,9 +48217,9 @@ var init_charset = __esm({
       static get meta() {
         return {
           id: "charset",
-          title: str_74(UIStrings94.title),
-          failureTitle: str_74(UIStrings94.failureTitle),
-          description: str_74(UIStrings94.description),
+          title: str_77(UIStrings98.title),
+          failureTitle: str_77(UIStrings98.failureTitle),
+          description: str_77(UIStrings98.description),
           requiredArtifacts: ["MainDocumentContent", "URL", "DevtoolsLog", "MetaElements"]
         };
       }
@@ -47667,14 +48235,14 @@ var init_charset = __esm({
         if (mainResource.responseHeaders) {
           const contentTypeHeader = mainResource.responseHeaders.find((header) => header.name.toLowerCase() === CONTENT_TYPE_HEADER);
           if (contentTypeHeader) {
-            isCharsetSet = CHARSET_HTTP_REGEX.test(contentTypeHeader.value);
+            isCharsetSet = CHARSET_HTTP_REGEX2.test(contentTypeHeader.value);
           }
         }
         const BOM_FIRSTCHAR = 65279;
         isCharsetSet = isCharsetSet || artifacts.MainDocumentContent.charCodeAt(0) === BOM_FIRSTCHAR;
         if (CHARSET_HTML_REGEX.test(artifacts.MainDocumentContent.slice(0, 1024))) {
           isCharsetSet = isCharsetSet || artifacts.MetaElements.some((meta) => {
-            return meta.charset && IANA_REGEX.test(meta.charset) || meta.httpEquiv === "content-type" && meta.content && CHARSET_HTTP_REGEX.test(meta.content);
+            return meta.charset && IANA_REGEX.test(meta.charset) || meta.httpEquiv === "content-type" && meta.content && CHARSET_HTTP_REGEX2.test(meta.content);
           });
         }
         return {
@@ -47767,10 +48335,10 @@ var init_processed_trace = __esm({
 // core/audits/dobetterweb/doctype.js
 var doctype_exports2 = {};
 __export(doctype_exports2, {
-  UIStrings: () => UIStrings95,
+  UIStrings: () => UIStrings99,
   default: () => doctype_default2
 });
-var UIStrings95, str_75, Doctype2, doctype_default2;
+var UIStrings99, str_78, Doctype2, doctype_default2;
 var init_doctype2 = __esm({
   "core/audits/dobetterweb/doctype.js"() {
     "use strict";
@@ -47783,7 +48351,7 @@ var init_doctype2 = __esm({
      * Copyright 2018 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings95 = {
+    UIStrings99 = {
       /** Title of a Lighthouse audit that provides detail on the doctype of a page. This descriptive title is shown to users when the pages's doctype is set to HTML. */
       title: "Page has the HTML doctype",
       /** Title of a Lighthouse audit that provides detail on the doctype of a page. This descriptive title is shown to users when the page's doctype is not set to HTML. */
@@ -47803,7 +48371,7 @@ var init_doctype2 = __esm({
       /** Explanatory message stating that the doctype is set, but is not "html" and is therefore invalid. */
       explanationBadDoctype: "Doctype name must be the string `html`"
     };
-    str_75 = createIcuMessageFn({ url: "core/audits/dobetterweb/doctype.js" }.url, UIStrings95);
+    str_78 = createIcuMessageFn({ url: "core/audits/dobetterweb/doctype.js" }.url, UIStrings99);
     Doctype2 = class extends Audit {
       static {
         __name(this, "Doctype");
@@ -47814,9 +48382,9 @@ var init_doctype2 = __esm({
       static get meta() {
         return {
           id: "doctype",
-          title: str_75(UIStrings95.title),
-          failureTitle: str_75(UIStrings95.failureTitle),
-          description: str_75(UIStrings95.description),
+          title: str_78(UIStrings99.title),
+          failureTitle: str_78(UIStrings99.failureTitle),
+          description: str_78(UIStrings99.description),
           requiredArtifacts: ["Doctype"],
           __internalOptionalArtifacts: ["InspectorIssues", "Trace"]
         };
@@ -47830,7 +48398,7 @@ var init_doctype2 = __esm({
         if (!artifacts.Doctype) {
           return {
             score: 0,
-            explanation: str_75(UIStrings95.explanationNoDoctype)
+            explanation: str_78(UIStrings99.explanationNoDoctype)
           };
         }
         const doctypeName = artifacts.Doctype.name;
@@ -47853,30 +48421,30 @@ var init_doctype2 = __esm({
         if (isLimitedQuirksMode) {
           return {
             score: 0,
-            explanation: str_75(UIStrings95.explanationLimitedQuirks)
+            explanation: str_78(UIStrings99.explanationLimitedQuirks)
           };
         }
         if (doctypePublicId !== "") {
           return {
             score: 0,
-            explanation: str_75(UIStrings95.explanationPublicId)
+            explanation: str_78(UIStrings99.explanationPublicId)
           };
         }
         if (doctypeSystemId !== "") {
           return {
             score: 0,
-            explanation: str_75(UIStrings95.explanationSystemId)
+            explanation: str_78(UIStrings99.explanationSystemId)
           };
         }
         if (doctypeName !== "html") {
           return {
             score: 0,
-            explanation: str_75(UIStrings95.explanationBadDoctype)
+            explanation: str_78(UIStrings99.explanationBadDoctype)
           };
         }
         return {
           score: 0,
-          explanation: str_75(UIStrings95.explanationWrongDoctype)
+          explanation: str_78(UIStrings99.explanationWrongDoctype)
         };
       }
     };
@@ -47932,10 +48500,10 @@ var init_violation_audit = __esm({
 // core/audits/dobetterweb/geolocation-on-start.js
 var geolocation_on_start_exports = {};
 __export(geolocation_on_start_exports, {
-  UIStrings: () => UIStrings96,
+  UIStrings: () => UIStrings100,
   default: () => geolocation_on_start_default
 });
-var UIStrings96, str_76, GeolocationOnStart, geolocation_on_start_default;
+var UIStrings100, str_79, GeolocationOnStart, geolocation_on_start_default;
 var init_geolocation_on_start = __esm({
   "core/audits/dobetterweb/geolocation-on-start.js"() {
     "use strict";
@@ -47947,7 +48515,7 @@ var init_geolocation_on_start = __esm({
      * Copyright 2016 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings96 = {
+    UIStrings100 = {
       /** Title of a Lighthouse audit that provides detail on geolocation permission requests while the page is loading. This descriptive title is shown to users when the page does not ask for geolocation permissions on load. */
       title: "Avoids requesting the geolocation permission on page load",
       /** Title of a Lighthouse audit that provides detail on geolocation permissions requests. This descriptive title is shown to users when the page does ask for geolocation permissions on load. */
@@ -47955,7 +48523,7 @@ var init_geolocation_on_start = __esm({
       /** Description of a Lighthouse audit that tells the user why they should not ask for geolocation permissions on load. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Users are mistrustful of or confused by sites that request their location without context. Consider tying the request to a user action instead. [Learn more about the geolocation permission](https://developer.chrome.com/docs/lighthouse/best-practices/geolocation-on-start/)."
     };
-    str_76 = createIcuMessageFn({ url: "core/audits/dobetterweb/geolocation-on-start.js" }.url, UIStrings96);
+    str_79 = createIcuMessageFn({ url: "core/audits/dobetterweb/geolocation-on-start.js" }.url, UIStrings100);
     GeolocationOnStart = class extends violation_audit_default {
       static {
         __name(this, "GeolocationOnStart");
@@ -47966,9 +48534,9 @@ var init_geolocation_on_start = __esm({
       static get meta() {
         return {
           id: "geolocation-on-start",
-          title: str_76(UIStrings96.title),
-          failureTitle: str_76(UIStrings96.failureTitle),
-          description: str_76(UIStrings96.description),
+          title: str_79(UIStrings100.title),
+          failureTitle: str_79(UIStrings100.failureTitle),
+          description: str_79(UIStrings100.description),
           supportedModes: ["navigation"],
           requiredArtifacts: ["ConsoleMessages", "SourceMaps", "Scripts"]
         };
@@ -47981,7 +48549,7 @@ var init_geolocation_on_start = __esm({
       static async audit(artifacts, context) {
         const results = await violation_audit_default.getViolationResults(artifacts, context, /geolocation/);
         const headings = [
-          { key: "source", valueType: "source-location", label: str_76(UIStrings.columnSource) }
+          { key: "source", valueType: "source-location", label: str_79(UIStrings.columnSource) }
         ];
         const details = violation_audit_default.makeTableDetails(headings, results);
         return {
@@ -47997,10 +48565,10 @@ var init_geolocation_on_start = __esm({
 // core/audits/dobetterweb/inspector-issues.js
 var inspector_issues_exports2 = {};
 __export(inspector_issues_exports2, {
-  UIStrings: () => UIStrings97,
+  UIStrings: () => UIStrings101,
   default: () => inspector_issues_default2
 });
-var UIStrings97, str_77, IssuesPanelEntries, inspector_issues_default2;
+var UIStrings101, str_80, IssuesPanelEntries, inspector_issues_default2;
 var init_inspector_issues2 = __esm({
   "core/audits/dobetterweb/inspector-issues.js"() {
     "use strict";
@@ -48012,7 +48580,7 @@ var init_inspector_issues2 = __esm({
      * Copyright 2020 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings97 = {
+    UIStrings101 = {
       /** Title of a Lighthouse audit that provides detail on various types of problems with a website, like security or network errors. This descriptive title is shown to users when no issues were logged into the Chrome DevTools Issues panel. */
       title: "No issues in the `Issues` panel in Chrome Devtools",
       /** Title of a Lighthouse audit that provides detail on various types of problems with a website, like security or network errors. This descriptive title is shown to users when issues are detected and logged into the Chrome DevTools Issues panel. */
@@ -48028,7 +48596,7 @@ var init_inspector_issues2 = __esm({
       /** The type of an Issue in Chrome DevTools when a site has large ads that use up a lot of the browser's resources. */
       issueTypeHeavyAds: "Heavy resource usage by ads"
     };
-    str_77 = createIcuMessageFn({ url: "core/audits/dobetterweb/inspector-issues.js" }.url, UIStrings97);
+    str_80 = createIcuMessageFn({ url: "core/audits/dobetterweb/inspector-issues.js" }.url, UIStrings101);
     IssuesPanelEntries = class extends Audit {
       static {
         __name(this, "IssuesPanelEntries");
@@ -48039,9 +48607,9 @@ var init_inspector_issues2 = __esm({
       static get meta() {
         return {
           id: "inspector-issues",
-          title: str_77(UIStrings97.title),
-          failureTitle: str_77(UIStrings97.failureTitle),
-          description: str_77(UIStrings97.description),
+          title: str_80(UIStrings101.title),
+          failureTitle: str_80(UIStrings101.failureTitle),
+          description: str_80(UIStrings101.description),
           requiredArtifacts: ["InspectorIssues"]
         };
       }
@@ -48100,7 +48668,7 @@ var init_inspector_issues2 = __esm({
           }
         }
         return {
-          issueType: str_77(UIStrings97.issueTypeBlockedByResponse),
+          issueType: str_80(UIStrings101.issueTypeBlockedByResponse),
           subItems: {
             type: "subitems",
             items: Array.from(requestUrls).map((url) => {
@@ -48142,7 +48710,7 @@ var init_inspector_issues2 = __esm({
       static audit(artifacts) {
         const headings = [
           /* eslint-disable max-len */
-          { key: "issueType", valueType: "text", subItemsHeading: { key: "url", valueType: "url" }, label: str_77(UIStrings97.columnIssueType) }
+          { key: "issueType", valueType: "text", subItemsHeading: { key: "url", valueType: "url" }, label: str_80(UIStrings101.columnIssueType) }
           /* eslint-enable max-len */
         ];
         const issues = artifacts.InspectorIssues;
@@ -48157,7 +48725,7 @@ var init_inspector_issues2 = __esm({
           items.push(this.getBlockedByResponseRow(issues.blockedByResponseIssue));
         }
         if (issues.heavyAdIssue?.length) {
-          items.push({ issueType: str_77(UIStrings97.issueTypeHeavyAds) });
+          items.push({ issueType: str_80(UIStrings101.issueTypeHeavyAds) });
         }
         if (issues.contentSecurityPolicyIssue?.length) {
           items.push(this.getContentSecurityPolicyRow(issues.contentSecurityPolicyIssue));
@@ -48175,10 +48743,10 @@ var init_inspector_issues2 = __esm({
 // core/audits/dobetterweb/js-libraries.js
 var js_libraries_exports = {};
 __export(js_libraries_exports, {
-  UIStrings: () => UIStrings98,
+  UIStrings: () => UIStrings102,
   default: () => js_libraries_default
 });
-var UIStrings98, str_78, JsLibrariesAudit, js_libraries_default;
+var UIStrings102, str_81, JsLibrariesAudit, js_libraries_default;
 var init_js_libraries = __esm({
   "core/audits/dobetterweb/js-libraries.js"() {
     "use strict";
@@ -48190,7 +48758,7 @@ var init_js_libraries = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings98 = {
+    UIStrings102 = {
       /** Title of a Lighthouse audit that provides detail on the Javascript libraries that are used on the page. */
       title: "Detected JavaScript libraries",
       /** Description of a Lighthouse audit that tells the user what this audit is detecting. This is displayed after a user expands the section to see more. No character length limits. */
@@ -48198,7 +48766,7 @@ var init_js_libraries = __esm({
       /** Label for a column in a data table; entries will be the version numbers of the detected Javascript libraries.  */
       columnVersion: "Version"
     };
-    str_78 = createIcuMessageFn({ url: "core/audits/dobetterweb/js-libraries.js" }.url, UIStrings98);
+    str_81 = createIcuMessageFn({ url: "core/audits/dobetterweb/js-libraries.js" }.url, UIStrings102);
     JsLibrariesAudit = class extends Audit {
       static {
         __name(this, "JsLibrariesAudit");
@@ -48209,9 +48777,9 @@ var init_js_libraries = __esm({
       static get meta() {
         return {
           id: "js-libraries",
-          title: str_78(UIStrings98.title),
+          title: str_81(UIStrings102.title),
           scoreDisplayMode: Audit.SCORING_MODES.INFORMATIVE,
-          description: str_78(UIStrings98.description),
+          description: str_81(UIStrings102.description),
           requiredArtifacts: ["Stacks"]
         };
       }
@@ -48226,8 +48794,8 @@ var init_js_libraries = __esm({
           npm: stack.npm
         }));
         const headings = [
-          { key: "name", valueType: "text", label: str_78(UIStrings.columnName) },
-          { key: "version", valueType: "text", label: str_78(UIStrings98.columnVersion) }
+          { key: "name", valueType: "text", label: str_81(UIStrings.columnName) },
+          { key: "version", valueType: "text", label: str_81(UIStrings102.columnVersion) }
         ];
         const details = Audit.makeTableDetails(headings, libDetails);
         const debugData = {
@@ -48262,10 +48830,10 @@ var init_js_libraries = __esm({
 // core/audits/dobetterweb/notification-on-start.js
 var notification_on_start_exports = {};
 __export(notification_on_start_exports, {
-  UIStrings: () => UIStrings99,
+  UIStrings: () => UIStrings103,
   default: () => notification_on_start_default
 });
-var UIStrings99, str_79, NotificationOnStart, notification_on_start_default;
+var UIStrings103, str_82, NotificationOnStart, notification_on_start_default;
 var init_notification_on_start = __esm({
   "core/audits/dobetterweb/notification-on-start.js"() {
     "use strict";
@@ -48277,7 +48845,7 @@ var init_notification_on_start = __esm({
      * Copyright 2016 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings99 = {
+    UIStrings103 = {
       /** Title of a Lighthouse audit that provides detail on the page's notification permission requests. This descriptive title is shown to users when the page does not ask for notification permission on load. */
       title: "Avoids requesting the notification permission on page load",
       /** Title of a Lighthouse audit that provides detail on the page's notification permission requests. This descriptive title is shown to users when the page does ask for notification permission on load. */
@@ -48285,7 +48853,7 @@ var init_notification_on_start = __esm({
       /** Description of a Lighthouse audit that tells the user why they should not ask for notification permission on load. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Users are mistrustful of or confused by sites that request to send notifications without context. Consider tying the request to user gestures instead. [Learn more about responsibly getting permission for notifications](https://developer.chrome.com/docs/lighthouse/best-practices/notification-on-start/)."
     };
-    str_79 = createIcuMessageFn({ url: "core/audits/dobetterweb/notification-on-start.js" }.url, UIStrings99);
+    str_82 = createIcuMessageFn({ url: "core/audits/dobetterweb/notification-on-start.js" }.url, UIStrings103);
     NotificationOnStart = class extends violation_audit_default {
       static {
         __name(this, "NotificationOnStart");
@@ -48296,9 +48864,9 @@ var init_notification_on_start = __esm({
       static get meta() {
         return {
           id: "notification-on-start",
-          title: str_79(UIStrings99.title),
-          failureTitle: str_79(UIStrings99.failureTitle),
-          description: str_79(UIStrings99.description),
+          title: str_82(UIStrings103.title),
+          failureTitle: str_82(UIStrings103.failureTitle),
+          description: str_82(UIStrings103.description),
           supportedModes: ["navigation"],
           requiredArtifacts: ["ConsoleMessages", "SourceMaps", "Scripts"]
         };
@@ -48311,7 +48879,7 @@ var init_notification_on_start = __esm({
       static async audit(artifacts, context) {
         const results = await violation_audit_default.getViolationResults(artifacts, context, /notification permission/);
         const headings = [
-          { key: "source", valueType: "source-location", label: str_79(UIStrings.columnSource) }
+          { key: "source", valueType: "source-location", label: str_82(UIStrings.columnSource) }
         ];
         const details = violation_audit_default.makeTableDetails(headings, results);
         return {
@@ -48327,10 +48895,10 @@ var init_notification_on_start = __esm({
 // core/audits/dobetterweb/paste-preventing-inputs.js
 var paste_preventing_inputs_exports = {};
 __export(paste_preventing_inputs_exports, {
-  UIStrings: () => UIStrings100,
+  UIStrings: () => UIStrings104,
   default: () => paste_preventing_inputs_default
 });
-var UIStrings100, str_80, PastePreventingInputsAudit, paste_preventing_inputs_default;
+var UIStrings104, str_83, PastePreventingInputsAudit, paste_preventing_inputs_default;
 var init_paste_preventing_inputs = __esm({
   "core/audits/dobetterweb/paste-preventing-inputs.js"() {
     "use strict";
@@ -48342,7 +48910,7 @@ var init_paste_preventing_inputs = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings100 = {
+    UIStrings104 = {
       /** Title of a Lighthouse audit that provides detail on the ability to paste into input fields. This descriptive title is shown to users when the page allows pasting of content into input fields. */
       title: "Allows users to paste into input fields",
       /** Title of a Lighthouse audit that provides detail on the ability to paste into input fields. This descriptive title is shown to users when the page does not allow pasting of content into input fields. */
@@ -48350,7 +48918,7 @@ var init_paste_preventing_inputs = __esm({
       /** Description of a Lighthouse audit that tells the user why they should allow pasting of content into input fields. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
       description: "Preventing input pasting is a bad practice for the UX, and weakens security by blocking password managers.[Learn more about user-friendly input fields](https://developer.chrome.com/docs/lighthouse/best-practices/paste-preventing-inputs/)."
     };
-    str_80 = createIcuMessageFn({ url: "core/audits/dobetterweb/paste-preventing-inputs.js" }.url, UIStrings100);
+    str_83 = createIcuMessageFn({ url: "core/audits/dobetterweb/paste-preventing-inputs.js" }.url, UIStrings104);
     PastePreventingInputsAudit = class extends Audit {
       static {
         __name(this, "PastePreventingInputsAudit");
@@ -48361,9 +48929,9 @@ var init_paste_preventing_inputs = __esm({
       static get meta() {
         return {
           id: "paste-preventing-inputs",
-          title: str_80(UIStrings100.title),
-          failureTitle: str_80(UIStrings100.failureTitle),
-          description: str_80(UIStrings100.description),
+          title: str_83(UIStrings104.title),
+          failureTitle: str_83(UIStrings104.failureTitle),
+          description: str_83(UIStrings104.description),
           requiredArtifacts: ["Inputs"]
         };
       }
@@ -48381,7 +48949,7 @@ var init_paste_preventing_inputs = __esm({
           });
         });
         const headings = [
-          { key: "node", valueType: "node", label: str_80(UIStrings.columnFailingElem) }
+          { key: "node", valueType: "node", label: str_83(UIStrings.columnFailingElem) }
         ];
         return {
           score: Number(inputsWithPreventsPaste.length === 0),
@@ -48396,10 +48964,10 @@ var init_paste_preventing_inputs = __esm({
 // core/audits/errors-in-console.js
 var errors_in_console_exports = {};
 __export(errors_in_console_exports, {
-  UIStrings: () => UIStrings101,
+  UIStrings: () => UIStrings105,
   default: () => errors_in_console_default
 });
-var KB, MAX_CONSOLE_ERRORS, UIStrings101, str_81, ErrorLogs, errors_in_console_default;
+var KB, MAX_CONSOLE_ERRORS, UIStrings105, str_84, ErrorLogs, errors_in_console_default;
 var init_errors_in_console = __esm({
   "core/audits/errors-in-console.js"() {
     "use strict";
@@ -48416,7 +48984,7 @@ var init_errors_in_console = __esm({
      */
     KB = 1024;
     MAX_CONSOLE_ERRORS = 1e3;
-    UIStrings101 = {
+    UIStrings105 = {
       /** Title of a Lighthouse audit that provides detail on browser errors. This descriptive title is shown to users when no browser errors were logged into the devtools console. */
       title: "No browser errors logged to the console",
       /** Title of a Lighthouse audit that provides detail on browser errors. This descriptive title is shown to users when browser errors occurred and were logged into the devtools console. */
@@ -48424,7 +48992,7 @@ var init_errors_in_console = __esm({
       /** Description of a Lighthouse audit that tells the user why errors being logged to the devtools console are a cause for concern and so should be fixed. This is displayed after a user expands the section to see more. No character length limits. */
       description: "Errors logged to the console indicate unresolved problems. They can come from network request failures and other browser concerns. [Learn more about this errors in console diagnostic audit](https://developer.chrome.com/docs/lighthouse/best-practices/errors-in-console/)"
     };
-    str_81 = createIcuMessageFn({ url: "core/audits/errors-in-console.js" }.url, UIStrings101);
+    str_84 = createIcuMessageFn({ url: "core/audits/errors-in-console.js" }.url, UIStrings105);
     ErrorLogs = class _ErrorLogs extends Audit {
       static {
         __name(this, "ErrorLogs");
@@ -48435,9 +49003,9 @@ var init_errors_in_console = __esm({
       static get meta() {
         return {
           id: "errors-in-console",
-          title: str_81(UIStrings101.title),
-          failureTitle: str_81(UIStrings101.failureTitle),
-          description: str_81(UIStrings101.description),
+          title: str_84(UIStrings105.title),
+          failureTitle: str_84(UIStrings105.failureTitle),
+          description: str_84(UIStrings105.description),
           requiredArtifacts: ["ConsoleMessages", "SourceMaps", "Scripts"]
         };
       }
@@ -48484,8 +49052,8 @@ var init_errors_in_console = __esm({
         const tableRows = _ErrorLogs.filterAccordingToOptions(consoleRows, auditOptions).sort((a, b) => (a.description || "").localeCompare(b.description || ""));
         const headings = [
           /* eslint-disable max-len */
-          { key: "sourceLocation", valueType: "source-location", label: str_81(UIStrings.columnSource) },
-          { key: "description", valueType: "code", label: str_81(UIStrings.columnDescription) }
+          { key: "sourceLocation", valueType: "source-location", label: str_84(UIStrings.columnSource) },
+          { key: "description", valueType: "code", label: str_84(UIStrings.columnDescription) }
           /* eslint-enable max-len */
         ];
         const details = Audit.makeTableDetails(headings, tableRows);
@@ -48503,10 +49071,10 @@ var init_errors_in_console = __esm({
 // core/audits/has-hsts.js
 var has_hsts_exports = {};
 __export(has_hsts_exports, {
-  UIStrings: () => UIStrings102,
+  UIStrings: () => UIStrings106,
   default: () => has_hsts_default
 });
-var UIStrings102, str_82, HasHsts, has_hsts_default;
+var UIStrings106, str_85, HasHsts, has_hsts_default;
 var init_has_hsts = __esm({
   "core/audits/has-hsts.js"() {
     "use strict";
@@ -48519,7 +49087,7 @@ var init_has_hsts = __esm({
      * Copyright 2024 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings102 = {
+    UIStrings106 = {
       /** Title of a Lighthouse audit that evaluates the security of a page's HSTS header. "HSTS" stands for "HTTP Strict Transport Security". */
       title: "Use a strong HSTS policy",
       /** Description of a Lighthouse audit that evaluates the security of a page's HSTS header. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. "HSTS" stands for "HTTP Strict Transport Security". */
@@ -48541,7 +49109,7 @@ var init_has_hsts = __esm({
       /** Label for a column in a data table; entries will be the severity of an issue with the HSTS header. "HSTS" stands for "HTTP Strict Transport Security". */
       columnSeverity: "Severity"
     };
-    str_82 = createIcuMessageFn({ url: "core/audits/has-hsts.js" }.url, UIStrings102);
+    str_85 = createIcuMessageFn({ url: "core/audits/has-hsts.js" }.url, UIStrings106);
     HasHsts = class extends Audit {
       static {
         __name(this, "HasHsts");
@@ -48553,8 +49121,8 @@ var init_has_hsts = __esm({
         return {
           id: "has-hsts",
           scoreDisplayMode: Audit.SCORING_MODES.INFORMATIVE,
-          title: str_82(UIStrings102.title),
-          description: str_82(UIStrings102.description),
+          title: str_85(UIStrings106.title),
+          description: str_85(UIStrings106.description),
           requiredArtifacts: ["DevtoolsLog", "URL"],
           supportedModes: ["navigation"]
         };
@@ -48600,45 +49168,45 @@ var init_has_hsts = __esm({
           return {
             score: 0,
             results: [{
-              severity: str_82(UIStrings.itemSeverityHigh),
-              description: str_82(UIStrings102.noHsts),
+              severity: str_85(UIStrings.itemSeverityHigh),
+              description: str_85(UIStrings106.noHsts),
               directive: void 0
             }]
           };
         }
         if (!hstsHeaders.toString().includes("max-age")) {
           violations.push({
-            severity: str_82(UIStrings.itemSeverityHigh),
-            description: str_82(UIStrings102.noMaxAge),
+            severity: str_85(UIStrings.itemSeverityHigh),
+            description: str_85(UIStrings106.noMaxAge),
             directive: "max-age"
           });
         }
         if (!hstsHeaders.toString().includes("includesubdomains")) {
           warnings.push({
-            severity: str_82(UIStrings.itemSeverityMedium),
-            description: str_82(UIStrings102.noSubdomain),
+            severity: str_85(UIStrings.itemSeverityMedium),
+            description: str_85(UIStrings106.noSubdomain),
             directive: "includeSubDomains"
           });
         }
         if (!hstsHeaders.toString().includes("preload")) {
           warnings.push({
-            severity: str_82(UIStrings.itemSeverityMedium),
-            description: str_82(UIStrings102.noPreload),
+            severity: str_85(UIStrings.itemSeverityMedium),
+            description: str_85(UIStrings106.noPreload),
             directive: "preload"
           });
         }
         for (const actualDirective of hstsHeaders) {
           if (actualDirective.includes("max-age") && parseInt(actualDirective.split("=")[1], 10) < 31536e3) {
             violations.push({
-              severity: str_82(UIStrings.itemSeverityHigh),
-              description: str_82(UIStrings102.lowMaxAge),
+              severity: str_85(UIStrings.itemSeverityHigh),
+              description: str_85(UIStrings106.lowMaxAge),
               directive: "max-age"
             });
           }
           if (!allowedDirectives.includes(actualDirective) && !actualDirective.includes("max-age")) {
             syntax.push({
-              severity: str_82(UIStrings.itemSeverityLow),
-              description: str_82(UIStrings102.invalidSyntax),
+              severity: str_85(UIStrings.itemSeverityLow),
+              description: str_85(UIStrings106.invalidSyntax),
               directive: actualDirective
             });
           }
@@ -48648,21 +49216,21 @@ var init_has_hsts = __esm({
             (f) => this.findingToTableItem(
               f.directive,
               f.description,
-              str_82(UIStrings.itemSeverityHigh)
+              str_85(UIStrings.itemSeverityHigh)
             )
           ),
           ...warnings.map(
             (f) => this.findingToTableItem(
               f.directive,
               f.description,
-              str_82(UIStrings.itemSeverityMedium)
+              str_85(UIStrings.itemSeverityMedium)
             )
           ),
           ...syntax.map(
             (f) => this.findingToTableItem(
               f.directive,
               f.description,
-              str_82(UIStrings.itemSeverityLow)
+              str_85(UIStrings.itemSeverityLow)
             )
           )
         ];
@@ -48678,9 +49246,9 @@ var init_has_hsts = __esm({
         const { score, results } = this.constructResults(hstsHeaders);
         const headings = [
           /* eslint-disable max-len */
-          { key: "description", valueType: "text", subItemsHeading: { key: "description" }, label: str_82(UIStrings.columnDescription) },
-          { key: "directive", valueType: "code", subItemsHeading: { key: "directive" }, label: str_82(UIStrings102.columnDirective) },
-          { key: "severity", valueType: "text", subItemsHeading: { key: "severity" }, label: str_82(UIStrings102.columnSeverity) }
+          { key: "description", valueType: "text", subItemsHeading: { key: "description" }, label: str_85(UIStrings.columnDescription) },
+          { key: "directive", valueType: "code", subItemsHeading: { key: "directive" }, label: str_85(UIStrings106.columnDirective) },
+          { key: "severity", valueType: "text", subItemsHeading: { key: "severity" }, label: str_85(UIStrings106.columnSeverity) }
           /* eslint-enable max-len */
         ];
         const details = Audit.makeTableDetails(headings, results);
@@ -48698,10 +49266,10 @@ var init_has_hsts = __esm({
 // core/audits/image-aspect-ratio.js
 var image_aspect_ratio_exports = {};
 __export(image_aspect_ratio_exports, {
-  UIStrings: () => UIStrings103,
+  UIStrings: () => UIStrings107,
   default: () => image_aspect_ratio_default
 });
-var UIStrings103, str_83, THRESHOLD_PX, ImageAspectRatio, image_aspect_ratio_default;
+var UIStrings107, str_86, THRESHOLD_PX, ImageAspectRatio, image_aspect_ratio_default;
 var init_image_aspect_ratio = __esm({
   "core/audits/image-aspect-ratio.js"() {
     "use strict";
@@ -48714,7 +49282,7 @@ var init_image_aspect_ratio = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings103 = {
+    UIStrings107 = {
       /** Title of a Lighthouse audit that provides detail on the aspect ratios of all images on the page. This descriptive title is shown to users when all images use correct aspect ratios. */
       title: "Displays images with correct aspect ratio",
       /** Title of a Lighthouse audit that provides detail on the aspect ratios of all images on the page. This descriptive title is shown to users when not all images use correct aspect ratios. */
@@ -48726,7 +49294,7 @@ var init_image_aspect_ratio = __esm({
       /**  Label for a column in a data table; entries in the column will be the numeric aspect ratio of the raw (actual) image. */
       columnActual: "Aspect Ratio (Actual)"
     };
-    str_83 = createIcuMessageFn({ url: "core/audits/image-aspect-ratio.js" }.url, UIStrings103);
+    str_86 = createIcuMessageFn({ url: "core/audits/image-aspect-ratio.js" }.url, UIStrings107);
     THRESHOLD_PX = 2;
     ImageAspectRatio = class _ImageAspectRatio extends Audit {
       static {
@@ -48738,9 +49306,9 @@ var init_image_aspect_ratio = __esm({
       static get meta() {
         return {
           id: "image-aspect-ratio",
-          title: str_83(UIStrings103.title),
-          failureTitle: str_83(UIStrings103.failureTitle),
-          description: str_83(UIStrings103.description),
+          title: str_86(UIStrings107.title),
+          failureTitle: str_86(UIStrings107.failureTitle),
+          description: str_86(UIStrings107.description),
           requiredArtifacts: ["ImageElements"]
         };
       }
@@ -48784,9 +49352,9 @@ var init_image_aspect_ratio = __esm({
         });
         const headings = [
           { key: "node", valueType: "node", label: "" },
-          { key: "url", valueType: "url", label: str_83(UIStrings.columnURL) },
-          { key: "displayedAspectRatio", valueType: "text", label: str_83(UIStrings103.columnDisplayed) },
-          { key: "actualAspectRatio", valueType: "text", label: str_83(UIStrings103.columnActual) }
+          { key: "url", valueType: "url", label: str_86(UIStrings.columnURL) },
+          { key: "displayedAspectRatio", valueType: "text", label: str_86(UIStrings107.columnDisplayed) },
+          { key: "actualAspectRatio", valueType: "text", label: str_86(UIStrings107.columnActual) }
         ];
         return {
           score: Number(results.length === 0),
@@ -48861,7 +49429,7 @@ var init_image_records = __esm({
 // core/audits/image-size-responsive.js
 var image_size_responsive_exports = {};
 __export(image_size_responsive_exports, {
-  UIStrings: () => UIStrings104,
+  UIStrings: () => UIStrings108,
   default: () => image_size_responsive_default
 });
 function isVisible(imageRect, viewportDimensions) {
@@ -48962,7 +49530,7 @@ function quantizeDpr(dpr) {
   }
   return 1;
 }
-var UIStrings104, str_84, SMALL_IMAGE_FACTOR, LARGE_IMAGE_FACTOR, SMALL_IMAGE_THRESHOLD, ImageSizeResponsive, image_size_responsive_default;
+var UIStrings108, str_87, SMALL_IMAGE_FACTOR, LARGE_IMAGE_FACTOR, SMALL_IMAGE_THRESHOLD, ImageSizeResponsive, image_size_responsive_default;
 var init_image_size_responsive = __esm({
   "core/audits/image-size-responsive.js"() {
     "use strict";
@@ -48977,7 +49545,7 @@ var init_image_size_responsive = __esm({
      * Copyright 2020 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings104 = {
+    UIStrings108 = {
       /** Title of a Lighthouse audit that provides detail on the size of visible images on the page. This descriptive title is shown to users when all images have correct sizes. */
       title: "Serves images with appropriate resolution",
       /** Title of a Lighthouse audit that provides detail on the size of visible images on the page. This descriptive title is shown to users when not all images have correct sizes. */
@@ -48991,7 +49559,7 @@ var init_image_size_responsive = __esm({
       /**  Label for a column in a data table; entries in the column will be a string representing the expected size of the image. */
       columnExpected: "Expected size"
     };
-    str_84 = createIcuMessageFn({ url: "core/audits/image-size-responsive.js" }.url, UIStrings104);
+    str_87 = createIcuMessageFn({ url: "core/audits/image-size-responsive.js" }.url, UIStrings108);
     SMALL_IMAGE_FACTOR = 1;
     LARGE_IMAGE_FACTOR = 0.75;
     SMALL_IMAGE_THRESHOLD = 64;
@@ -49015,9 +49583,9 @@ var init_image_size_responsive = __esm({
       static get meta() {
         return {
           id: "image-size-responsive",
-          title: str_84(UIStrings104.title),
-          failureTitle: str_84(UIStrings104.failureTitle),
-          description: str_84(UIStrings104.description),
+          title: str_87(UIStrings108.title),
+          failureTitle: str_87(UIStrings108.failureTitle),
+          description: str_87(UIStrings108.description),
           requiredArtifacts: ["ImageElements", "ViewportDimensions"],
           __internalOptionalArtifacts: ["DevtoolsLog"]
         };
@@ -49041,10 +49609,10 @@ var init_image_size_responsive = __esm({
         const results = Array.from(artifacts.ImageElements).filter((image) => isCandidate(image, imageRecordsByURL.get(image.src))).filter(imageHasNaturalDimensions).filter((image) => !imageHasRightSize(image, DPR)).filter((image) => isVisible(image.clientRect, artifacts.ViewportDimensions)).filter((image) => isSmallerThanViewport(image.clientRect, artifacts.ViewportDimensions)).map((image) => getResult(image, DPR));
         const headings = [
           { key: "node", valueType: "node", label: "" },
-          { key: "url", valueType: "url", label: str_84(UIStrings.columnURL) },
-          { key: "displayedSize", valueType: "text", label: str_84(UIStrings104.columnDisplayed) },
-          { key: "actualSize", valueType: "text", label: str_84(UIStrings104.columnActual) },
-          { key: "expectedSize", valueType: "text", label: str_84(UIStrings104.columnExpected) }
+          { key: "url", valueType: "url", label: str_87(UIStrings.columnURL) },
+          { key: "displayedSize", valueType: "text", label: str_87(UIStrings108.columnDisplayed) },
+          { key: "actualSize", valueType: "text", label: str_87(UIStrings108.columnActual) },
+          { key: "expectedSize", valueType: "text", label: str_87(UIStrings108.columnExpected) }
         ];
         const finalResults = sortResultsBySizeDelta(deduplicateResultsByUrl(results));
         return {
@@ -49061,10 +49629,10 @@ var init_image_size_responsive = __esm({
 // core/audits/is-on-https.js
 var is_on_https_exports = {};
 __export(is_on_https_exports, {
-  UIStrings: () => UIStrings105,
+  UIStrings: () => UIStrings109,
   default: () => is_on_https_default
 });
-var UIStrings105, resolutionToString, str_85, HTTPS, is_on_https_default;
+var UIStrings109, resolutionToString, str_88, HTTPS, is_on_https_default;
 var init_is_on_https = __esm({
   "core/audits/is-on-https.js"() {
     "use strict";
@@ -49079,7 +49647,7 @@ var init_is_on_https = __esm({
      * Copyright 2016 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings105 = {
+    UIStrings109 = {
       /** Title of a Lighthouse audit that provides detail on the useage of HTTPS on a page. This descriptive title is shown to users when all requests on a page are fufilled using HTTPS. */
       title: "Uses HTTPS",
       /** Title of a Lighthouse audit that provides detail on the useage of HTTPS on a page. This descriptive title is shown to users when some, or all, requests on the page use HTTP instead of HTTPS. */
@@ -49105,11 +49673,11 @@ var init_is_on_https = __esm({
       upgraded: "Automatically upgraded to HTTPS"
     };
     resolutionToString = {
-      MixedContentAutomaticallyUpgraded: UIStrings105.upgraded,
-      MixedContentBlocked: UIStrings105.blocked,
-      MixedContentWarning: UIStrings105.warning
+      MixedContentAutomaticallyUpgraded: UIStrings109.upgraded,
+      MixedContentBlocked: UIStrings109.blocked,
+      MixedContentWarning: UIStrings109.warning
     };
-    str_85 = createIcuMessageFn({ url: "core/audits/is-on-https.js" }.url, UIStrings105);
+    str_88 = createIcuMessageFn({ url: "core/audits/is-on-https.js" }.url, UIStrings109);
     HTTPS = class extends Audit {
       static {
         __name(this, "HTTPS");
@@ -49120,9 +49688,9 @@ var init_is_on_https = __esm({
       static get meta() {
         return {
           id: "is-on-https",
-          title: str_85(UIStrings105.title),
-          failureTitle: str_85(UIStrings105.failureTitle),
-          description: str_85(UIStrings105.description),
+          title: str_88(UIStrings109.title),
+          failureTitle: str_88(UIStrings109.failureTitle),
+          description: str_88(UIStrings109.description),
           requiredArtifacts: ["DevtoolsLog", "InspectorIssues"]
         };
       }
@@ -49137,8 +49705,8 @@ var init_is_on_https = __esm({
         const insecureURLs = networkRecords.filter((record) => !NetworkRequest.isSecureRequest(record)).map((record) => url_utils_default.elideDataURI(record.url));
         const items = Array.from(new Set(insecureURLs)).map((url) => ({ url, resolution: void 0 }));
         const headings = [
-          { key: "url", valueType: "url", label: str_85(UIStrings105.columnInsecureURL) },
-          { key: "resolution", valueType: "text", label: str_85(UIStrings105.columnResolution) }
+          { key: "url", valueType: "url", label: str_88(UIStrings109.columnInsecureURL) },
+          { key: "resolution", valueType: "text", label: str_88(UIStrings109.columnResolution) }
         ];
         for (const details of artifacts.InspectorIssues.mixedContentIssue ?? []) {
           let item = items.find((item2) => item2.url === details.insecureURL);
@@ -49146,14 +49714,14 @@ var init_is_on_https = __esm({
             item = { url: details.insecureURL };
             items.push(item);
           }
-          item.resolution = resolutionToString[details.resolutionStatus] ? str_85(resolutionToString[details.resolutionStatus]) : details.resolutionStatus;
+          item.resolution = resolutionToString[details.resolutionStatus] ? str_88(resolutionToString[details.resolutionStatus]) : details.resolutionStatus;
         }
         for (const item of items) {
-          if (!item.resolution) item.resolution = str_85(UIStrings105.allowed);
+          if (!item.resolution) item.resolution = str_88(UIStrings109.allowed);
         }
         let displayValue;
         if (items.length > 0) {
-          displayValue = str_85(UIStrings105.displayValue, { itemCount: items.length });
+          displayValue = str_88(UIStrings109.displayValue, { itemCount: items.length });
         }
         return {
           score: Number(items.length === 0),
@@ -49169,10 +49737,10 @@ var init_is_on_https = __esm({
 // core/audits/origin-isolation.js
 var origin_isolation_exports = {};
 __export(origin_isolation_exports, {
-  UIStrings: () => UIStrings106,
+  UIStrings: () => UIStrings110,
   default: () => origin_isolation_default
 });
-var UIStrings106, str_86, OriginIsolation, origin_isolation_default;
+var UIStrings110, str_89, OriginIsolation, origin_isolation_default;
 var init_origin_isolation = __esm({
   "core/audits/origin-isolation.js"() {
     "use strict";
@@ -49185,7 +49753,7 @@ var init_origin_isolation = __esm({
      * Copyright 2024 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings106 = {
+    UIStrings110 = {
       /** Title of a Lighthouse audit that evaluates the security of a page's COOP header for origin isolation. "COOP" stands for "Cross-Origin-Opener-Policy" and should not be translated. */
       title: "Ensure proper origin isolation with COOP",
       /** Description of a Lighthouse audit that evaluates the security of a page's COOP header for origin isolation. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. "COOP" stands for "Cross-Origin-Opener-Policy", neither should be translated. */
@@ -49199,7 +49767,7 @@ var init_origin_isolation = __esm({
       /** Label for a column in a data table; entries will be the severity of an issue with the COOP header. "COOP" stands for "Cross-Origin-Opener-Policy". */
       columnSeverity: "Severity"
     };
-    str_86 = createIcuMessageFn({ url: "core/audits/origin-isolation.js" }.url, UIStrings106);
+    str_89 = createIcuMessageFn({ url: "core/audits/origin-isolation.js" }.url, UIStrings110);
     OriginIsolation = class extends Audit {
       static {
         __name(this, "OriginIsolation");
@@ -49211,8 +49779,8 @@ var init_origin_isolation = __esm({
         return {
           id: "origin-isolation",
           scoreDisplayMode: Audit.SCORING_MODES.INFORMATIVE,
-          title: str_86(UIStrings106.title),
-          description: str_86(UIStrings106.description),
+          title: str_89(UIStrings110.title),
+          description: str_89(UIStrings110.description),
           requiredArtifacts: ["DevtoolsLog", "URL"],
           supportedModes: ["navigation"]
         };
@@ -49260,16 +49828,16 @@ var init_origin_isolation = __esm({
         const syntax = [];
         if (!rawCoop.length) {
           violations.push({
-            severity: str_86(UIStrings.itemSeverityHigh),
-            description: str_86(UIStrings106.noCoop),
+            severity: str_89(UIStrings.itemSeverityHigh),
+            description: str_89(UIStrings110.noCoop),
             directive: void 0
           });
         }
         for (const actualDirective of coopHeaders) {
           if (!allowedDirectives.includes(actualDirective)) {
             syntax.push({
-              severity: str_86(UIStrings.itemSeverityLow),
-              description: str_86(UIStrings106.invalidSyntax),
+              severity: str_89(UIStrings.itemSeverityLow),
+              description: str_89(UIStrings110.invalidSyntax),
               directive: actualDirective
             });
           }
@@ -49279,14 +49847,14 @@ var init_origin_isolation = __esm({
             (f) => this.findingToTableItem(
               f.directive,
               f.description,
-              str_86(UIStrings.itemSeverityHigh)
+              str_89(UIStrings.itemSeverityHigh)
             )
           ),
           ...syntax.map(
             (f) => this.findingToTableItem(
               f.directive,
               f.description,
-              str_86(UIStrings.itemSeverityLow)
+              str_89(UIStrings.itemSeverityLow)
             )
           )
         ];
@@ -49302,9 +49870,9 @@ var init_origin_isolation = __esm({
         const { score, results } = this.constructResults(coopHeaders);
         const headings = [
           /* eslint-disable max-len */
-          { key: "description", valueType: "text", subItemsHeading: { key: "description" }, label: str_86(UIStrings.columnDescription) },
-          { key: "directive", valueType: "code", subItemsHeading: { key: "directive" }, label: str_86(UIStrings106.columnDirective) },
-          { key: "severity", valueType: "text", subItemsHeading: { key: "severity" }, label: str_86(UIStrings106.columnSeverity) }
+          { key: "description", valueType: "text", subItemsHeading: { key: "description" }, label: str_89(UIStrings.columnDescription) },
+          { key: "directive", valueType: "code", subItemsHeading: { key: "directive" }, label: str_89(UIStrings110.columnDirective) },
+          { key: "severity", valueType: "text", subItemsHeading: { key: "severity" }, label: str_89(UIStrings110.columnSeverity) }
           /* eslint-enable max-len */
         ];
         const details = Audit.makeTableDetails(headings, results);
@@ -49322,10 +49890,10 @@ var init_origin_isolation = __esm({
 // core/audits/redirects-http.js
 var redirects_http_exports = {};
 __export(redirects_http_exports, {
-  UIStrings: () => UIStrings107,
+  UIStrings: () => UIStrings111,
   default: () => redirects_http_default
 });
-var UIStrings107, str_87, RedirectsHTTP, redirects_http_default;
+var UIStrings111, str_90, RedirectsHTTP, redirects_http_default;
 var init_redirects_http = __esm({
   "core/audits/redirects-http.js"() {
     "use strict";
@@ -49338,7 +49906,7 @@ var init_redirects_http = __esm({
      * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
      * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
      */
-    UIStrings107 = {
+    UIStrings111 = {
       /** Title of a Lighthouse audit that provides detail on HTTP to HTTPS redirects. This descriptive title is shown to users when HTTP traffic is redirected to HTTPS. */
       title: "Redirects HTTP traffic to HTTPS",
       /** Title of a Lighthouse audit that provides detail on HTTP to HTTPS redirects. This descriptive title is shown to users when HTTP traffic is not redirected to HTTPS. */
@@ -49346,7 +49914,7 @@ var init_redirects_http = __esm({
       /** Description of a Lighthouse audit that tells the user why they should direct HTTP traffic to HTTPS. This is displayed after a user expands the section to see more. No character length limits. 'Learn More' becomes link text to additional documentation. */
       description: "Make sure that you redirect all HTTP traffic to HTTPS in order to enable secure web features for all your users. [Learn more](https://developer.chrome.com/docs/lighthouse/pwa/redirects-http/)."
     };
-    str_87 = createIcuMessageFn({ url: "core/audits/redirects-http.js" }.url, UIStrings107);
+    str_90 = createIcuMessageFn({ url: "core/audits/redirects-http.js" }.url, UIStrings111);
     RedirectsHTTP = class extends Audit {
       static {
         __name(this, "RedirectsHTTP");
@@ -49357,9 +49925,9 @@ var init_redirects_http = __esm({
       static get meta() {
         return {
           id: "redirects-http",
-          title: str_87(UIStrings107.title),
-          failureTitle: str_87(UIStrings107.failureTitle),
-          description: str_87(UIStrings107.description),
+          title: str_90(UIStrings111.title),
+          failureTitle: str_90(UIStrings111.failureTitle),
+          description: str_90(UIStrings111.description),
           requiredArtifacts: ["URL"],
           supportedModes: ["navigation"]
         };
@@ -49395,10 +49963,10 @@ var init_redirects_http = __esm({
 // core/audits/seo/canonical.js
 var canonical_exports = {};
 __export(canonical_exports, {
-  UIStrings: () => UIStrings108,
+  UIStrings: () => UIStrings112,
   default: () => canonical_default
 });
-var UIStrings108, str_88, Canonical, canonical_default;
+var UIStrings112, str_91, Canonical, canonical_default;
 var init_canonical = __esm({
   "core/audits/seo/canonical.js"() {
     "use strict";
@@ -49412,7 +49980,7 @@ var init_canonical = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings108 = {
+    UIStrings112 = {
       /** Title of a Lighthouse audit that provides detail on a page's rel=canonical link. This descriptive title is shown to users when the rel=canonical link is valid. "rel=canonical" is an HTML attribute and value and so should not be translated. */
       title: "Document has a valid `rel=canonical`",
       /** Title of a Lighthouse audit that provides detail on a page's rel=canonical link. This descriptive title is shown to users when the rel=canonical link is invalid and should be fixed. "rel=canonical" is an HTML attribute and value and so should not be translated. */
@@ -49442,7 +50010,7 @@ var init_canonical = __esm({
       /** Explanatory message stating that the page's canonical URL was pointing to the domain's root URL, which is a common mistake. "points" refers to the action of the 'rel=canonical' referencing another link. "root" refers to the starting/home page of the website. "domain" refers to the registered domain name of the website. */
       explanationRoot: "Points to the domain's root URL (the homepage), instead of an equivalent page of content"
     };
-    str_88 = createIcuMessageFn({ url: "core/audits/seo/canonical.js" }.url, UIStrings108);
+    str_91 = createIcuMessageFn({ url: "core/audits/seo/canonical.js" }.url, UIStrings112);
     Canonical = class _Canonical extends Audit {
       static {
         __name(this, "Canonical");
@@ -49453,9 +50021,9 @@ var init_canonical = __esm({
       static get meta() {
         return {
           id: "canonical",
-          title: str_88(UIStrings108.title),
-          failureTitle: str_88(UIStrings108.failureTitle),
-          description: str_88(UIStrings108.description),
+          title: str_91(UIStrings112.title),
+          failureTitle: str_91(UIStrings112.failureTitle),
+          description: str_91(UIStrings112.description),
           supportedModes: ["navigation"],
           requiredArtifacts: ["LinkElements", "URL", "DevtoolsLog"]
         };
@@ -49491,13 +50059,13 @@ var init_canonical = __esm({
         if (invalidCanonicalLink) {
           return {
             score: 0,
-            explanation: str_88(UIStrings108.explanationInvalid, { url: invalidCanonicalLink.hrefRaw })
+            explanation: str_91(UIStrings112.explanationInvalid, { url: invalidCanonicalLink.hrefRaw })
           };
         }
         if (relativeCanonicallink) {
           return {
             score: 0,
-            explanation: str_88(UIStrings108.explanationRelative, { url: relativeCanonicallink.hrefRaw })
+            explanation: str_91(UIStrings112.explanationRelative, { url: relativeCanonicallink.hrefRaw })
           };
         }
         const canonicalURLs = Array.from(uniqueCanonicalURLs);
@@ -49510,7 +50078,7 @@ var init_canonical = __esm({
         if (canonicalURLs.length > 1) {
           return {
             score: 0,
-            explanation: str_88(UIStrings108.explanationConflict, { urlList: canonicalURLs.join(", ") })
+            explanation: str_91(UIStrings112.explanationConflict, { urlList: canonicalURLs.join(", ") })
           };
         }
       }
@@ -49525,13 +50093,13 @@ var init_canonical = __esm({
         if (hreflangURLs.has(baseURL.href) && hreflangURLs.has(canonicalURL.href) && baseURL.href !== canonicalURL.href) {
           return {
             score: 0,
-            explanation: str_88(UIStrings108.explanationPointsElsewhere, { url: baseURL.href })
+            explanation: str_91(UIStrings112.explanationPointsElsewhere, { url: baseURL.href })
           };
         }
         if (canonicalURL.origin === baseURL.origin && canonicalURL.pathname === "/" && baseURL.pathname !== "/") {
           return {
             score: 0,
-            explanation: str_88(UIStrings108.explanationRoot)
+            explanation: str_91(UIStrings112.explanationRoot)
           };
         }
       }
@@ -49566,10 +50134,10 @@ var init_canonical = __esm({
 // core/audits/seo/crawlable-anchors.js
 var crawlable_anchors_exports = {};
 __export(crawlable_anchors_exports, {
-  UIStrings: () => UIStrings109,
+  UIStrings: () => UIStrings113,
   default: () => crawlable_anchors_default
 });
-var UIStrings109, hrefAssociatedAttributes, str_89, CrawlableAnchors, crawlable_anchors_default;
+var UIStrings113, hrefAssociatedAttributes, str_92, CrawlableAnchors, crawlable_anchors_default;
 var init_crawlable_anchors = __esm({
   "core/audits/seo/crawlable-anchors.js"() {
     "use strict";
@@ -49581,7 +50149,7 @@ var init_crawlable_anchors = __esm({
      * Copyright 2020 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings109 = {
+    UIStrings113 = {
       /** Title of a Lighthouse audit that provides detail on whether links have potentially-crawlable href attributes. This descriptive title is shown when all links on the page are potentially-crawlable. */
       title: "Links are crawlable",
       /** Descriptive title of a Lighthouse audit that provides detail on whether links have potentially-crawlable href attributes. This descriptive title is shown when there are href attributes which are not crawlable by search engines. */
@@ -49600,7 +50168,7 @@ var init_crawlable_anchors = __esm({
       "type",
       "referrerpolicy"
     ];
-    str_89 = createIcuMessageFn({ url: "core/audits/seo/crawlable-anchors.js" }.url, UIStrings109);
+    str_92 = createIcuMessageFn({ url: "core/audits/seo/crawlable-anchors.js" }.url, UIStrings113);
     CrawlableAnchors = class extends Audit {
       static {
         __name(this, "CrawlableAnchors");
@@ -49611,9 +50179,9 @@ var init_crawlable_anchors = __esm({
       static get meta() {
         return {
           id: "crawlable-anchors",
-          title: str_89(UIStrings109.title),
-          failureTitle: str_89(UIStrings109.failureTitle),
-          description: str_89(UIStrings109.description),
+          title: str_92(UIStrings113.title),
+          failureTitle: str_92(UIStrings113.failureTitle),
+          description: str_92(UIStrings113.description),
           requiredArtifacts: ["AnchorElements", "URL"]
         };
       }
@@ -49654,7 +50222,7 @@ var init_crawlable_anchors = __esm({
         const headings = [{
           key: "node",
           valueType: "node",
-          label: str_89(UIStrings109.columnFailingLink)
+          label: str_92(UIStrings113.columnFailingLink)
         }];
         const itemsToDisplay = failingAnchors.map((anchor) => {
           return {
@@ -49736,7 +50304,7 @@ var init_valid_langs = __esm({
 // core/audits/seo/hreflang.js
 var hreflang_exports = {};
 __export(hreflang_exports, {
-  UIStrings: () => UIStrings110,
+  UIStrings: () => UIStrings114,
   default: () => hreflang_default
 });
 function isFullyQualified(href) {
@@ -49749,7 +50317,7 @@ function isExpectedLanguageCode(hreflang) {
   const [lang] = hreflang.split("-");
   return isValidLang(lang.toLowerCase());
 }
-var NO_LANGUAGE, UIStrings110, str_90, Hreflang, hreflang_default;
+var NO_LANGUAGE, UIStrings114, str_93, Hreflang, hreflang_default;
 var init_hreflang = __esm({
   "core/audits/seo/hreflang.js"() {
     "use strict";
@@ -49763,7 +50331,7 @@ var init_hreflang = __esm({
      * SPDX-License-Identifier: Apache-2.0
      */
     NO_LANGUAGE = "x-default";
-    UIStrings110 = {
+    UIStrings114 = {
       /** Title of a Lighthouse audit that provides detail on the `hreflang` attribute on a page. This descriptive title is shown when the page's `hreflang` attribute is configured correctly. "hreflang" is an HTML attribute and should not be translated. */
       title: "Document has a valid `hreflang`",
       /** Title of a Lighthouse audit that provides detail on the `hreflang` attribute on a page. This descriptive title is shown when the page's `hreflang` attribute is not valid and needs to be fixed. "hreflang" is an HTML attribute and should not be translated. */
@@ -49775,7 +50343,7 @@ var init_hreflang = __esm({
       /** A failure reason for a Lighthouse audit that flags incorrect use of the `hreflang` attribute on `link` elements. This failure reason is shown when the `href` attribute value is not fully-qualified. */
       notFullyQualified: "Relative href value"
     };
-    str_90 = createIcuMessageFn({ url: "core/audits/seo/hreflang.js" }.url, UIStrings110);
+    str_93 = createIcuMessageFn({ url: "core/audits/seo/hreflang.js" }.url, UIStrings114);
     __name(isFullyQualified, "isFullyQualified");
     __name(isExpectedLanguageCode, "isExpectedLanguageCode");
     Hreflang = class extends Audit {
@@ -49788,9 +50356,9 @@ var init_hreflang = __esm({
       static get meta() {
         return {
           id: "hreflang",
-          title: str_90(UIStrings110.title),
-          failureTitle: str_90(UIStrings110.failureTitle),
-          description: str_90(UIStrings110.description),
+          title: str_93(UIStrings114.title),
+          failureTitle: str_93(UIStrings114.failureTitle),
+          description: str_93(UIStrings114.description),
           supportedModes: ["navigation"],
           requiredArtifacts: ["LinkElements", "URL"]
         };
@@ -49811,10 +50379,10 @@ var init_hreflang = __esm({
           const reasons = [];
           let source;
           if (!isExpectedLanguageCode(link.hreflang)) {
-            reasons.push(str_90(UIStrings110.unexpectedLanguage));
+            reasons.push(str_93(UIStrings114.unexpectedLanguage));
           }
           if (!isFullyQualified(link.hrefRaw.toLowerCase())) {
-            reasons.push(str_90(UIStrings110.notFullyQualified));
+            reasons.push(str_93(UIStrings114.notFullyQualified));
           }
           if (link.source === "head") {
             if (link.node) {
@@ -49863,10 +50431,10 @@ var init_hreflang = __esm({
 // core/audits/seo/http-status-code.js
 var http_status_code_exports = {};
 __export(http_status_code_exports, {
-  UIStrings: () => UIStrings111,
+  UIStrings: () => UIStrings115,
   default: () => http_status_code_default
 });
-var HTTP_UNSUCCESSFUL_CODE_LOW, HTTP_UNSUCCESSFUL_CODE_HIGH, UIStrings111, str_91, HTTPStatusCode, http_status_code_default;
+var HTTP_UNSUCCESSFUL_CODE_LOW, HTTP_UNSUCCESSFUL_CODE_HIGH, UIStrings115, str_94, HTTPStatusCode, http_status_code_default;
 var init_http_status_code = __esm({
   "core/audits/seo/http-status-code.js"() {
     "use strict";
@@ -49881,7 +50449,7 @@ var init_http_status_code = __esm({
      */
     HTTP_UNSUCCESSFUL_CODE_LOW = 400;
     HTTP_UNSUCCESSFUL_CODE_HIGH = 599;
-    UIStrings111 = {
+    UIStrings115 = {
       /** Title of a Lighthouse audit that provides detail on the HTTP status code a page responds with. This descriptive title is shown when the page has responded with a valid HTTP status code. */
       title: "Page has successful HTTP status code",
       /** Descriptive title of a Lighthouse audit that provides detail on the HTTP status code a page responds with. This descriptive title is shown when the page responds to requests with an HTTP status code that indicates the request was unsuccessful. */
@@ -49889,7 +50457,7 @@ var init_http_status_code = __esm({
       /** Description of a Lighthouse audit that tells the user *why* they need to serve pages with a valid HTTP status code. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Pages with unsuccessful HTTP status codes may not be indexed properly. [Learn more about HTTP status codes](https://developer.chrome.com/docs/lighthouse/seo/http-status-code/)."
     };
-    str_91 = createIcuMessageFn({ url: "core/audits/seo/http-status-code.js" }.url, UIStrings111);
+    str_94 = createIcuMessageFn({ url: "core/audits/seo/http-status-code.js" }.url, UIStrings115);
     HTTPStatusCode = class extends Audit {
       static {
         __name(this, "HTTPStatusCode");
@@ -49900,9 +50468,9 @@ var init_http_status_code = __esm({
       static get meta() {
         return {
           id: "http-status-code",
-          title: str_91(UIStrings111.title),
-          failureTitle: str_91(UIStrings111.failureTitle),
-          description: str_91(UIStrings111.description),
+          title: str_94(UIStrings115.title),
+          failureTitle: str_94(UIStrings115.failureTitle),
+          description: str_94(UIStrings115.description),
           requiredArtifacts: ["DevtoolsLog", "URL", "GatherContext"],
           supportedModes: ["navigation"]
         };
@@ -50177,7 +50745,7 @@ var require_robots_parser = __commonJS({
 // core/audits/seo/is-crawlable.js
 var is_crawlable_exports = {};
 __export(is_crawlable_exports, {
-  UIStrings: () => UIStrings112,
+  UIStrings: () => UIStrings116,
   default: () => is_crawlable_default
 });
 function isUnavailable(directive) {
@@ -50197,7 +50765,7 @@ function getUserAgentFromHeaderDirectives(directives) {
     return parts[1];
   }
 }
-var import_robots_parser, BOT_USER_AGENTS, BLOCKLIST, ROBOTS_HEADER, UNAVAILABLE_AFTER, UIStrings112, str_92, IsCrawlable, is_crawlable_default;
+var import_robots_parser, BOT_USER_AGENTS, BLOCKLIST, ROBOTS_HEADER, UNAVAILABLE_AFTER, UIStrings116, str_95, IsCrawlable, is_crawlable_default;
 var init_is_crawlable = __esm({
   "core/audits/seo/is-crawlable.js"() {
     "use strict";
@@ -50224,7 +50792,7 @@ var init_is_crawlable = __esm({
     ]);
     ROBOTS_HEADER = "x-robots-tag";
     UNAVAILABLE_AFTER = "unavailable_after";
-    UIStrings112 = {
+    UIStrings116 = {
       /** Title of a Lighthouse audit that provides detail on if search-engine crawlers are blocked from indexing the page. This title is shown when the page is not blocked from indexing and can be crawled. */
       title: "Page isn’t blocked from indexing",
       /** Title of a Lighthouse audit that provides detail on if search-engine crawlers are blocked from indexing the page. This title is shown when the page has been configured to block indexing and therefore cannot be indexed by search engines. */
@@ -50232,7 +50800,7 @@ var init_is_crawlable = __esm({
       /** Description of a Lighthouse audit that tells the user *why* allowing search-engine crawling of their page is beneficial. This is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Search engines are unable to include your pages in search results if they don't have permission to crawl them. [Learn more about crawler directives](https://developer.chrome.com/docs/lighthouse/seo/is-crawlable/)."
     };
-    str_92 = createIcuMessageFn({ url: "core/audits/seo/is-crawlable.js" }.url, UIStrings112);
+    str_95 = createIcuMessageFn({ url: "core/audits/seo/is-crawlable.js" }.url, UIStrings116);
     __name(isUnavailable, "isUnavailable");
     __name(hasBlockingDirective, "hasBlockingDirective");
     __name(getUserAgentFromHeaderDirectives, "getUserAgentFromHeaderDirectives");
@@ -50246,9 +50814,9 @@ var init_is_crawlable = __esm({
       static get meta() {
         return {
           id: "is-crawlable",
-          title: str_92(UIStrings112.title),
-          failureTitle: str_92(UIStrings112.failureTitle),
-          description: str_92(UIStrings112.description),
+          title: str_95(UIStrings116.title),
+          failureTitle: str_95(UIStrings116.failureTitle),
+          description: str_95(UIStrings116.description),
           supportedModes: ["navigation"],
           requiredArtifacts: ["MetaElements", "RobotsTxt", "URL", "DevtoolsLog"]
         };
@@ -50365,10 +50933,10 @@ var init_is_crawlable = __esm({
 // core/audits/seo/link-text.js
 var link_text_exports = {};
 __export(link_text_exports, {
-  UIStrings: () => UIStrings113,
+  UIStrings: () => UIStrings117,
   default: () => link_text_default
 });
-var nonDescriptiveLinkTexts, UIStrings113, str_93, LinkText, link_text_default;
+var nonDescriptiveLinkTexts, UIStrings117, str_96, LinkText, link_text_default;
 var init_link_text = __esm({
   "core/audits/seo/link-text.js"() {
     "use strict";
@@ -50497,7 +51065,7 @@ var init_link_text = __esm({
         "شروع"
       ])
     };
-    UIStrings113 = {
+    UIStrings117 = {
       /** Title of a Lighthouse audit that tests if each link on a page contains a sufficient description of what a user will find when they click it. Generic, non-descriptive text like "click here" doesn't give an indication of what the link leads to. This descriptive title is shown when all links on the page have sufficient textual descriptions. */
       title: "Links have descriptive text",
       /** Title of a Lighthouse audit that tests if each link on a page contains a sufficient description of what a user will find when they click it. Generic, non-descriptive text like "click here" doesn't give an indication of what the link leads to. This descriptive title is shown when one or more links on the page contain generic, non-descriptive text. */
@@ -50510,7 +51078,7 @@ var init_link_text = __esm({
     other {# links found}
     }`
     };
-    str_93 = createIcuMessageFn({ url: "core/audits/seo/link-text.js" }.url, UIStrings113);
+    str_96 = createIcuMessageFn({ url: "core/audits/seo/link-text.js" }.url, UIStrings117);
     LinkText = class extends Audit {
       static {
         __name(this, "LinkText");
@@ -50521,9 +51089,9 @@ var init_link_text = __esm({
       static get meta() {
         return {
           id: "link-text",
-          title: str_93(UIStrings113.title),
-          failureTitle: str_93(UIStrings113.failureTitle),
-          description: str_93(UIStrings113.description),
+          title: str_96(UIStrings117.title),
+          failureTitle: str_96(UIStrings117.failureTitle),
+          description: str_96(UIStrings117.description),
           requiredArtifacts: ["URL", "AnchorElements"]
         };
       }
@@ -50570,7 +51138,7 @@ var init_link_text = __esm({
         const details = Audit.makeTableDetails(headings, failingLinks);
         let displayValue;
         if (failingLinks.length) {
-          displayValue = str_93(UIStrings113.displayValue, { itemCount: failingLinks.length });
+          displayValue = str_96(UIStrings117.displayValue, { itemCount: failingLinks.length });
         }
         return {
           score: Number(failingLinks.length === 0),
@@ -50586,10 +51154,10 @@ var init_link_text = __esm({
 // core/audits/seo/manual/structured-data.js
 var structured_data_exports = {};
 __export(structured_data_exports, {
-  UIStrings: () => UIStrings114,
+  UIStrings: () => UIStrings118,
   default: () => structured_data_default
 });
-var UIStrings114, str_94, StructuredData, structured_data_default;
+var UIStrings118, str_97, StructuredData, structured_data_default;
 var init_structured_data = __esm({
   "core/audits/seo/manual/structured-data.js"() {
     "use strict";
@@ -50601,13 +51169,13 @@ var init_structured_data = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings114 = {
+    UIStrings118 = {
       /** Description of a Lighthouse audit that provides detail on the structured data in a page. "Structured data" is a standardized data format on a page that helps a search engine categorize and understand its contents. This description is displayed after a user expands the section to see more. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
       description: "Run the [Structured Data Testing Tool](https://developers.google.com/search/docs/appearance/structured-data/) to validate structured data. [Learn more about Structured Data](https://developer.chrome.com/docs/lighthouse/seo/structured-data/).",
       /** Title of a Lighthouse audit that prompts users to manually check their page for valid structured data. "Structured data" is a standardized data format on a page that helps a search engine categorize and understand its contents. */
       title: "Structured data is valid"
     };
-    str_94 = createIcuMessageFn({ url: "core/audits/seo/manual/structured-data.js" }.url, UIStrings114);
+    str_97 = createIcuMessageFn({ url: "core/audits/seo/manual/structured-data.js" }.url, UIStrings118);
     StructuredData = class extends manual_audit_default {
       static {
         __name(this, "StructuredData");
@@ -50618,8 +51186,8 @@ var init_structured_data = __esm({
       static get meta() {
         return Object.assign({
           id: "structured-data",
-          description: str_94(UIStrings114.description),
-          title: str_94(UIStrings114.title)
+          description: str_97(UIStrings118.description),
+          title: str_97(UIStrings118.title)
         }, super.partialMeta);
       }
     };
@@ -50630,10 +51198,10 @@ var init_structured_data = __esm({
 // core/audits/seo/meta-description.js
 var meta_description_exports = {};
 __export(meta_description_exports, {
-  UIStrings: () => UIStrings115,
+  UIStrings: () => UIStrings119,
   default: () => meta_description_default
 });
-var UIStrings115, str_95, Description, meta_description_default;
+var UIStrings119, str_98, Description, meta_description_default;
 var init_meta_description = __esm({
   "core/audits/seo/meta-description.js"() {
     "use strict";
@@ -50645,7 +51213,7 @@ var init_meta_description = __esm({
      * Copyright 2017 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings115 = {
+    UIStrings119 = {
       /** Title of a Lighthouse audit that provides detail on the web page's document meta description. This descriptive title is shown when the document has a meta description. "meta" should be left untranslated because it refers to an HTML element. */
       title: "Document has a meta description",
       /** Title of a Lighthouse audit that provides detail on the web page's document meta description. This descriptive title is shown when the document does not have a meta description. "meta" should be left untranslated because it refers to an HTML element. */
@@ -50655,7 +51223,7 @@ var init_meta_description = __esm({
       /** Explanatory message stating that there was a failure in an audit caused by the page's meta description text being empty. */
       explanation: "Description text is empty."
     };
-    str_95 = createIcuMessageFn({ url: "core/audits/seo/meta-description.js" }.url, UIStrings115);
+    str_98 = createIcuMessageFn({ url: "core/audits/seo/meta-description.js" }.url, UIStrings119);
     Description = class extends Audit {
       static {
         __name(this, "Description");
@@ -50666,9 +51234,9 @@ var init_meta_description = __esm({
       static get meta() {
         return {
           id: "meta-description",
-          title: str_95(UIStrings115.title),
-          failureTitle: str_95(UIStrings115.failureTitle),
-          description: str_95(UIStrings115.description),
+          title: str_98(UIStrings119.title),
+          failureTitle: str_98(UIStrings119.failureTitle),
+          description: str_98(UIStrings119.description),
           requiredArtifacts: ["MetaElements"]
         };
       }
@@ -50687,7 +51255,7 @@ var init_meta_description = __esm({
         if (description.trim().length === 0) {
           return {
             score: 0,
-            explanation: str_95(UIStrings115.explanation)
+            explanation: str_98(UIStrings119.explanation)
           };
         }
         return {
@@ -50702,7 +51270,7 @@ var init_meta_description = __esm({
 // core/audits/seo/robots-txt.js
 var robots_txt_exports2 = {};
 __export(robots_txt_exports2, {
-  UIStrings: () => UIStrings116,
+  UIStrings: () => UIStrings120,
   default: () => robots_txt_default2
 });
 function verifyDirective(directiveName, directiveValue) {
@@ -50783,7 +51351,7 @@ function validateRobots(content) {
   });
   return errors;
 }
-var HTTP_CLIENT_ERROR_CODE_LOW, HTTP_SERVER_ERROR_CODE_LOW, DIRECTIVE_SITEMAP, DIRECTIVE_USER_AGENT, DIRECTIVE_ALLOW, DIRECTIVE_DISALLOW, DIRECTIVES_GROUP_MEMBERS, DIRECTIVE_SAFELIST, SITEMAP_VALID_PROTOCOLS, UIStrings116, str_96, RobotsTxt2, robots_txt_default2;
+var HTTP_CLIENT_ERROR_CODE_LOW, HTTP_SERVER_ERROR_CODE_LOW, DIRECTIVE_SITEMAP, DIRECTIVE_USER_AGENT, DIRECTIVE_ALLOW, DIRECTIVE_DISALLOW, DIRECTIVES_GROUP_MEMBERS, DIRECTIVE_SAFELIST, SITEMAP_VALID_PROTOCOLS, UIStrings120, str_99, RobotsTxt2, robots_txt_default2;
 var init_robots_txt2 = __esm({
   "core/audits/seo/robots-txt.js"() {
     "use strict";
@@ -50821,7 +51389,7 @@ var init_robots_txt2 = __esm({
       // not officially supported, but used in the wild
     ]);
     SITEMAP_VALID_PROTOCOLS = /* @__PURE__ */ new Set(["https:", "http:", "ftp:"]);
-    UIStrings116 = {
+    UIStrings120 = {
       /** Title of a Lighthouse audit that provides detail on the site's robots.txt file. Note: "robots.txt" is a canonical filename and should not be translated. This descriptive title is shown when the robots.txt file is present and configured correctly. */
       title: "robots.txt is valid",
       /** Title of a Lighthouse audit that provides detail on the site's robots.txt file. Note: "robots.txt" is a canonical filename and should not be translated. This descriptive title is shown when the robots.txt file is misconfigured, which makes the page hard or impossible to scan via web crawler. */
@@ -50841,7 +51409,7 @@ var init_robots_txt2 = __esm({
       /** Explanatory message stating that there was a failure in an audit caused by Lighthouse not being able to download the robots.txt file for the site.  Note: "robots.txt" is a canonical filename and should not be translated. */
       explanation: "Lighthouse was unable to download a robots.txt file"
     };
-    str_96 = createIcuMessageFn({ url: "core/audits/seo/robots-txt.js" }.url, UIStrings116);
+    str_99 = createIcuMessageFn({ url: "core/audits/seo/robots-txt.js" }.url, UIStrings120);
     __name(verifyDirective, "verifyDirective");
     __name(parseLine, "parseLine");
     __name(validateRobots, "validateRobots");
@@ -50855,9 +51423,9 @@ var init_robots_txt2 = __esm({
       static get meta() {
         return {
           id: "robots-txt",
-          title: str_96(UIStrings116.title),
-          failureTitle: str_96(UIStrings116.failureTitle),
-          description: str_96(UIStrings116.description),
+          title: str_99(UIStrings120.title),
+          failureTitle: str_99(UIStrings120.failureTitle),
+          description: str_99(UIStrings120.description),
           requiredArtifacts: ["RobotsTxt"]
         };
       }
@@ -50873,13 +51441,13 @@ var init_robots_txt2 = __esm({
         if (!status) {
           return {
             score: 0,
-            explanation: str_96(UIStrings116.explanation)
+            explanation: str_99(UIStrings120.explanation)
           };
         }
         if (status >= HTTP_SERVER_ERROR_CODE_LOW) {
           return {
             score: 0,
-            displayValue: str_96(UIStrings116.displayValueHttpBadCode, { statusCode: status })
+            displayValue: str_99(UIStrings120.displayValueHttpBadCode, { statusCode: status })
           };
         } else if (status >= HTTP_CLIENT_ERROR_CODE_LOW || content === "") {
           return {
@@ -50899,7 +51467,7 @@ var init_robots_txt2 = __esm({
         const details = Audit.makeTableDetails(headings, validationErrors);
         let displayValue;
         if (validationErrors.length) {
-          displayValue = str_96(UIStrings116.displayValueValidationError, { itemCount: validationErrors.length });
+          displayValue = str_99(UIStrings120.displayValueValidationError, { itemCount: validationErrors.length });
         }
         return {
           score: Number(validationErrors.length === 0),
@@ -50915,10 +51483,10 @@ var init_robots_txt2 = __esm({
 // core/audits/third-party-cookies.js
 var third_party_cookies_exports = {};
 __export(third_party_cookies_exports, {
-  UIStrings: () => UIStrings117,
+  UIStrings: () => UIStrings121,
   default: () => third_party_cookies_default
 });
-var UIStrings117, str_97, ThirdPartyCookies, third_party_cookies_default;
+var UIStrings121, str_100, ThirdPartyCookies, third_party_cookies_default;
 var init_third_party_cookies = __esm({
   "core/audits/third-party-cookies.js"() {
     "use strict";
@@ -50930,7 +51498,7 @@ var init_third_party_cookies = __esm({
      * Copyright 2023 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings117 = {
+    UIStrings121 = {
       /** Title of a Lighthouse audit that provides detail on the use of third party cookies. This descriptive title is shown to users when the page does not use third party cookies. */
       title: "Avoids third-party cookies",
       /** Title of a Lighthouse audit that provides detail on the use of third party cookies. This descriptive title is shown to users when the page uses third party cookies. */
@@ -50943,7 +51511,7 @@ var init_third_party_cookies = __esm({
     other {# cookies found}
     }`
     };
-    str_97 = createIcuMessageFn({ url: "core/audits/third-party-cookies.js" }.url, UIStrings117);
+    str_100 = createIcuMessageFn({ url: "core/audits/third-party-cookies.js" }.url, UIStrings121);
     ThirdPartyCookies = class extends Audit {
       static {
         __name(this, "ThirdPartyCookies");
@@ -50954,9 +51522,9 @@ var init_third_party_cookies = __esm({
       static get meta() {
         return {
           id: "third-party-cookies",
-          title: str_97(UIStrings117.title),
-          failureTitle: str_97(UIStrings117.failureTitle),
-          description: str_97(UIStrings117.description),
+          title: str_100(UIStrings121.title),
+          failureTitle: str_100(UIStrings121.failureTitle),
+          description: str_100(UIStrings121.description),
           requiredArtifacts: ["InspectorIssues"]
         };
       }
@@ -50995,13 +51563,13 @@ var init_third_party_cookies = __esm({
           });
         }
         const headings = [
-          { key: "name", valueType: "text", label: str_97(UIStrings.columnName) },
-          { key: "url", valueType: "url", label: str_97(UIStrings.columnURL) }
+          { key: "name", valueType: "text", label: str_100(UIStrings.columnName) },
+          { key: "url", valueType: "url", label: str_100(UIStrings.columnURL) }
         ];
         const details = Audit.makeTableDetails(headings, items);
         let displayValue;
         if (items.length > 0) {
-          displayValue = str_97(UIStrings117.displayValue, { itemCount: items.length });
+          displayValue = str_100(UIStrings121.displayValue, { itemCount: items.length });
         }
         return {
           score: items.length ? 0 : 1,
@@ -51017,10 +51585,10 @@ var init_third_party_cookies = __esm({
 // core/audits/trusted-types-xss.js
 var trusted_types_xss_exports = {};
 __export(trusted_types_xss_exports, {
-  UIStrings: () => UIStrings118,
+  UIStrings: () => UIStrings122,
   default: () => trusted_types_xss_default
 });
-var import_csp2, UIStrings118, str_98, TrustedTypesXss, trusted_types_xss_default;
+var import_csp2, UIStrings122, str_101, TrustedTypesXss, trusted_types_xss_default;
 var init_trusted_types_xss = __esm({
   "core/audits/trusted-types-xss.js"() {
     "use strict";
@@ -51035,7 +51603,7 @@ var init_trusted_types_xss = __esm({
      * Copyright 2025 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings118 = {
+    UIStrings122 = {
       /** Title of a Lighthouse audit that evaluates whether the set CSP header and Trusted Types directive is mitigating DOM-based XSS. "CSP" stands for "Content-Security-Policy" and should not be translated. "XSS" stands for "Cross Site Scripting" and should not be translated. */
       title: "Mitigate DOM-based XSS with Trusted Types",
       /** Description of a Lighthouse audit that evaluates whether the set CSP header and Trusted Types directive is mitigating DOM-based XSS. This is displayed after a user expands the section to see more. "CSP" stands for "Content-Security-Policy" and should not be translated. "XSS" stands for "Cross Site Scripting" and should not be translated. No character length limits. The last sentence starting with 'Learn' becomes link text to additional documentation. */
@@ -51045,7 +51613,7 @@ var init_trusted_types_xss = __esm({
       /** Label for a column in a data table; entries will be the severity of an issue with the page's CSP and Trusted Types directive. */
       columnSeverity: "Severity"
     };
-    str_98 = createIcuMessageFn({ url: "core/audits/trusted-types-xss.js" }.url, UIStrings118);
+    str_101 = createIcuMessageFn({ url: "core/audits/trusted-types-xss.js" }.url, UIStrings122);
     TrustedTypesXss = class extends Audit {
       static {
         __name(this, "TrustedTypesXss");
@@ -51057,8 +51625,8 @@ var init_trusted_types_xss = __esm({
         return {
           id: "trusted-types-xss",
           scoreDisplayMode: Audit.SCORING_MODES.INFORMATIVE,
-          title: str_98(UIStrings118.title),
-          description: str_98(UIStrings118.description),
+          title: str_101(UIStrings122.title),
+          description: str_101(UIStrings122.description),
           requiredArtifacts: ["DevtoolsLog", "MetaElements", "URL"],
           supportedModes: ["navigation"]
         };
@@ -51109,8 +51677,8 @@ var init_trusted_types_xss = __esm({
         return {
           score: 0,
           results: [{
-            severity: str_98(UIStrings.itemSeverityHigh),
-            description: str_98(UIStrings118.noTrustedTypesToMitigateXss)
+            severity: str_101(UIStrings.itemSeverityHigh),
+            description: str_101(UIStrings122.noTrustedTypesToMitigateXss)
           }]
         };
       }
@@ -51124,8 +51692,8 @@ var init_trusted_types_xss = __esm({
         const { score, results } = this.constructResults(cspHeaders, cspMetaTags);
         const headings = [
           /* eslint-disable max-len */
-          { key: "description", valueType: "text", subItemsHeading: { key: "description" }, label: str_98(UIStrings.columnDescription) },
-          { key: "severity", valueType: "text", subItemsHeading: { key: "severity" }, label: str_98(UIStrings118.columnSeverity) }
+          { key: "description", valueType: "text", subItemsHeading: { key: "description" }, label: str_101(UIStrings.columnDescription) },
+          { key: "severity", valueType: "text", subItemsHeading: { key: "severity" }, label: str_101(UIStrings122.columnSeverity) }
           /* eslint-enable max-len */
         ];
         const details = Audit.makeTableDetails(headings, results);
@@ -51170,10 +51738,10 @@ var init_entity_classification = __esm({
 // core/audits/valid-source-maps.js
 var valid_source_maps_exports = {};
 __export(valid_source_maps_exports, {
-  UIStrings: () => UIStrings119,
+  UIStrings: () => UIStrings123,
   default: () => valid_source_maps_default
 });
-var UIStrings119, str_99, LARGE_JS_BYTE_THRESHOLD, ValidSourceMaps, valid_source_maps_default;
+var UIStrings123, str_102, LARGE_JS_BYTE_THRESHOLD, ValidSourceMaps, valid_source_maps_default;
 var init_valid_source_maps = __esm({
   "core/audits/valid-source-maps.js"() {
     "use strict";
@@ -51187,7 +51755,7 @@ var init_valid_source_maps = __esm({
      * @license Copyright 2020 Google LLC
      * SPDX-License-Identifier: Apache-2.0
      */
-    UIStrings119 = {
+    UIStrings123 = {
       /** Title of a Lighthouse audit that provides detail on HTTP to HTTPS redirects. This descriptive title is shown to users when HTTP traffic is redirected to HTTPS. */
       title: "Page has valid source maps",
       /** Title of a Lighthouse audit that provides detail on HTTP to HTTPS redirects. This descriptive title is shown to users when HTTP traffic is not redirected to HTTPS. */
@@ -51204,7 +51772,7 @@ var init_valid_source_maps = __esm({
     other {Warning: missing # items in \`.sourcesContent\`}
     }`
     };
-    str_99 = createIcuMessageFn({ url: "core/audits/valid-source-maps.js" }.url, UIStrings119);
+    str_102 = createIcuMessageFn({ url: "core/audits/valid-source-maps.js" }.url, UIStrings123);
     LARGE_JS_BYTE_THRESHOLD = 500 * 1024;
     ValidSourceMaps = class extends Audit {
       static {
@@ -51216,9 +51784,9 @@ var init_valid_source_maps = __esm({
       static get meta() {
         return {
           id: "valid-source-maps",
-          title: str_99(UIStrings119.title),
-          failureTitle: str_99(UIStrings119.failureTitle),
-          description: str_99(UIStrings119.description),
+          title: str_102(UIStrings123.title),
+          failureTitle: str_102(UIStrings123.failureTitle),
+          description: str_102(UIStrings123.description),
           requiredArtifacts: ["Scripts", "SourceMaps", "URL", "DevtoolsLog"]
         };
       }
@@ -51257,7 +51825,7 @@ var init_valid_source_maps = __esm({
           if (isLargeFirstParty && (!sourceMap || !sourceMap.map)) {
             missingMapsForLargeFirstPartyFile = true;
             isMissingMapForLargeFirstPartyScriptUrl.add(script.url);
-            errors.push({ error: str_99(UIStrings119.missingSourceMapErrorMessage) });
+            errors.push({ error: str_102(UIStrings123.missingSourceMapErrorMessage) });
           }
           if (sourceMap && !sourceMap.map) {
             errors.push({ error: sourceMap.errorMessage });
@@ -51269,8 +51837,8 @@ var init_valid_source_maps = __esm({
               if (sourcesContent.length < i || !sourcesContent[i]) missingSourcesContentCount += 1;
             }
             if (missingSourcesContentCount > 0) {
-              errors.push({ error: str_99(
-                UIStrings119.missingSourceMapItemsWarningMesssage,
+              errors.push({ error: str_102(
+                UIStrings123.missingSourceMapItemsWarningMesssage,
                 { missingItems: missingSourcesContentCount }
               ) });
             }
@@ -51294,9 +51862,9 @@ var init_valid_source_maps = __esm({
             key: "scriptUrl",
             valueType: "url",
             subItemsHeading: { key: "error" },
-            label: str_99(UIStrings.columnURL)
+            label: str_102(UIStrings.columnURL)
           },
-          { key: "sourceMapUrl", valueType: "url", label: str_99(UIStrings119.columnMapURL) }
+          { key: "sourceMapUrl", valueType: "url", label: str_102(UIStrings123.columnMapURL) }
         ];
         results.sort((a, b) => {
           const missingMapA = isMissingMapForLargeFirstPartyScriptUrl.has(a.scriptUrl);
@@ -51390,14 +51958,14 @@ var init_trace_engine_result = __esm({
   }
 });
 
-// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/bf-cache-failures.js
-var bf_cache_failures_exports = {};
-__export(bf_cache_failures_exports, {
-  default: () => bf_cache_failures_default
+// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/agentic/llms-txt.js
+var llms_txt_exports = {};
+__export(llms_txt_exports, {
+  default: () => llms_txt_default
 });
-var ShimGatherer, bf_cache_failures_default;
-var init_bf_cache_failures = __esm({
-  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/bf-cache-failures.js"() {
+var ShimGatherer, llms_txt_default;
+var init_llms_txt = __esm({
+  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/agentic/llms-txt.js"() {
     init_process_global();
     init_base_gatherer();
     ShimGatherer = class extends base_gatherer_default {
@@ -51412,18 +51980,18 @@ var init_bf_cache_failures = __esm({
         return void 0;
       }
     };
-    bf_cache_failures_default = ShimGatherer;
+    llms_txt_default = ShimGatherer;
   }
 });
 
-// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/css-usage.js
-var css_usage_exports = {};
-__export(css_usage_exports, {
-  default: () => css_usage_default
+// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/bf-cache-failures.js
+var bf_cache_failures_exports = {};
+__export(bf_cache_failures_exports, {
+  default: () => bf_cache_failures_default
 });
-var ShimGatherer2, css_usage_default;
-var init_css_usage = __esm({
-  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/css-usage.js"() {
+var ShimGatherer2, bf_cache_failures_default;
+var init_bf_cache_failures = __esm({
+  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/bf-cache-failures.js"() {
     init_process_global();
     init_base_gatherer();
     ShimGatherer2 = class extends base_gatherer_default {
@@ -51438,18 +52006,18 @@ var init_css_usage = __esm({
         return void 0;
       }
     };
-    css_usage_default = ShimGatherer2;
+    bf_cache_failures_default = ShimGatherer2;
   }
 });
 
-// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/full-page-screenshot.js
-var full_page_screenshot_exports = {};
-__export(full_page_screenshot_exports, {
-  default: () => full_page_screenshot_default
+// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/css-usage.js
+var css_usage_exports = {};
+__export(css_usage_exports, {
+  default: () => css_usage_default
 });
-var ShimGatherer3, full_page_screenshot_default;
-var init_full_page_screenshot = __esm({
-  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/full-page-screenshot.js"() {
+var ShimGatherer3, css_usage_default;
+var init_css_usage = __esm({
+  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/css-usage.js"() {
     init_process_global();
     init_base_gatherer();
     ShimGatherer3 = class extends base_gatherer_default {
@@ -51464,18 +52032,18 @@ var init_full_page_screenshot = __esm({
         return void 0;
       }
     };
-    full_page_screenshot_default = ShimGatherer3;
+    css_usage_default = ShimGatherer3;
   }
 });
 
-// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/iframe-elements.js
-var iframe_elements_exports = {};
-__export(iframe_elements_exports, {
-  default: () => iframe_elements_default
+// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/full-page-screenshot.js
+var full_page_screenshot_exports = {};
+__export(full_page_screenshot_exports, {
+  default: () => full_page_screenshot_default
 });
-var ShimGatherer4, iframe_elements_default;
-var init_iframe_elements = __esm({
-  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/iframe-elements.js"() {
+var ShimGatherer4, full_page_screenshot_default;
+var init_full_page_screenshot = __esm({
+  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/full-page-screenshot.js"() {
     init_process_global();
     init_base_gatherer();
     ShimGatherer4 = class extends base_gatherer_default {
@@ -51490,18 +52058,18 @@ var init_iframe_elements = __esm({
         return void 0;
       }
     };
-    iframe_elements_default = ShimGatherer4;
+    full_page_screenshot_default = ShimGatherer4;
   }
 });
 
-// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/js-usage.js
-var js_usage_exports = {};
-__export(js_usage_exports, {
-  default: () => js_usage_default
+// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/iframe-elements.js
+var iframe_elements_exports = {};
+__export(iframe_elements_exports, {
+  default: () => iframe_elements_default
 });
-var ShimGatherer5, js_usage_default;
-var init_js_usage = __esm({
-  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/js-usage.js"() {
+var ShimGatherer5, iframe_elements_default;
+var init_iframe_elements = __esm({
+  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/iframe-elements.js"() {
     init_process_global();
     init_base_gatherer();
     ShimGatherer5 = class extends base_gatherer_default {
@@ -51516,18 +52084,18 @@ var init_js_usage = __esm({
         return void 0;
       }
     };
-    js_usage_default = ShimGatherer5;
+    iframe_elements_default = ShimGatherer5;
   }
 });
 
-// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/network-user-agent.js
-var network_user_agent_exports = {};
-__export(network_user_agent_exports, {
-  default: () => network_user_agent_default
+// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/js-usage.js
+var js_usage_exports = {};
+__export(js_usage_exports, {
+  default: () => js_usage_default
 });
-var ShimGatherer6, network_user_agent_default;
-var init_network_user_agent = __esm({
-  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/network-user-agent.js"() {
+var ShimGatherer6, js_usage_default;
+var init_js_usage = __esm({
+  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/js-usage.js"() {
     init_process_global();
     init_base_gatherer();
     ShimGatherer6 = class extends base_gatherer_default {
@@ -51542,18 +52110,18 @@ var init_network_user_agent = __esm({
         return void 0;
       }
     };
-    network_user_agent_default = ShimGatherer6;
+    js_usage_default = ShimGatherer6;
   }
 });
 
-// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/stylesheets.js
-var stylesheets_exports = {};
-__export(stylesheets_exports, {
-  default: () => stylesheets_default
+// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/network-user-agent.js
+var network_user_agent_exports = {};
+__export(network_user_agent_exports, {
+  default: () => network_user_agent_default
 });
-var ShimGatherer7, stylesheets_default;
-var init_stylesheets = __esm({
-  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/stylesheets.js"() {
+var ShimGatherer7, network_user_agent_default;
+var init_network_user_agent = __esm({
+  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/network-user-agent.js"() {
     init_process_global();
     init_base_gatherer();
     ShimGatherer7 = class extends base_gatherer_default {
@@ -51568,18 +52136,18 @@ var init_stylesheets = __esm({
         return void 0;
       }
     };
-    stylesheets_default = ShimGatherer7;
+    network_user_agent_default = ShimGatherer7;
   }
 });
 
-// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/trace-elements.js
-var trace_elements_exports = {};
-__export(trace_elements_exports, {
-  default: () => trace_elements_default
+// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/stylesheets.js
+var stylesheets_exports = {};
+__export(stylesheets_exports, {
+  default: () => stylesheets_default
 });
-var ShimGatherer8, trace_elements_default;
-var init_trace_elements = __esm({
-  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/trace-elements.js"() {
+var ShimGatherer8, stylesheets_default;
+var init_stylesheets = __esm({
+  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/stylesheets.js"() {
     init_process_global();
     init_base_gatherer();
     ShimGatherer8 = class extends base_gatherer_default {
@@ -51594,7 +52162,90 @@ var init_trace_elements = __esm({
         return void 0;
       }
     };
-    trace_elements_default = ShimGatherer8;
+    stylesheets_default = ShimGatherer8;
+  }
+});
+
+// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/trace-elements.js
+var trace_elements_exports = {};
+__export(trace_elements_exports, {
+  default: () => trace_elements_default
+});
+var ShimGatherer9, trace_elements_default;
+var init_trace_elements = __esm({
+  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/trace-elements.js"() {
+    init_process_global();
+    init_base_gatherer();
+    ShimGatherer9 = class extends base_gatherer_default {
+      static {
+        __name(this, "ShimGatherer");
+      }
+      meta = { supportedModes: ["navigation", "timespan", "snapshot"] };
+      static getDefaultTraceCategories() {
+        return [];
+      }
+      getArtifact() {
+        return void 0;
+      }
+    };
+    trace_elements_default = ShimGatherer9;
+  }
+});
+
+// lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/webmcp-tools.js
+var webmcp_tools_exports = {};
+__export(webmcp_tools_exports, {
+  default: () => webmcp_tools_default
+});
+var ShimGatherer10, webmcp_tools_default;
+var init_webmcp_tools = __esm({
+  "lh-gatherer-shim:/Users/alexrudenko/src/lighthouse/core/gather/gatherers/webmcp-tools.js"() {
+    init_process_global();
+    init_base_gatherer();
+    ShimGatherer10 = class extends base_gatherer_default {
+      static {
+        __name(this, "ShimGatherer");
+      }
+      meta = { supportedModes: ["navigation", "timespan", "snapshot"] };
+      static getDefaultTraceCategories() {
+        return [];
+      }
+      getArtifact() {
+        return void 0;
+      }
+    };
+    webmcp_tools_default = ShimGatherer10;
+  }
+});
+
+// lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/agentic/llms-txt.js
+var llms_txt_exports2 = {};
+__export(llms_txt_exports2, {
+  default: () => llms_txt_default2
+});
+var ShimAudit, llms_txt_default2;
+var init_llms_txt2 = __esm({
+  "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/agentic/llms-txt.js"() {
+    init_process_global();
+    init_audit();
+    ShimAudit = class extends Audit {
+      static {
+        __name(this, "ShimAudit");
+      }
+      static get meta() {
+        return {
+          id: "llms-txt",
+          title: "Shim Audit",
+          description: "This audit was filtered out and is not available in this bundle.",
+          scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE,
+          requiredArtifacts: []
+        };
+      }
+      static audit() {
+        return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
+      }
+    };
+    llms_txt_default2 = ShimAudit;
   }
 });
 
@@ -51603,12 +52254,12 @@ var autocomplete_exports = {};
 __export(autocomplete_exports, {
   default: () => autocomplete_default
 });
-var ShimAudit, autocomplete_default;
+var ShimAudit2, autocomplete_default;
 var init_autocomplete = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/autocomplete.js"() {
     init_process_global();
     init_audit();
-    ShimAudit = class extends Audit {
+    ShimAudit2 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51625,7 +52276,7 @@ var init_autocomplete = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    autocomplete_default = ShimAudit;
+    autocomplete_default = ShimAudit2;
   }
 });
 
@@ -51634,12 +52285,12 @@ var bf_cache_exports = {};
 __export(bf_cache_exports, {
   default: () => bf_cache_default
 });
-var ShimAudit2, bf_cache_default;
+var ShimAudit3, bf_cache_default;
 var init_bf_cache = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/bf-cache.js"() {
     init_process_global();
     init_audit();
-    ShimAudit2 = class extends Audit {
+    ShimAudit3 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51656,7 +52307,7 @@ var init_bf_cache = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    bf_cache_default = ShimAudit2;
+    bf_cache_default = ShimAudit3;
   }
 });
 
@@ -51665,12 +52316,12 @@ var bootup_time_exports = {};
 __export(bootup_time_exports, {
   default: () => bootup_time_default
 });
-var ShimAudit3, bootup_time_default;
+var ShimAudit4, bootup_time_default;
 var init_bootup_time = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/bootup-time.js"() {
     init_process_global();
     init_audit();
-    ShimAudit3 = class extends Audit {
+    ShimAudit4 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51687,7 +52338,7 @@ var init_bootup_time = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    bootup_time_default = ShimAudit3;
+    bootup_time_default = ShimAudit4;
   }
 });
 
@@ -51696,12 +52347,12 @@ var total_byte_weight_exports = {};
 __export(total_byte_weight_exports, {
   default: () => total_byte_weight_default
 });
-var ShimAudit4, total_byte_weight_default;
+var ShimAudit5, total_byte_weight_default;
 var init_total_byte_weight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/byte-efficiency/total-byte-weight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit4 = class extends Audit {
+    ShimAudit5 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51718,7 +52369,7 @@ var init_total_byte_weight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    total_byte_weight_default = ShimAudit4;
+    total_byte_weight_default = ShimAudit5;
   }
 });
 
@@ -51727,12 +52378,12 @@ var unminified_css_exports = {};
 __export(unminified_css_exports, {
   default: () => unminified_css_default
 });
-var ShimAudit5, unminified_css_default;
+var ShimAudit6, unminified_css_default;
 var init_unminified_css = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/byte-efficiency/unminified-css.js"() {
     init_process_global();
     init_audit();
-    ShimAudit5 = class extends Audit {
+    ShimAudit6 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51749,7 +52400,7 @@ var init_unminified_css = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    unminified_css_default = ShimAudit5;
+    unminified_css_default = ShimAudit6;
   }
 });
 
@@ -51758,12 +52409,12 @@ var unminified_javascript_exports = {};
 __export(unminified_javascript_exports, {
   default: () => unminified_javascript_default
 });
-var ShimAudit6, unminified_javascript_default;
+var ShimAudit7, unminified_javascript_default;
 var init_unminified_javascript = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/byte-efficiency/unminified-javascript.js"() {
     init_process_global();
     init_audit();
-    ShimAudit6 = class extends Audit {
+    ShimAudit7 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51780,7 +52431,7 @@ var init_unminified_javascript = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    unminified_javascript_default = ShimAudit6;
+    unminified_javascript_default = ShimAudit7;
   }
 });
 
@@ -51789,12 +52440,12 @@ var unused_css_rules_exports = {};
 __export(unused_css_rules_exports, {
   default: () => unused_css_rules_default
 });
-var ShimAudit7, unused_css_rules_default;
+var ShimAudit8, unused_css_rules_default;
 var init_unused_css_rules = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/byte-efficiency/unused-css-rules.js"() {
     init_process_global();
     init_audit();
-    ShimAudit7 = class extends Audit {
+    ShimAudit8 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51811,7 +52462,7 @@ var init_unused_css_rules = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    unused_css_rules_default = ShimAudit7;
+    unused_css_rules_default = ShimAudit8;
   }
 });
 
@@ -51820,12 +52471,12 @@ var unused_javascript_exports = {};
 __export(unused_javascript_exports, {
   default: () => unused_javascript_default
 });
-var ShimAudit8, unused_javascript_default;
+var ShimAudit9, unused_javascript_default;
 var init_unused_javascript = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/byte-efficiency/unused-javascript.js"() {
     init_process_global();
     init_audit();
-    ShimAudit8 = class extends Audit {
+    ShimAudit9 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51842,7 +52493,7 @@ var init_unused_javascript = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    unused_javascript_default = ShimAudit8;
+    unused_javascript_default = ShimAudit9;
   }
 });
 
@@ -51851,12 +52502,12 @@ var diagnostics_exports = {};
 __export(diagnostics_exports, {
   default: () => diagnostics_default
 });
-var ShimAudit9, diagnostics_default;
+var ShimAudit10, diagnostics_default;
 var init_diagnostics = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/diagnostics.js"() {
     init_process_global();
     init_audit();
-    ShimAudit9 = class extends Audit {
+    ShimAudit10 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51873,7 +52524,7 @@ var init_diagnostics = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    diagnostics_default = ShimAudit9;
+    diagnostics_default = ShimAudit10;
   }
 });
 
@@ -51882,12 +52533,12 @@ var final_screenshot_exports = {};
 __export(final_screenshot_exports, {
   default: () => final_screenshot_default
 });
-var ShimAudit10, final_screenshot_default;
+var ShimAudit11, final_screenshot_default;
 var init_final_screenshot = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/final-screenshot.js"() {
     init_process_global();
     init_audit();
-    ShimAudit10 = class extends Audit {
+    ShimAudit11 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51904,7 +52555,7 @@ var init_final_screenshot = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    final_screenshot_default = ShimAudit10;
+    final_screenshot_default = ShimAudit11;
   }
 });
 
@@ -51913,12 +52564,12 @@ var cache_insight_exports = {};
 __export(cache_insight_exports, {
   default: () => cache_insight_default
 });
-var ShimAudit11, cache_insight_default;
+var ShimAudit12, cache_insight_default;
 var init_cache_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/cache-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit11 = class extends Audit {
+    ShimAudit12 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51935,7 +52586,7 @@ var init_cache_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    cache_insight_default = ShimAudit11;
+    cache_insight_default = ShimAudit12;
   }
 });
 
@@ -51944,12 +52595,12 @@ var cls_culprits_insight_exports = {};
 __export(cls_culprits_insight_exports, {
   default: () => cls_culprits_insight_default
 });
-var ShimAudit12, cls_culprits_insight_default;
+var ShimAudit13, cls_culprits_insight_default;
 var init_cls_culprits_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/cls-culprits-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit12 = class extends Audit {
+    ShimAudit13 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51966,7 +52617,7 @@ var init_cls_culprits_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    cls_culprits_insight_default = ShimAudit12;
+    cls_culprits_insight_default = ShimAudit13;
   }
 });
 
@@ -51975,12 +52626,12 @@ var document_latency_insight_exports = {};
 __export(document_latency_insight_exports, {
   default: () => document_latency_insight_default
 });
-var ShimAudit13, document_latency_insight_default;
+var ShimAudit14, document_latency_insight_default;
 var init_document_latency_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/document-latency-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit13 = class extends Audit {
+    ShimAudit14 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -51997,7 +52648,7 @@ var init_document_latency_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    document_latency_insight_default = ShimAudit13;
+    document_latency_insight_default = ShimAudit14;
   }
 });
 
@@ -52006,12 +52657,12 @@ var dom_size_insight_exports = {};
 __export(dom_size_insight_exports, {
   default: () => dom_size_insight_default
 });
-var ShimAudit14, dom_size_insight_default;
+var ShimAudit15, dom_size_insight_default;
 var init_dom_size_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/dom-size-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit14 = class extends Audit {
+    ShimAudit15 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52028,7 +52679,7 @@ var init_dom_size_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    dom_size_insight_default = ShimAudit14;
+    dom_size_insight_default = ShimAudit15;
   }
 });
 
@@ -52037,12 +52688,12 @@ var duplicated_javascript_insight_exports = {};
 __export(duplicated_javascript_insight_exports, {
   default: () => duplicated_javascript_insight_default
 });
-var ShimAudit15, duplicated_javascript_insight_default;
+var ShimAudit16, duplicated_javascript_insight_default;
 var init_duplicated_javascript_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/duplicated-javascript-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit15 = class extends Audit {
+    ShimAudit16 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52059,7 +52710,7 @@ var init_duplicated_javascript_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    duplicated_javascript_insight_default = ShimAudit15;
+    duplicated_javascript_insight_default = ShimAudit16;
   }
 });
 
@@ -52068,12 +52719,12 @@ var font_display_insight_exports = {};
 __export(font_display_insight_exports, {
   default: () => font_display_insight_default
 });
-var ShimAudit16, font_display_insight_default;
+var ShimAudit17, font_display_insight_default;
 var init_font_display_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/font-display-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit16 = class extends Audit {
+    ShimAudit17 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52090,7 +52741,7 @@ var init_font_display_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    font_display_insight_default = ShimAudit16;
+    font_display_insight_default = ShimAudit17;
   }
 });
 
@@ -52099,12 +52750,12 @@ var forced_reflow_insight_exports = {};
 __export(forced_reflow_insight_exports, {
   default: () => forced_reflow_insight_default
 });
-var ShimAudit17, forced_reflow_insight_default;
+var ShimAudit18, forced_reflow_insight_default;
 var init_forced_reflow_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/forced-reflow-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit17 = class extends Audit {
+    ShimAudit18 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52121,7 +52772,7 @@ var init_forced_reflow_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    forced_reflow_insight_default = ShimAudit17;
+    forced_reflow_insight_default = ShimAudit18;
   }
 });
 
@@ -52130,12 +52781,12 @@ var image_delivery_insight_exports = {};
 __export(image_delivery_insight_exports, {
   default: () => image_delivery_insight_default
 });
-var ShimAudit18, image_delivery_insight_default;
+var ShimAudit19, image_delivery_insight_default;
 var init_image_delivery_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/image-delivery-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit18 = class extends Audit {
+    ShimAudit19 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52152,7 +52803,7 @@ var init_image_delivery_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    image_delivery_insight_default = ShimAudit18;
+    image_delivery_insight_default = ShimAudit19;
   }
 });
 
@@ -52161,12 +52812,12 @@ var inp_breakdown_insight_exports = {};
 __export(inp_breakdown_insight_exports, {
   default: () => inp_breakdown_insight_default
 });
-var ShimAudit19, inp_breakdown_insight_default;
+var ShimAudit20, inp_breakdown_insight_default;
 var init_inp_breakdown_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/inp-breakdown-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit19 = class extends Audit {
+    ShimAudit20 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52183,7 +52834,7 @@ var init_inp_breakdown_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    inp_breakdown_insight_default = ShimAudit19;
+    inp_breakdown_insight_default = ShimAudit20;
   }
 });
 
@@ -52192,12 +52843,12 @@ var lcp_breakdown_insight_exports = {};
 __export(lcp_breakdown_insight_exports, {
   default: () => lcp_breakdown_insight_default
 });
-var ShimAudit20, lcp_breakdown_insight_default;
+var ShimAudit21, lcp_breakdown_insight_default;
 var init_lcp_breakdown_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/lcp-breakdown-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit20 = class extends Audit {
+    ShimAudit21 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52214,7 +52865,7 @@ var init_lcp_breakdown_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    lcp_breakdown_insight_default = ShimAudit20;
+    lcp_breakdown_insight_default = ShimAudit21;
   }
 });
 
@@ -52223,12 +52874,12 @@ var lcp_discovery_insight_exports = {};
 __export(lcp_discovery_insight_exports, {
   default: () => lcp_discovery_insight_default
 });
-var ShimAudit21, lcp_discovery_insight_default;
+var ShimAudit22, lcp_discovery_insight_default;
 var init_lcp_discovery_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/lcp-discovery-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit21 = class extends Audit {
+    ShimAudit22 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52245,7 +52896,7 @@ var init_lcp_discovery_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    lcp_discovery_insight_default = ShimAudit21;
+    lcp_discovery_insight_default = ShimAudit22;
   }
 });
 
@@ -52254,12 +52905,12 @@ var legacy_javascript_insight_exports = {};
 __export(legacy_javascript_insight_exports, {
   default: () => legacy_javascript_insight_default
 });
-var ShimAudit22, legacy_javascript_insight_default;
+var ShimAudit23, legacy_javascript_insight_default;
 var init_legacy_javascript_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/legacy-javascript-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit22 = class extends Audit {
+    ShimAudit23 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52276,7 +52927,7 @@ var init_legacy_javascript_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    legacy_javascript_insight_default = ShimAudit22;
+    legacy_javascript_insight_default = ShimAudit23;
   }
 });
 
@@ -52285,12 +52936,12 @@ var modern_http_insight_exports = {};
 __export(modern_http_insight_exports, {
   default: () => modern_http_insight_default
 });
-var ShimAudit23, modern_http_insight_default;
+var ShimAudit24, modern_http_insight_default;
 var init_modern_http_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/modern-http-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit23 = class extends Audit {
+    ShimAudit24 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52307,7 +52958,7 @@ var init_modern_http_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    modern_http_insight_default = ShimAudit23;
+    modern_http_insight_default = ShimAudit24;
   }
 });
 
@@ -52316,12 +52967,12 @@ var network_dependency_tree_insight_exports = {};
 __export(network_dependency_tree_insight_exports, {
   default: () => network_dependency_tree_insight_default
 });
-var ShimAudit24, network_dependency_tree_insight_default;
+var ShimAudit25, network_dependency_tree_insight_default;
 var init_network_dependency_tree_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/network-dependency-tree-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit24 = class extends Audit {
+    ShimAudit25 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52338,7 +52989,7 @@ var init_network_dependency_tree_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    network_dependency_tree_insight_default = ShimAudit24;
+    network_dependency_tree_insight_default = ShimAudit25;
   }
 });
 
@@ -52347,12 +52998,12 @@ var render_blocking_insight_exports = {};
 __export(render_blocking_insight_exports, {
   default: () => render_blocking_insight_default
 });
-var ShimAudit25, render_blocking_insight_default;
+var ShimAudit26, render_blocking_insight_default;
 var init_render_blocking_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/render-blocking-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit25 = class extends Audit {
+    ShimAudit26 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52369,7 +53020,7 @@ var init_render_blocking_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    render_blocking_insight_default = ShimAudit25;
+    render_blocking_insight_default = ShimAudit26;
   }
 });
 
@@ -52378,12 +53029,12 @@ var slow_css_selector_insight_exports = {};
 __export(slow_css_selector_insight_exports, {
   default: () => slow_css_selector_insight_default
 });
-var ShimAudit26, slow_css_selector_insight_default;
+var ShimAudit27, slow_css_selector_insight_default;
 var init_slow_css_selector_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/slow-css-selector-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit26 = class extends Audit {
+    ShimAudit27 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52400,7 +53051,7 @@ var init_slow_css_selector_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    slow_css_selector_insight_default = ShimAudit26;
+    slow_css_selector_insight_default = ShimAudit27;
   }
 });
 
@@ -52409,12 +53060,12 @@ var third_parties_insight_exports = {};
 __export(third_parties_insight_exports, {
   default: () => third_parties_insight_default
 });
-var ShimAudit27, third_parties_insight_default;
+var ShimAudit28, third_parties_insight_default;
 var init_third_parties_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/third-parties-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit27 = class extends Audit {
+    ShimAudit28 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52431,7 +53082,7 @@ var init_third_parties_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    third_parties_insight_default = ShimAudit27;
+    third_parties_insight_default = ShimAudit28;
   }
 });
 
@@ -52440,12 +53091,12 @@ var viewport_insight_exports = {};
 __export(viewport_insight_exports, {
   default: () => viewport_insight_default
 });
-var ShimAudit28, viewport_insight_default;
+var ShimAudit29, viewport_insight_default;
 var init_viewport_insight = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/insights/viewport-insight.js"() {
     init_process_global();
     init_audit();
-    ShimAudit28 = class extends Audit {
+    ShimAudit29 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52462,7 +53113,7 @@ var init_viewport_insight = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    viewport_insight_default = ShimAudit28;
+    viewport_insight_default = ShimAudit29;
   }
 });
 
@@ -52471,12 +53122,12 @@ var layout_shifts_exports = {};
 __export(layout_shifts_exports, {
   default: () => layout_shifts_default
 });
-var ShimAudit29, layout_shifts_default;
+var ShimAudit30, layout_shifts_default;
 var init_layout_shifts = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/layout-shifts.js"() {
     init_process_global();
     init_audit();
-    ShimAudit29 = class extends Audit {
+    ShimAudit30 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52493,7 +53144,7 @@ var init_layout_shifts = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    layout_shifts_default = ShimAudit29;
+    layout_shifts_default = ShimAudit30;
   }
 });
 
@@ -52502,12 +53153,12 @@ var long_tasks_exports = {};
 __export(long_tasks_exports, {
   default: () => long_tasks_default
 });
-var ShimAudit30, long_tasks_default;
+var ShimAudit31, long_tasks_default;
 var init_long_tasks = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/long-tasks.js"() {
     init_process_global();
     init_audit();
-    ShimAudit30 = class extends Audit {
+    ShimAudit31 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52524,7 +53175,7 @@ var init_long_tasks = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    long_tasks_default = ShimAudit30;
+    long_tasks_default = ShimAudit31;
   }
 });
 
@@ -52533,12 +53184,12 @@ var main_thread_tasks_exports = {};
 __export(main_thread_tasks_exports, {
   default: () => main_thread_tasks_default
 });
-var ShimAudit31, main_thread_tasks_default;
+var ShimAudit32, main_thread_tasks_default;
 var init_main_thread_tasks = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/main-thread-tasks.js"() {
     init_process_global();
     init_audit();
-    ShimAudit31 = class extends Audit {
+    ShimAudit32 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52555,7 +53206,7 @@ var init_main_thread_tasks = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    main_thread_tasks_default = ShimAudit31;
+    main_thread_tasks_default = ShimAudit32;
   }
 });
 
@@ -52564,12 +53215,12 @@ var mainthread_work_breakdown_exports = {};
 __export(mainthread_work_breakdown_exports, {
   default: () => mainthread_work_breakdown_default
 });
-var ShimAudit32, mainthread_work_breakdown_default;
+var ShimAudit33, mainthread_work_breakdown_default;
 var init_mainthread_work_breakdown = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/mainthread-work-breakdown.js"() {
     init_process_global();
     init_audit();
-    ShimAudit32 = class extends Audit {
+    ShimAudit33 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52586,7 +53237,7 @@ var init_mainthread_work_breakdown = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    mainthread_work_breakdown_default = ShimAudit32;
+    mainthread_work_breakdown_default = ShimAudit33;
   }
 });
 
@@ -52595,12 +53246,12 @@ var metrics_exports2 = {};
 __export(metrics_exports2, {
   default: () => metrics_default
 });
-var ShimAudit33, metrics_default;
+var ShimAudit34, metrics_default;
 var init_metrics2 = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/metrics.js"() {
     init_process_global();
     init_audit();
-    ShimAudit33 = class extends Audit {
+    ShimAudit34 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52617,7 +53268,7 @@ var init_metrics2 = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    metrics_default = ShimAudit33;
+    metrics_default = ShimAudit34;
   }
 });
 
@@ -52626,12 +53277,12 @@ var cumulative_layout_shift_exports = {};
 __export(cumulative_layout_shift_exports, {
   default: () => cumulative_layout_shift_default
 });
-var ShimAudit34, cumulative_layout_shift_default;
+var ShimAudit35, cumulative_layout_shift_default;
 var init_cumulative_layout_shift = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/metrics/cumulative-layout-shift.js"() {
     init_process_global();
     init_audit();
-    ShimAudit34 = class extends Audit {
+    ShimAudit35 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52648,7 +53299,7 @@ var init_cumulative_layout_shift = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    cumulative_layout_shift_default = ShimAudit34;
+    cumulative_layout_shift_default = ShimAudit35;
   }
 });
 
@@ -52657,12 +53308,12 @@ var first_contentful_paint_exports = {};
 __export(first_contentful_paint_exports, {
   default: () => first_contentful_paint_default
 });
-var ShimAudit35, first_contentful_paint_default;
+var ShimAudit36, first_contentful_paint_default;
 var init_first_contentful_paint = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/metrics/first-contentful-paint.js"() {
     init_process_global();
     init_audit();
-    ShimAudit35 = class extends Audit {
+    ShimAudit36 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52679,7 +53330,7 @@ var init_first_contentful_paint = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    first_contentful_paint_default = ShimAudit35;
+    first_contentful_paint_default = ShimAudit36;
   }
 });
 
@@ -52688,12 +53339,12 @@ var interaction_to_next_paint_exports = {};
 __export(interaction_to_next_paint_exports, {
   default: () => interaction_to_next_paint_default
 });
-var ShimAudit36, interaction_to_next_paint_default;
+var ShimAudit37, interaction_to_next_paint_default;
 var init_interaction_to_next_paint = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/metrics/interaction-to-next-paint.js"() {
     init_process_global();
     init_audit();
-    ShimAudit36 = class extends Audit {
+    ShimAudit37 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52710,7 +53361,7 @@ var init_interaction_to_next_paint = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    interaction_to_next_paint_default = ShimAudit36;
+    interaction_to_next_paint_default = ShimAudit37;
   }
 });
 
@@ -52719,12 +53370,12 @@ var interactive_exports = {};
 __export(interactive_exports, {
   default: () => interactive_default
 });
-var ShimAudit37, interactive_default;
+var ShimAudit38, interactive_default;
 var init_interactive = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/metrics/interactive.js"() {
     init_process_global();
     init_audit();
-    ShimAudit37 = class extends Audit {
+    ShimAudit38 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52741,7 +53392,7 @@ var init_interactive = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    interactive_default = ShimAudit37;
+    interactive_default = ShimAudit38;
   }
 });
 
@@ -52750,12 +53401,12 @@ var largest_contentful_paint_exports = {};
 __export(largest_contentful_paint_exports, {
   default: () => largest_contentful_paint_default
 });
-var ShimAudit38, largest_contentful_paint_default;
+var ShimAudit39, largest_contentful_paint_default;
 var init_largest_contentful_paint = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/metrics/largest-contentful-paint.js"() {
     init_process_global();
     init_audit();
-    ShimAudit38 = class extends Audit {
+    ShimAudit39 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52772,7 +53423,7 @@ var init_largest_contentful_paint = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    largest_contentful_paint_default = ShimAudit38;
+    largest_contentful_paint_default = ShimAudit39;
   }
 });
 
@@ -52781,12 +53432,12 @@ var max_potential_fid_exports = {};
 __export(max_potential_fid_exports, {
   default: () => max_potential_fid_default
 });
-var ShimAudit39, max_potential_fid_default;
+var ShimAudit40, max_potential_fid_default;
 var init_max_potential_fid = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/metrics/max-potential-fid.js"() {
     init_process_global();
     init_audit();
-    ShimAudit39 = class extends Audit {
+    ShimAudit40 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52803,7 +53454,7 @@ var init_max_potential_fid = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    max_potential_fid_default = ShimAudit39;
+    max_potential_fid_default = ShimAudit40;
   }
 });
 
@@ -52812,12 +53463,12 @@ var speed_index_exports = {};
 __export(speed_index_exports, {
   default: () => speed_index_default
 });
-var ShimAudit40, speed_index_default;
+var ShimAudit41, speed_index_default;
 var init_speed_index = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/metrics/speed-index.js"() {
     init_process_global();
     init_audit();
-    ShimAudit40 = class extends Audit {
+    ShimAudit41 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52834,7 +53485,7 @@ var init_speed_index = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    speed_index_default = ShimAudit40;
+    speed_index_default = ShimAudit41;
   }
 });
 
@@ -52843,12 +53494,12 @@ var total_blocking_time_exports = {};
 __export(total_blocking_time_exports, {
   default: () => total_blocking_time_default
 });
-var ShimAudit41, total_blocking_time_default;
+var ShimAudit42, total_blocking_time_default;
 var init_total_blocking_time = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/metrics/total-blocking-time.js"() {
     init_process_global();
     init_audit();
-    ShimAudit41 = class extends Audit {
+    ShimAudit42 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52865,7 +53516,7 @@ var init_total_blocking_time = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    total_blocking_time_default = ShimAudit41;
+    total_blocking_time_default = ShimAudit42;
   }
 });
 
@@ -52874,12 +53525,12 @@ var network_requests_exports = {};
 __export(network_requests_exports, {
   default: () => network_requests_default
 });
-var ShimAudit42, network_requests_default;
+var ShimAudit43, network_requests_default;
 var init_network_requests = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/network-requests.js"() {
     init_process_global();
     init_audit();
-    ShimAudit42 = class extends Audit {
+    ShimAudit43 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52896,7 +53547,7 @@ var init_network_requests = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    network_requests_default = ShimAudit42;
+    network_requests_default = ShimAudit43;
   }
 });
 
@@ -52905,12 +53556,12 @@ var network_rtt_exports = {};
 __export(network_rtt_exports, {
   default: () => network_rtt_default
 });
-var ShimAudit43, network_rtt_default;
+var ShimAudit44, network_rtt_default;
 var init_network_rtt = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/network-rtt.js"() {
     init_process_global();
     init_audit();
-    ShimAudit43 = class extends Audit {
+    ShimAudit44 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52927,7 +53578,7 @@ var init_network_rtt = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    network_rtt_default = ShimAudit43;
+    network_rtt_default = ShimAudit44;
   }
 });
 
@@ -52936,12 +53587,12 @@ var network_server_latency_exports = {};
 __export(network_server_latency_exports, {
   default: () => network_server_latency_default
 });
-var ShimAudit44, network_server_latency_default;
+var ShimAudit45, network_server_latency_default;
 var init_network_server_latency = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/network-server-latency.js"() {
     init_process_global();
     init_audit();
-    ShimAudit44 = class extends Audit {
+    ShimAudit45 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52958,7 +53609,7 @@ var init_network_server_latency = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    network_server_latency_default = ShimAudit44;
+    network_server_latency_default = ShimAudit45;
   }
 });
 
@@ -52967,12 +53618,12 @@ var non_composited_animations_exports = {};
 __export(non_composited_animations_exports, {
   default: () => non_composited_animations_default
 });
-var ShimAudit45, non_composited_animations_default;
+var ShimAudit46, non_composited_animations_default;
 var init_non_composited_animations = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/non-composited-animations.js"() {
     init_process_global();
     init_audit();
-    ShimAudit45 = class extends Audit {
+    ShimAudit46 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -52989,7 +53640,7 @@ var init_non_composited_animations = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    non_composited_animations_default = ShimAudit45;
+    non_composited_animations_default = ShimAudit46;
   }
 });
 
@@ -52998,12 +53649,12 @@ var oopif_iframe_test_audit_exports = {};
 __export(oopif_iframe_test_audit_exports, {
   default: () => oopif_iframe_test_audit_default
 });
-var ShimAudit46, oopif_iframe_test_audit_default;
+var ShimAudit47, oopif_iframe_test_audit_default;
 var init_oopif_iframe_test_audit = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/oopif-iframe-test-audit.js"() {
     init_process_global();
     init_audit();
-    ShimAudit46 = class extends Audit {
+    ShimAudit47 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -53020,7 +53671,7 @@ var init_oopif_iframe_test_audit = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    oopif_iframe_test_audit_default = ShimAudit46;
+    oopif_iframe_test_audit_default = ShimAudit47;
   }
 });
 
@@ -53029,12 +53680,12 @@ var predictive_perf_exports = {};
 __export(predictive_perf_exports, {
   default: () => predictive_perf_default
 });
-var ShimAudit47, predictive_perf_default;
+var ShimAudit48, predictive_perf_default;
 var init_predictive_perf = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/predictive-perf.js"() {
     init_process_global();
     init_audit();
-    ShimAudit47 = class extends Audit {
+    ShimAudit48 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -53051,7 +53702,7 @@ var init_predictive_perf = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    predictive_perf_default = ShimAudit47;
+    predictive_perf_default = ShimAudit48;
   }
 });
 
@@ -53060,12 +53711,12 @@ var redirects_exports = {};
 __export(redirects_exports, {
   default: () => redirects_default
 });
-var ShimAudit48, redirects_default;
+var ShimAudit49, redirects_default;
 var init_redirects = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/redirects.js"() {
     init_process_global();
     init_audit();
-    ShimAudit48 = class extends Audit {
+    ShimAudit49 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -53082,7 +53733,7 @@ var init_redirects = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    redirects_default = ShimAudit48;
+    redirects_default = ShimAudit49;
   }
 });
 
@@ -53091,12 +53742,12 @@ var resource_summary_exports = {};
 __export(resource_summary_exports, {
   default: () => resource_summary_default
 });
-var ShimAudit49, resource_summary_default;
+var ShimAudit50, resource_summary_default;
 var init_resource_summary = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/resource-summary.js"() {
     init_process_global();
     init_audit();
-    ShimAudit49 = class extends Audit {
+    ShimAudit50 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -53113,7 +53764,7 @@ var init_resource_summary = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    resource_summary_default = ShimAudit49;
+    resource_summary_default = ShimAudit50;
   }
 });
 
@@ -53122,12 +53773,12 @@ var screenshot_thumbnails_exports = {};
 __export(screenshot_thumbnails_exports, {
   default: () => screenshot_thumbnails_default
 });
-var ShimAudit50, screenshot_thumbnails_default;
+var ShimAudit51, screenshot_thumbnails_default;
 var init_screenshot_thumbnails = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/screenshot-thumbnails.js"() {
     init_process_global();
     init_audit();
-    ShimAudit50 = class extends Audit {
+    ShimAudit51 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -53144,7 +53795,7 @@ var init_screenshot_thumbnails = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    screenshot_thumbnails_default = ShimAudit50;
+    screenshot_thumbnails_default = ShimAudit51;
   }
 });
 
@@ -53153,12 +53804,12 @@ var script_treemap_data_exports = {};
 __export(script_treemap_data_exports, {
   default: () => script_treemap_data_default
 });
-var ShimAudit51, script_treemap_data_default;
+var ShimAudit52, script_treemap_data_default;
 var init_script_treemap_data = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/script-treemap-data.js"() {
     init_process_global();
     init_audit();
-    ShimAudit51 = class extends Audit {
+    ShimAudit52 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -53175,7 +53826,7 @@ var init_script_treemap_data = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    script_treemap_data_default = ShimAudit51;
+    script_treemap_data_default = ShimAudit52;
   }
 });
 
@@ -53184,12 +53835,12 @@ var server_response_time_exports = {};
 __export(server_response_time_exports, {
   default: () => server_response_time_default
 });
-var ShimAudit52, server_response_time_default;
+var ShimAudit53, server_response_time_default;
 var init_server_response_time = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/server-response-time.js"() {
     init_process_global();
     init_audit();
-    ShimAudit52 = class extends Audit {
+    ShimAudit53 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -53206,7 +53857,7 @@ var init_server_response_time = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    server_response_time_default = ShimAudit52;
+    server_response_time_default = ShimAudit53;
   }
 });
 
@@ -53215,12 +53866,12 @@ var unsized_images_exports = {};
 __export(unsized_images_exports, {
   default: () => unsized_images_default
 });
-var ShimAudit53, unsized_images_default;
+var ShimAudit54, unsized_images_default;
 var init_unsized_images = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/unsized-images.js"() {
     init_process_global();
     init_audit();
-    ShimAudit53 = class extends Audit {
+    ShimAudit54 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -53237,7 +53888,7 @@ var init_unsized_images = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    unsized_images_default = ShimAudit53;
+    unsized_images_default = ShimAudit54;
   }
 });
 
@@ -53246,12 +53897,12 @@ var user_timings_exports = {};
 __export(user_timings_exports, {
   default: () => user_timings_default
 });
-var ShimAudit54, user_timings_default;
+var ShimAudit55, user_timings_default;
 var init_user_timings = __esm({
   "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/user-timings.js"() {
     init_process_global();
     init_audit();
-    ShimAudit54 = class extends Audit {
+    ShimAudit55 = class extends Audit {
       static {
         __name(this, "ShimAudit");
       }
@@ -53268,7 +53919,69 @@ var init_user_timings = __esm({
         return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
       }
     };
-    user_timings_default = ShimAudit54;
+    user_timings_default = ShimAudit55;
+  }
+});
+
+// lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/webmcp-form-coverage.js
+var webmcp_form_coverage_exports = {};
+__export(webmcp_form_coverage_exports, {
+  default: () => webmcp_form_coverage_default
+});
+var ShimAudit56, webmcp_form_coverage_default;
+var init_webmcp_form_coverage = __esm({
+  "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/webmcp-form-coverage.js"() {
+    init_process_global();
+    init_audit();
+    ShimAudit56 = class extends Audit {
+      static {
+        __name(this, "ShimAudit");
+      }
+      static get meta() {
+        return {
+          id: "webmcp-form-coverage",
+          title: "Shim Audit",
+          description: "This audit was filtered out and is not available in this bundle.",
+          scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE,
+          requiredArtifacts: []
+        };
+      }
+      static audit() {
+        return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
+      }
+    };
+    webmcp_form_coverage_default = ShimAudit56;
+  }
+});
+
+// lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/webmcp-registered-tools.js
+var webmcp_registered_tools_exports = {};
+__export(webmcp_registered_tools_exports, {
+  default: () => webmcp_registered_tools_default
+});
+var ShimAudit57, webmcp_registered_tools_default;
+var init_webmcp_registered_tools = __esm({
+  "lh-audit-shim:/Users/alexrudenko/src/lighthouse/core/audits/webmcp-registered-tools.js"() {
+    init_process_global();
+    init_audit();
+    ShimAudit57 = class extends Audit {
+      static {
+        __name(this, "ShimAudit");
+      }
+      static get meta() {
+        return {
+          id: "webmcp-registered-tools",
+          title: "Shim Audit",
+          description: "This audit was filtered out and is not available in this bundle.",
+          scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE,
+          requiredArtifacts: []
+        };
+      }
+      static audit() {
+        return { score: null, scoreDisplayMode: Audit.SCORING_MODES.NOT_APPLICABLE };
+      }
+    };
+    webmcp_registered_tools_default = ShimAudit57;
   }
 });
 
@@ -53458,15 +54171,15 @@ function getStackPacks(pageStacks) {
       );
       continue;
     }
-    const str_106 = createIcuMessageFn(
+    const str_109 = createIcuMessageFn(
       `node_modules/lighthouse-stack-packs/packs/${matchedPack.id}.js`,
       matchedPack.UIStrings
     );
     const descriptions = {};
-    const UIStrings126 = matchedPack.UIStrings;
-    for (const key in UIStrings126) {
-      if (UIStrings126[key]) {
-        descriptions[key] = str_106(UIStrings126[key]);
+    const UIStrings130 = matchedPack.UIStrings;
+    for (const key in UIStrings130) {
+      if (UIStrings130[key]) {
+        descriptions[key] = str_109(UIStrings130[key]);
       }
     }
     packs.push({
@@ -53535,7 +54248,6 @@ var NetworkAnalysis = class {
   static async compute_(devtoolsLog, context) {
     const records = await NetworkRecordsComputed.request(devtoolsLog, context);
     const analysis = core_exports.NetworkAnalyzer.analyze(
-      // @ts-expect-error - trace engine types for InitiatorType are outdated
       records
     );
     if (!analysis) {
@@ -53872,7 +54584,7 @@ init_i18n();
  * Copyright 2018 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
-var UIStrings21 = {
+var UIStrings22 = {
   /** Title of the Performance category of audits. Equivalent to 'Web performance', this term is inclusive of all web page speed and loading optimization topics. Also used as a label of a score gauge; try to limit to 20 characters. */
   performanceCategoryTitle: "Performance",
   /** Title of the speed metrics section of the Performance category. Within this section are various speed metrics which quantify the pageload performance into values presented in seconds and milliseconds. */
@@ -53960,7 +54672,7 @@ var UIStrings21 = {
   /** Title of the General group of the Best Practices category. Within this section are the audits that don't belong to a specific group but are of general interest. */
   bestPracticesGeneralGroupTitle: "General"
 };
-var str_2 = createIcuMessageFn({ url: "core/config/default-config.js" }.url, UIStrings21);
+var str_2 = createIcuMessageFn({ url: "core/config/default-config.js" }.url, UIStrings22);
 var defaultConfig = {
   settings: defaultSettings,
   artifacts: [
@@ -54107,6 +54819,9 @@ var defaultConfig = {
     "accessibility/manual/offscreen-content-hidden",
     "accessibility/manual/use-landmarks",
     "accessibility/manual/visual-order-follows-dom",
+    "accessibility/autocomplete-valid",
+    "accessibility/presentation-role-conflict",
+    "accessibility/svg-img-alt",
     "byte-efficiency/total-byte-weight",
     "byte-efficiency/unminified-css",
     "byte-efficiency/unminified-javascript",
@@ -54150,78 +54865,78 @@ var defaultConfig = {
   ],
   groups: {
     "metrics": {
-      title: str_2(UIStrings21.metricGroupTitle)
+      title: str_2(UIStrings22.metricGroupTitle)
     },
     "insights": {
-      title: str_2(UIStrings21.insightsGroupTitle),
-      description: str_2(UIStrings21.insightsGroupDescription)
+      title: str_2(UIStrings22.insightsGroupTitle),
+      description: str_2(UIStrings22.insightsGroupDescription)
     },
     "diagnostics": {
-      title: str_2(UIStrings21.diagnosticsGroupTitle),
-      description: str_2(UIStrings21.diagnosticsGroupDescription)
+      title: str_2(UIStrings22.diagnosticsGroupTitle),
+      description: str_2(UIStrings22.diagnosticsGroupDescription)
     },
     "a11y-best-practices": {
-      title: str_2(UIStrings21.a11yBestPracticesGroupTitle),
-      description: str_2(UIStrings21.a11yBestPracticesGroupDescription)
+      title: str_2(UIStrings22.a11yBestPracticesGroupTitle),
+      description: str_2(UIStrings22.a11yBestPracticesGroupDescription)
     },
     "a11y-color-contrast": {
-      title: str_2(UIStrings21.a11yColorContrastGroupTitle),
-      description: str_2(UIStrings21.a11yColorContrastGroupDescription)
+      title: str_2(UIStrings22.a11yColorContrastGroupTitle),
+      description: str_2(UIStrings22.a11yColorContrastGroupDescription)
     },
     "a11y-names-labels": {
-      title: str_2(UIStrings21.a11yNamesLabelsGroupTitle),
-      description: str_2(UIStrings21.a11yNamesLabelsGroupDescription)
+      title: str_2(UIStrings22.a11yNamesLabelsGroupTitle),
+      description: str_2(UIStrings22.a11yNamesLabelsGroupDescription)
     },
     "a11y-navigation": {
-      title: str_2(UIStrings21.a11yNavigationGroupTitle),
-      description: str_2(UIStrings21.a11yNavigationGroupDescription)
+      title: str_2(UIStrings22.a11yNavigationGroupTitle),
+      description: str_2(UIStrings22.a11yNavigationGroupDescription)
     },
     "a11y-aria": {
-      title: str_2(UIStrings21.a11yAriaGroupTitle),
-      description: str_2(UIStrings21.a11yAriaGroupDescription)
+      title: str_2(UIStrings22.a11yAriaGroupTitle),
+      description: str_2(UIStrings22.a11yAriaGroupDescription)
     },
     "a11y-language": {
-      title: str_2(UIStrings21.a11yLanguageGroupTitle),
-      description: str_2(UIStrings21.a11yLanguageGroupDescription)
+      title: str_2(UIStrings22.a11yLanguageGroupTitle),
+      description: str_2(UIStrings22.a11yLanguageGroupDescription)
     },
     "a11y-audio-video": {
-      title: str_2(UIStrings21.a11yAudioVideoGroupTitle),
-      description: str_2(UIStrings21.a11yAudioVideoGroupDescription)
+      title: str_2(UIStrings22.a11yAudioVideoGroupTitle),
+      description: str_2(UIStrings22.a11yAudioVideoGroupDescription)
     },
     "a11y-tables-lists": {
-      title: str_2(UIStrings21.a11yTablesListsVideoGroupTitle),
-      description: str_2(UIStrings21.a11yTablesListsVideoGroupDescription)
+      title: str_2(UIStrings22.a11yTablesListsVideoGroupTitle),
+      description: str_2(UIStrings22.a11yTablesListsVideoGroupDescription)
     },
     "seo-mobile": {
-      title: str_2(UIStrings21.seoMobileGroupTitle),
-      description: str_2(UIStrings21.seoMobileGroupDescription)
+      title: str_2(UIStrings22.seoMobileGroupTitle),
+      description: str_2(UIStrings22.seoMobileGroupDescription)
     },
     "seo-content": {
-      title: str_2(UIStrings21.seoContentGroupTitle),
-      description: str_2(UIStrings21.seoContentGroupDescription)
+      title: str_2(UIStrings22.seoContentGroupTitle),
+      description: str_2(UIStrings22.seoContentGroupDescription)
     },
     "seo-crawl": {
-      title: str_2(UIStrings21.seoCrawlingGroupTitle),
-      description: str_2(UIStrings21.seoCrawlingGroupDescription)
+      title: str_2(UIStrings22.seoCrawlingGroupTitle),
+      description: str_2(UIStrings22.seoCrawlingGroupDescription)
     },
     "best-practices-trust-safety": {
-      title: str_2(UIStrings21.bestPracticesTrustSafetyGroupTitle)
+      title: str_2(UIStrings22.bestPracticesTrustSafetyGroupTitle)
     },
     "best-practices-ux": {
-      title: str_2(UIStrings21.bestPracticesUXGroupTitle)
+      title: str_2(UIStrings22.bestPracticesUXGroupTitle)
     },
     "best-practices-browser-compat": {
-      title: str_2(UIStrings21.bestPracticesBrowserCompatGroupTitle)
+      title: str_2(UIStrings22.bestPracticesBrowserCompatGroupTitle)
     },
     "best-practices-general": {
-      title: str_2(UIStrings21.bestPracticesGeneralGroupTitle)
+      title: str_2(UIStrings22.bestPracticesGeneralGroupTitle)
     },
     // Group for audits that should not be displayed.
     "hidden": { title: "" }
   },
   categories: {
     "performance": {
-      title: str_2(UIStrings21.performanceCategoryTitle),
+      title: str_2(UIStrings22.performanceCategoryTitle),
       supportedModes: ["navigation", "timespan", "snapshot"],
       auditRefs: [
         { id: "first-contentful-paint", weight: 10, group: "metrics", acronym: "FCP" },
@@ -54280,9 +54995,9 @@ var defaultConfig = {
       ]
     },
     "accessibility": {
-      title: str_2(UIStrings21.a11yCategoryTitle),
-      description: str_2(UIStrings21.a11yCategoryDescription),
-      manualDescription: str_2(UIStrings21.a11yCategoryManualDescription),
+      title: str_2(UIStrings22.a11yCategoryTitle),
+      description: str_2(UIStrings22.a11yCategoryDescription),
+      manualDescription: str_2(UIStrings22.a11yCategoryManualDescription),
       supportedModes: ["navigation", "snapshot"],
       // Audit weights weights are derived from the axe-core "Impact",
       // with adjustments based on axe-core "Tags":
@@ -54419,6 +55134,12 @@ var defaultConfig = {
         // Critical, wcag2a
         { id: "landmark-one-main", weight: 3, group: "a11y-best-practices" },
         // Moderate, best-practice
+        { id: "autocomplete-valid", weight: 1, group: "a11y-best-practices" },
+        // Informational
+        { id: "presentation-role-conflict", weight: 1, group: "a11y-best-practices" },
+        // Informational
+        { id: "svg-img-alt", weight: 1, group: "a11y-best-practices" },
+        // Informational
         // Manual audits
         { id: "focusable-controls", weight: 0 },
         { id: "interactive-element-affordance", weight: 0 },
@@ -54452,7 +55173,7 @@ var defaultConfig = {
       ]
     },
     "best-practices": {
-      title: str_2(UIStrings21.bestPracticesCategoryTitle),
+      title: str_2(UIStrings22.bestPracticesCategoryTitle),
       supportedModes: ["navigation", "timespan", "snapshot"],
       auditRefs: [
         // Trust & Safety
@@ -54483,9 +55204,9 @@ var defaultConfig = {
       ]
     },
     "seo": {
-      title: str_2(UIStrings21.seoCategoryTitle),
-      description: str_2(UIStrings21.seoCategoryDescription),
-      manualDescription: str_2(UIStrings21.seoCategoryManualDescription),
+      title: str_2(UIStrings22.seoCategoryTitle),
+      description: str_2(UIStrings22.seoCategoryDescription),
+      manualDescription: str_2(UIStrings22.seoCategoryManualDescription),
       supportedModes: ["navigation", "snapshot"],
       auditRefs: [
         // Should be at least 31% of the score, such that this audit failing
@@ -54511,7 +55232,7 @@ var defaultConfig = {
 };
 Object.defineProperty(defaultConfig, "UIStrings", {
   enumerable: false,
-  get: /* @__PURE__ */ __name(() => UIStrings21, "get")
+  get: /* @__PURE__ */ __name(() => UIStrings22, "get")
 });
 var default_config_default = defaultConfig;
 
@@ -54534,7 +55255,7 @@ function isValidArtifactDependency(dependent, dependency) {
   return true;
 }
 __name(isValidArtifactDependency, "isValidArtifactDependency");
-function assertValidPluginName(config3, pluginName) {
+function assertValidPluginName(config4, pluginName) {
   const parts = pluginName.split("/");
   if (parts.length === 2) {
     pluginName = parts[1];
@@ -54542,7 +55263,7 @@ function assertValidPluginName(config3, pluginName) {
   if (!pluginName.startsWith("lighthouse-plugin-")) {
     throw new Error(`plugin name '${pluginName}' does not start with 'lighthouse-plugin-'`);
   }
-  if (config3.categories?.[pluginName]) {
+  if (config4.categories?.[pluginName]) {
     throw new Error(`plugin name '${pluginName}' not allowed because it is the id of a category already found in config`);
   }
 }
@@ -55226,6 +55947,7 @@ var bundledModules = /* @__PURE__ */ new Map([
   ["../audits/accessibility/aria-treeitem-name", Promise.resolve().then(() => (init_aria_treeitem_name(), aria_treeitem_name_exports))],
   ["../audits/accessibility/aria-valid-attr-value", Promise.resolve().then(() => (init_aria_valid_attr_value(), aria_valid_attr_value_exports))],
   ["../audits/accessibility/aria-valid-attr", Promise.resolve().then(() => (init_aria_valid_attr(), aria_valid_attr_exports))],
+  ["../audits/accessibility/autocomplete-valid", Promise.resolve().then(() => (init_autocomplete_valid(), autocomplete_valid_exports))],
   ["../audits/accessibility/button-name", Promise.resolve().then(() => (init_button_name(), button_name_exports))],
   ["../audits/accessibility/bypass", Promise.resolve().then(() => (init_bypass(), bypass_exports))],
   ["../audits/accessibility/color-contrast", Promise.resolve().then(() => (init_color_contrast(), color_contrast_exports))],
@@ -55265,8 +55987,10 @@ var bundledModules = /* @__PURE__ */ new Map([
   ["../audits/accessibility/meta-refresh", Promise.resolve().then(() => (init_meta_refresh(), meta_refresh_exports))],
   ["../audits/accessibility/meta-viewport", Promise.resolve().then(() => (init_meta_viewport(), meta_viewport_exports))],
   ["../audits/accessibility/object-alt", Promise.resolve().then(() => (init_object_alt(), object_alt_exports))],
+  ["../audits/accessibility/presentation-role-conflict", Promise.resolve().then(() => (init_presentation_role_conflict(), presentation_role_conflict_exports))],
   ["../audits/accessibility/select-name", Promise.resolve().then(() => (init_select_name(), select_name_exports))],
   ["../audits/accessibility/skip-link", Promise.resolve().then(() => (init_skip_link(), skip_link_exports))],
+  ["../audits/accessibility/svg-img-alt", Promise.resolve().then(() => (init_svg_img_alt(), svg_img_alt_exports))],
   ["../audits/accessibility/tabindex", Promise.resolve().then(() => (init_tabindex(), tabindex_exports))],
   ["../audits/accessibility/table-duplicate-name", Promise.resolve().then(() => (init_table_duplicate_name(), table_duplicate_name_exports))],
   ["../audits/accessibility/table-fake-caption", Promise.resolve().then(() => (init_table_fake_caption(), table_fake_caption_exports))],
@@ -55310,6 +56034,7 @@ var bundledModules = /* @__PURE__ */ new Map([
   ["../computed/metrics/timing-summary", Promise.resolve().then(() => (init_timing_summary(), timing_summary_exports))],
   ["../computed/entity-classification", Promise.resolve().then(() => (init_entity_classification(), entity_classification_exports))],
   ["../computed/trace-engine-result", Promise.resolve().then(() => (init_trace_engine_result(), trace_engine_result_exports))],
+  ["../gather/gatherers/agentic/llms-txt", Promise.resolve().then(() => (init_llms_txt(), llms_txt_exports))],
   ["../gather/gatherers/bf-cache-failures", Promise.resolve().then(() => (init_bf_cache_failures(), bf_cache_failures_exports))],
   ["../gather/gatherers/css-usage", Promise.resolve().then(() => (init_css_usage(), css_usage_exports))],
   ["../gather/gatherers/full-page-screenshot", Promise.resolve().then(() => (init_full_page_screenshot(), full_page_screenshot_exports))],
@@ -55318,6 +56043,8 @@ var bundledModules = /* @__PURE__ */ new Map([
   ["../gather/gatherers/network-user-agent", Promise.resolve().then(() => (init_network_user_agent(), network_user_agent_exports))],
   ["../gather/gatherers/stylesheets", Promise.resolve().then(() => (init_stylesheets(), stylesheets_exports))],
   ["../gather/gatherers/trace-elements", Promise.resolve().then(() => (init_trace_elements(), trace_elements_exports))],
+  ["../gather/gatherers/webmcp-tools", Promise.resolve().then(() => (init_webmcp_tools(), webmcp_tools_exports))],
+  ["../audits/agentic/llms-txt", Promise.resolve().then(() => (init_llms_txt2(), llms_txt_exports2))],
   ["../audits/autocomplete", Promise.resolve().then(() => (init_autocomplete(), autocomplete_exports))],
   ["../audits/bf-cache", Promise.resolve().then(() => (init_bf_cache(), bf_cache_exports))],
   ["../audits/bootup-time", Promise.resolve().then(() => (init_bootup_time(), bootup_time_exports))],
@@ -55371,7 +56098,9 @@ var bundledModules = /* @__PURE__ */ new Map([
   ["../audits/script-treemap-data", Promise.resolve().then(() => (init_script_treemap_data(), script_treemap_data_exports))],
   ["../audits/server-response-time", Promise.resolve().then(() => (init_server_response_time(), server_response_time_exports))],
   ["../audits/unsized-images", Promise.resolve().then(() => (init_unsized_images(), unsized_images_exports))],
-  ["../audits/user-timings", Promise.resolve().then(() => (init_user_timings(), user_timings_exports))]
+  ["../audits/user-timings", Promise.resolve().then(() => (init_user_timings(), user_timings_exports))],
+  ["../audits/webmcp-form-coverage", Promise.resolve().then(() => (init_webmcp_form_coverage(), webmcp_form_coverage_exports))],
+  ["../audits/webmcp-registered-tools", Promise.resolve().then(() => (init_webmcp_registered_tools(), webmcp_registered_tools_exports))]
 ]);
 async function requireWrapper(requirePath) {
   if (path4.isAbsolute(requirePath)) {
@@ -55462,18 +56191,18 @@ function resolveSettings(settingsJson = {}, overrides = void 0) {
   return settingsWithFlags;
 }
 __name(resolveSettings, "resolveSettings");
-async function mergePlugins(config3, configDir, flags) {
-  const configPlugins = config3.plugins || [];
+async function mergePlugins(config4, configDir, flags) {
+  const configPlugins = config4.plugins || [];
   const flagPlugins = flags?.plugins || [];
   const pluginNames = /* @__PURE__ */ new Set([...configPlugins, ...flagPlugins]);
   for (const pluginName of pluginNames) {
-    assertValidPluginName(config3, pluginName);
+    assertValidPluginName(config4, pluginName);
     const pluginPath = isBundledEnvironment2() ? pluginName : resolveModulePath(pluginName, configDir, "plugin");
     const rawPluginJson = await requireWrapper(pluginPath);
     const pluginJson = config_plugin_default.parsePlugin(rawPluginJson, pluginName);
-    config3 = mergeConfigFragment(config3, pluginJson);
+    config4 = mergeConfigFragment(config4, pluginJson);
   }
-  return config3;
+  return config4;
 }
 __name(mergePlugins, "mergePlugins");
 async function resolveGathererToDefn(gathererJson, coreGathererList, configDir) {
@@ -55605,29 +56334,29 @@ var internalArtifactPriorities = {
   FullPageScreenshot: 1,
   BFCacheFailures: 1
 };
-function resolveWorkingCopy(config3, context) {
+function resolveWorkingCopy(config4, context) {
   let { configPath } = context;
   if (configPath && !path5.isAbsolute(configPath)) {
     throw new Error("configPath must be an absolute path");
   }
-  if (!config3) {
-    config3 = default_config_default;
+  if (!config4) {
+    config4 = default_config_default;
     configPath = defaultConfigPath;
   }
   const configDir = configPath ? path5.dirname(configPath) : void 0;
   return {
-    configWorkingCopy: deepCloneConfigJson(config3),
+    configWorkingCopy: deepCloneConfigJson(config4),
     configPath,
     configDir
   };
 }
 __name(resolveWorkingCopy, "resolveWorkingCopy");
-function resolveExtensions(config3) {
-  if (!config3.extends) return config3;
-  if (config3.extends !== "lighthouse:default") {
+function resolveExtensions(config4) {
+  if (!config4.extends) return config4;
+  if (config4.extends !== "lighthouse:default") {
     throw new Error("`lighthouse:default` is the only valid extension method.");
   }
-  const { artifacts, ...extensionJSON } = config3;
+  const { artifacts, ...extensionJSON } = config4;
   const defaultClone = deepCloneConfigJson(default_config_default);
   const mergedConfig = mergeConfigFragment(defaultClone, extensionJSON);
   mergedConfig.artifacts = mergeConfigFragmentArrayByKey(
@@ -55709,10 +56438,10 @@ function overrideThrottlingWindows(settings) {
   );
 }
 __name(overrideThrottlingWindows, "overrideThrottlingWindows");
-async function initializeConfig(gatherMode, config3, flags = {}) {
+async function initializeConfig(gatherMode, config4, flags = {}) {
   const status = { msg: "Initialize config", id: "lh:config" };
   lighthouse_logger_default.time(status, "verbose");
-  let { configWorkingCopy, configDir } = resolveWorkingCopy(config3, flags);
+  let { configWorkingCopy, configDir } = resolveWorkingCopy(config4, flags);
   configWorkingCopy = resolveExtensions(configWorkingCopy);
   configWorkingCopy = await mergePlugins(configWorkingCopy, configDir, flags);
   const settings = resolveSettings(configWorkingCopy.settings || {}, flags);
@@ -55882,7 +56611,7 @@ ber||0)-(l.lineNumber||0)),t.forEach(({lineNumber:a})=>{let l=a-n,s=a+n;for(;l<1
 lement("span","lh-audit-group__title"),s=o.createElement("span","lh-audit-group__itemcount");a.append(" ",l," ",s," "," "," ");let c=o.createElement("div","lh-clump-toggle"),d=o.createElement("span","lh-clump-toggletext--show"),h=o.createElement("span","lh-clump-toggletext--hide");return c.append(" ",d," ",h," "),i.append(" ",a," ",c," "),r.append(" ",i," "),n.append(" ",r," "),t.append(" "," ",n," "),e.append(t),e}function Ke(o){let e=o.createFragment(),t=o.createElement("div","lh-crc-container"),n=o.createElement("style");n.append(`\n      .lh-crc .lh-tree-marker {\n        width: 12px;\n        height: 26px;\n        display: block;\n        float: left;\n        background-position: top left;\n      }\n      .lh-crc .lh-horiz-down {\n        background: url(\'data:image/svg+xml;utf8,<svg width="16" height="26" viewBox="0 0 16 26" xmlns="http://www.w3.org/2000/svg"><g fill="%23D8D8D8" fill-rule="evenodd"><path d="M16 12v2H-2v-2z"/><path d="M9 12v14H7V12z"/></g></svg>\');\n      }\n      .lh-crc \
 .lh-right {\n        background: url(\'data:image/svg+xml;utf8,<svg width="16" height="26" viewBox="0 0 16 26" xmlns="http://www.w3.org/2000/svg"><path d="M16 12v2H0v-2z" fill="%23D8D8D8" fill-rule="evenodd"/></svg>\');\n      }\n      .lh-crc .lh-up-right {\n        background: url(\'data:image/svg+xml;utf8,<svg width="16" height="26" viewBox="0 0 16 26" xmlns="http://www.w3.org/2000/svg"><path d="M7 0h2v14H7zm2 12h7v2H9z" fill="%23D8D8D8" fill-rule="evenodd"/></svg>\');\n      }\n      .lh-crc .lh-vert-right {\n        background: url(\'data:image/svg+xml;utf8,<svg width="16" height="26" viewBox="0 0 16 26" xmlns="http://www.w3.org/2000/svg"><path d="M7 0h2v27H7zm2 12h7v2H9z" fill="%23D8D8D8" fill-rule="evenodd"/></svg>\');\n      }\n      .lh-crc .lh-vert {\n        background: url(\'data:image/svg+xml;utf8,<svg width="16" height="26" viewBox="0 0 16 26" xmlns="http://www.w3.org/2000/svg"><path d="M7 0h2v26H7z" fill="%23D8D8D8" fill-rule="evenodd"/></svg>\');\n      }\n      .lh-crc .lh-crc-tree {\n    \
     font-size: 14px;\n        width: 100%;\n        overflow-x: auto;\n      }\n      .lh-crc .lh-crc-node {\n        height: 26px;\n        line-height: 26px;\n        white-space: nowrap;\n      }\n      .lh-crc .lh-crc-node__longest {\n        color: var(--color-average-secondary);\n      }\n      .lh-crc .lh-crc-node__tree-value {\n        margin-left: 10px;\n      }\n      .lh-crc .lh-crc-node__tree-value div {\n        display: inline;\n      }\n      .lh-crc .lh-crc-node__chain-duration {\n        font-weight: 700;\n      }\n      .lh-crc .lh-crc-initial-nav {\n        color: #595959;\n        font-style: italic;\n      }\n      .lh-crc__summary-value {\n        margin-bottom: 10px;\n      }\n    `);let r=o.createElement("div"),i=o.createElement("div","lh-crc__summary-value"),a=o.createElement("span","lh-crc__longest_duration_label"),l=o.createElement("b","lh-crc__longest_duration");i.append(" ",a," ",l," "),r.append(" ",i," ");let s=o.createElement("div","lh-crc"),c=o.createElement("div","lh-crc-initial-n\
-av");return s.append(" ",c," "," "),t.append(" ",n," ",r," ",s," "),e.append(t),e}function Je(o){let e=o.createFragment(),t=o.createElement("div","lh-crc-node"),n=o.createElement("span","lh-crc-node__tree-marker"),r=o.createElement("span","lh-crc-node__tree-value");return t.append(" ",n," ",r," "),e.append(t),e}function Ze(o){let e=o.createFragment(),t=o.createElement("div","lh-element-screenshot"),n=o.createElement("div","lh-element-screenshot__content"),r=o.createElement("div","lh-element-screenshot__image"),i=o.createElement("div","lh-element-screenshot__mask"),a=o.createElementNS("http://www.w3.org/2000/svg","svg");a.setAttribute("height","0"),a.setAttribute("width","0");let l=o.createElementNS("http://www.w3.org/2000/svg","defs"),s=o.createElementNS("http://www.w3.org/2000/svg","clipPath");s.setAttribute("clipPathUnits","objectBoundingBox"),l.append(" ",s," "," "),a.append(" ",l," "),i.append(" ",a," ");let c=o.createElement("div","lh-element-screenshot__element-marker");return r.\
+av");return s.append(" ",c," "," "),t.append(" ",n," ",r," ",s," "),e.append(t),e}function Ze(o){let e=o.createFragment(),t=o.createElement("div","lh-crc-node"),n=o.createElement("span","lh-crc-node__tree-marker"),r=o.createElement("span","lh-crc-node__tree-value");return t.append(" ",n," ",r," "),e.append(t),e}function Je(o){let e=o.createFragment(),t=o.createElement("div","lh-element-screenshot"),n=o.createElement("div","lh-element-screenshot__content"),r=o.createElement("div","lh-element-screenshot__image"),i=o.createElement("div","lh-element-screenshot__mask"),a=o.createElementNS("http://www.w3.org/2000/svg","svg");a.setAttribute("height","0"),a.setAttribute("width","0");let l=o.createElementNS("http://www.w3.org/2000/svg","defs"),s=o.createElementNS("http://www.w3.org/2000/svg","clipPath");s.setAttribute("clipPathUnits","objectBoundingBox"),l.append(" ",s," "," "),a.append(" ",l," "),i.append(" ",a," ");let c=o.createElement("div","lh-element-screenshot__element-marker");return r.\
 append(" ",i," ",c," "),n.append(" ",r," "),t.append(" ",n," "),e.append(t),e}function Qe(o){let e=o.createFragment(),t=o.createElement("div","lh-exp-gauge-component"),n=o.createElement("div","lh-exp-gauge__wrapper");n.setAttribute("target","_blank");let r=o.createElement("div","lh-exp-gauge__svg-wrapper"),i=o.createElementNS("http://www.w3.org/2000/svg","svg","lh-exp-gauge"),a=o.createElementNS("http://www.w3.org/2000/svg","g","lh-exp-gauge__inner"),l=o.createElementNS("http://www.w3.org/2000/svg","circle","lh-exp-gauge__bg"),s=o.createElementNS("http://www.w3.org/2000/svg","circle","lh-exp-gauge__base lh-exp-gauge--faded"),c=o.createElementNS("http://www.w3.org/2000/svg","circle","lh-exp-gauge__arc"),d=o.createElementNS("http://www.w3.org/2000/svg","text","lh-exp-gauge__percentage");a.append(" ",l," ",s," ",c," ",d," ");let h=o.createElementNS("http://www.w3.org/2000/svg","g","lh-exp-gauge__outer"),p=o.createElementNS("http://www.w3.org/2000/svg","circle","lh-cover");h.append(" ",p,"\
  ");let g=o.createElementNS("http://www.w3.org/2000/svg","text","lh-exp-gauge__label");return g.setAttribute("text-anchor","middle"),g.setAttribute("x","0"),g.setAttribute("y","60"),i.append(" ",a," ",h," ",g," "),r.append(" ",i," "),n.append(" ",r," "),t.append(" ",n," "),e.append(t),e}function Ye(o){let e=o.createFragment(),t=o.createElement("style");t.append(`\n    .lh-footer {\n      padding: var(--footer-padding-vertical) calc(var(--default-padding) * 2);\n      max-width: var(--report-content-max-width);\n      margin: 0 auto;\n    }\n    .lh-footer .lh-generated {\n      text-align: center;\n    }\n  `),e.append(t);let n=o.createElement("footer","lh-footer"),r=o.createElement("ul","lh-meta__items");r.append(" ");let i=o.createElement("div","lh-generated"),a=o.createElement("b");a.append("Lighthouse");let l=o.createElement("span","lh-footer__version"),s=o.createElement("a","lh-footer__version_issue");return s.setAttribute("href","https://github.com/GoogleChrome/Lighthouse/issues"),s.setAt\
 tribute("target","_blank"),s.setAttribute("rel","noopener"),s.append("File an issue"),i.append(" "," Generated by ",a," ",l," | ",s," "),n.append(" ",r," ",i," "),e.append(n),e}function Xe(o){let e=o.createFragment(),t=o.createElement("a","lh-fraction__wrapper"),n=o.createElement("div","lh-fraction__content-wrapper"),r=o.createElement("div","lh-fraction__content"),i=o.createElement("div","lh-fraction__background");r.append(" ",i," "),n.append(" ",r," ");let a=o.createElement("div","lh-fraction__label");return t.append(" ",n," ",a," "),e.append(t),e}function et(o){let e=o.createFragment(),t=o.createElement("a","lh-gauge__wrapper"),n=o.createElement("div","lh-gauge__svg-wrapper"),r=o.createElementNS("http://www.w3.org/2000/svg","svg","lh-gauge");r.setAttribute("viewBox","0 0 120 120");let i=o.createElementNS("http://www.w3.org/2000/svg","circle","lh-gauge-base");i.setAttribute("r","56"),i.setAttribute("cx","60"),i.setAttribute("cy","60"),i.setAttribute("stroke-width","8");let a=o.createE\
@@ -55906,154 +56635,157 @@ ort-content-max-width: calc(60 * var(--report-font-size)); /* defaults to 840px 
 er-background-color: #EEF1F4;\n  --table-group-header-text-color: var(--color-gray-700);\n  --table-higlight-background-color: #F5F7FA;\n  --tools-icon-color: var(--color-gray-600);\n  --topbar-background-color: var(--color-white);\n  --topbar-height: 32px;\n  --topbar-logo-size: 24px;\n  --topbar-padding: 0 8px;\n  --toplevel-warning-background-color: hsla(30, 100%, 75%, 10%);\n  --toplevel-warning-message-text-color: var(--color-average-secondary);\n  --toplevel-warning-padding: 18px;\n  --toplevel-warning-text-color: var(--report-text-color);\n\n  /* SVGs */\n  --plugin-icon-url-dark: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24px" height="24px" viewBox="0 0 24 24" fill="%23FFFFFF"><path d="M0 0h24v24H0z" fill="none"/><path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7 1.49 0 2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 \
 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z"/></svg>\');\n  --plugin-icon-url: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24px" height="24px" viewBox="0 0 24 24" fill="%23757575"><path d="M0 0h24v24H0z" fill="none"/><path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7 1.49 0 2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z"/></svg>\');\n\n  --pass-icon-url: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><title>check</title><path fill="%23178239" d="M24 4C12.95 4 4 12.95 4 24c0 11.04 8.95 20 20 20 11.04 0 20-8.96 20-20 0-11.05-8.96-20-20-20zm-4 30L10 24l2.83-2.83L20 28.34l15.17-15.17L38 16 20 34z"/></svg>\');\n  --average-icon-url: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><t\
 itle>info</title><path fill="%23E67700" d="M24 4C12.95 4 4 12.95 4 24s8.95 20 20 20 20-8.95 20-20S35.05 4 24 4zm2 30h-4V22h4v12zm0-16h-4v-4h4v4z"/></svg>\');\n  --fail-icon-url: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><title>warn</title><path fill="%23C7221F" d="M2 42h44L24 4 2 42zm24-6h-4v-4h4v4zm0-8h-4v-8h4v8z"/></svg>\');\n  --error-icon-url: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3 15"><title>error</title><path d="M0 15H 3V 12H 0V" fill="%23FF4E42"/><path d="M0 9H 3V 0H 0V" fill="%23FF4E42"/></svg>\');\n\n  --swap-locale-icon-url: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="%23000000"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5\
--5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>\');\n}\n\n@media not print {\n  .lh-dark {\n    /* Pallete */\n    --color-gray-200: var(--color-gray-800);\n    --color-gray-300: #616161;\n    --color-gray-400: var(--color-gray-600);\n    --color-gray-700: var(--color-gray-400);\n    --color-gray-50: #757575;\n    --color-gray-600: var(--color-gray-500);\n    --color-green-700: var(--color-green);\n    --color-orange-700: var(--color-orange);\n    --color-red-700: var(--color-red);\n    --color-teal-600: var(--color-cyan-500);\n\n    /* Context-specific colors */\n    --color-hover: rgba(0, 0, 0, 0.2);\n    --color-informative: var(--color-blue-200);\n\n    /* Component variables */\n    --env-item-background-color: #393535;\n    --link-color: var(--color-blue-200);\n    --locale-selector-background-color: var(--color-gray-200);\n    --plugin-badge-background-color: var(--color-gray-800);\n    --report-background-color: var(--color-gray-900);\n    -\
--report-border-color-secondary: var(--color-gray-200);\n    --report-text-color-secondary: var(--color-gray-400);\n    --report-text-color: var(--color-gray-100);\n    --snippet-color: var(--color-cyan-500);\n    --topbar-background-color: var(--color-gray);\n    --toplevel-warning-background-color: hsl(33deg 14% 18%);\n    --toplevel-warning-message-text-color: var(--color-orange-700);\n    --toplevel-warning-text-color: var(--color-gray-100);\n    --table-group-header-background-color: rgba(186, 196, 206, 0.15);\n    --table-group-header-text-color: var(--color-gray-100);\n    --table-higlight-background-color: rgba(186, 196, 206, 0.09);\n\n    /* SVGs */\n    --plugin-icon-url: var(--plugin-icon-url-dark);\n  }\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media only screen and (max-width\
-: 480px) {\n  .lh-vars {\n    --audit-group-margin-bottom: 20px;\n    --edge-gap-padding: var(--default-padding);\n    --env-name-min-width: 120px;\n    --gauge-circle-size-big: 96px;\n    --gauge-circle-size: 72px;\n    --gauge-label-font-size-big: 22px;\n    --gauge-label-font-size: 14px;\n    --gauge-label-line-height-big: 26px;\n    --gauge-label-line-height: 20px;\n    --gauge-percentage-font-size-big: 34px;\n    --gauge-percentage-font-size: 26px;\n    --gauge-wrapper-width: 112px;\n    --header-padding: 16px 0 16px 0;\n    --image-preview-size: 24px;\n    --plugin-icon-size: 75%;\n    --report-font-size: 14px;\n    --report-line-height: 20px;\n    --score-icon-margin-left: 2px;\n    --score-icon-size: 10px;\n    --topbar-height: 28px;\n    --topbar-logo-size: 20px;\n  }\n}\n\n@container lh-container (max-width: 480px) {\n  .lh-vars {\n    --audit-group-margin-bottom: 20px;\n    --edge-gap-padding: var(--default-padding);\n    --env-name-min-width: 120px;\n    --gauge-circle-size-big: 96px;\n    --gauge-circle-\
-size: 72px;\n    --gauge-label-font-size-big: 22px;\n    --gauge-label-font-size: 14px;\n    --gauge-label-line-height-big: 26px;\n    --gauge-label-line-height: 20px;\n    --gauge-percentage-font-size-big: 34px;\n    --gauge-percentage-font-size: 26px;\n    --gauge-wrapper-width: 112px;\n    --header-padding: 16px 0 16px 0;\n    --image-preview-size: 24px;\n    --plugin-icon-size: 75%;\n    --report-font-size: 14px;\n    --report-line-height: 20px;\n    --score-icon-margin-left: 2px;\n    --score-icon-size: 10px;\n    --topbar-height: 28px;\n    --topbar-logo-size: 20px;\n  }\n}\n\n.lh-vars.lh-devtools {\n  --audit-explanation-line-height: 14px;\n  --audit-group-margin-bottom: 20px;\n  --audit-group-padding-vertical: 12px;\n  --audit-padding-vertical: 4px;\n  --category-padding: 12px;\n  --default-padding: 12px;\n  --env-name-min-width: 120px;\n  --footer-padding-vertical: 8px;\n  --gauge-circle-size-big: 72px;\n  --gauge-circle-size: 64px;\n  --gauge-label-font-size-big: 22px;\n  --gauge-label-font-size: 14px;\n  --\
-gauge-label-line-height-big: 26px;\n  --gauge-label-line-height: 20px;\n  --gauge-percentage-font-size-big: 34px;\n  --gauge-percentage-font-size: 26px;\n  --gauge-wrapper-width: 97px;\n  --header-line-height: 20px;\n  --header-padding: 16px 0 16px 0;\n  --screenshot-overlay-background: transparent;\n  --plugin-icon-size: 75%;\n  --report-font-size: 12px;\n  --report-line-height: 20px;\n  --score-icon-margin-left: 2px;\n  --score-icon-size: 10px;\n  --section-padding-vertical: 8px;\n}\n\n.lh-devtools :focus-visible {\n  outline: -webkit-focus-ring-color auto 1px;\n}\n\n.lh-container:has(.lh-sticky-header) {\n  --sticky-header-buffer: calc(var(--topbar-height) + var(--sticky-header-height));\n}\n\n.lh-container:not(.lh-topbar + .lh-container) {\n  --topbar-height: 0;\n  --sticky-header-height: 0;\n  --sticky-header-buffer: 0;\n}\n\n.lh-max-viewport {\n  display: flex;\n  flex-direction: column;\n  min-height: 100vh;\n  width: 100%;\n}\n\n.lh-devtools.lh-root {\n  height: 100%;\n}\n.lh-devtools.lh-root img {\n  /* Override devt\
-ools default \'min-width: 0\' so svg without size in a flexbox isn\'t collapsed. */\n  min-width: auto;\n}\n.lh-devtools .lh-container {\n  overflow-y: scroll;\n  height: calc(100% - var(--topbar-height));\n  /** The .lh-container is the scroll parent in DevTools so we exclude the topbar from the sticky header buffer. */\n  --sticky-header-buffer: 0;\n}\n.lh-devtools .lh-container:has(.lh-sticky-header) {\n  /** The .lh-container is the scroll parent in DevTools so we exclude the topbar from the sticky header buffer. */\n  --sticky-header-buffer: var(--sticky-header-height);\n}\n@media print {\n  .lh-devtools .lh-container {\n    overflow: unset;\n  }\n}\n.lh-devtools .lh-sticky-header {\n  /* This is normally the height of the topbar, but we want it to stick to the top of our scroll container .lh-container\\` */\n  top: 0;\n}\n.lh-devtools .lh-element-screenshot__overlay {\n  position: absolute;\n}\n\n@keyframes fadeIn {\n  0% { opacity: 0;}\n  100% { opacity: 0.6;}\n}\n\n.lh-root *, .lh-root *::before, .lh-root *::aft\
-er {\n  box-sizing: border-box;\n}\n\n.lh-root {\n  font-family: var(--report-font-family);\n  font-size: var(--report-font-size);\n  margin: 0;\n  line-height: var(--report-line-height);\n  background: var(--report-background-color);\n  color: var(--report-text-color);\n}\n\n.lh-root [hidden] {\n  display: none !important;\n}\n\n.lh-root pre {\n  margin: 0;\n}\n\n.lh-root pre,\n.lh-root code {\n  font-family: var(--report-font-family-monospace);\n}\n\n.lh-root details > summary {\n  cursor: pointer;\n}\n\n.lh-hidden {\n  display: none !important;\n}\n\n.lh-container {\n  /*\n  Text wrapping in the report is so much FUN!\n  We have a \\`word-break: break-word;\\` globally here to prevent a few common scenarios, namely\n  long non-breakable text (usually URLs) found in:\n    1. The footer\n    2. .lh-node (outerHTML)\n    3. .lh-code\n\n  With that sorted, the next challenge is appropriate column sizing and text wrapping inside our\n  .lh-details tables. Even more fun.\n    * We don\'t want table headers ("Est Savings (ms)") to wrap \
-or their column values, but\n      we\'d be happy for the URL column to wrap if the URLs are particularly long.\n    * We want the narrow columns to remain narrow, providing the most column width for URL\n    * We don\'t want the table to extend past 100% width.\n    * Long URLs in the URL column can wrap. Util.getURLDisplayName maxes them out at 64 characters,\n      but they do not get any overflow:ellipsis treatment.\n  */\n  word-break: break-word;\n\n  container-name: lh-container;\n  container-type: inline-size;\n}\n\n.lh-audit-group a,\n.lh-category-header__description a,\n.lh-audit__description a,\n.lh-warnings a,\n.lh-footer a,\n.lh-table-column--link a {\n  color: var(--link-color);\n}\n\n.lh-audit__description, .lh-audit__stackpack, .lh-list-section__description {\n  --inner-audit-padding-right: var(--stackpack-padding-horizontal);\n  padding-left: var(--audit-description-padding-left);\n  padding-right: var(--inner-audit-padding-right);\n  padding-top: 8px;\n  padding-bottom: 8px;\n}\n\n.lh-details {\n  ma\
-rgin-top: var(--default-padding);\n  margin-bottom: var(--default-padding);\n  margin-left: var(--audit-description-padding-left);\n}\n\n.lh-audit__stackpack {\n  display: flex;\n  align-items: center;\n}\n\n.lh-audit__stackpack__img {\n  max-width: 30px;\n  margin-right: var(--default-padding)\n}\n\n/* Report header */\n\n.lh-report-icon {\n  display: flex;\n  align-items: center;\n  padding: 10px 12px;\n  cursor: pointer;\n}\n.lh-report-icon[disabled] {\n  opacity: 0.3;\n  pointer-events: none;\n}\n\n.lh-report-icon::before {\n  content: "";\n  margin: 4px;\n  background-repeat: no-repeat;\n  width: var(--report-icon-size);\n  height: var(--report-icon-size);\n  opacity: 0.7;\n  display: inline-block;\n  vertical-align: middle;\n}\n.lh-report-icon:hover::before {\n  opacity: 1;\n}\n.lh-dark .lh-report-icon::before {\n  filter: invert(1);\n}\n.lh-report-icon--print::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M19 8H5c-1.66 \
-0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/><path fill="none" d="M0 0h24v24H0z"/></svg>\');\n}\n.lh-report-icon--copy::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h24v24H0z" fill="none"/><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>\');\n}\n.lh-report-icon--open::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h24v24H0z" fill="none"/><path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h4v-2H5V8h14v10h-4v2h4c1.1 0 2-.9 2-2V6c0-1.1-.89-2-2-2zm-7 6l-4 4h3v6h2v-6h3l-4-4z"/></svg>\');\n}\n.lh-report-icon--download::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg height="24" viewBox="0 0 \
-24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/><path d="M0 0h24v24H0z" fill="none"/></svg>\');\n}\n.lh-report-icon--dark::before {\n  background-image:url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 0 100 125"><path d="M50 23.587c-16.27 0-22.799 12.574-22.799 21.417 0 12.917 10.117 22.451 12.436 32.471h20.726c2.32-10.02 12.436-19.554 12.436-32.471 0-8.843-6.528-21.417-22.799-21.417zM39.637 87.161c0 3.001 1.18 4.181 4.181 4.181h.426l.41 1.231C45.278 94.449 46.042 95 48.019 95h3.963c1.978 0 2.74-.551 3.365-2.427l.409-1.231h.427c3.002 0 4.18-1.18 4.18-4.181V80.91H39.637v6.251zM50 18.265c1.26 0 2.072-.814 2.072-2.073v-9.12C52.072 5.813 51.26 5 50 5c-1.259 0-2.072.813-2.072 2.073v9.12c0 1.259.813 2.072 2.072 2.072zM68.313 23.727c.994.774 2.135.634 2.91-.357l5.614-7.187c.776-.992.636-2.135-.356-2.909-.992-.776-2.135-.636-2.91.357l-5.613 7.186c-.778.993-.636 2.135.355 2.91zM91.157 36.373c-.306-1\
-.222-1.291-1.815-2.513-1.51l-8.85 2.207c-1.222.305-1.814 1.29-1.51 2.512.305 1.223 1.291 1.814 2.513 1.51l8.849-2.206c1.223-.305 1.816-1.291 1.511-2.513zM86.757 60.48l-8.331-3.709c-1.15-.512-2.225-.099-2.736 1.052-.512 1.151-.1 2.224 1.051 2.737l8.33 3.707c1.15.514 2.225.101 2.736-1.05.513-1.149.1-2.223-1.05-2.737zM28.779 23.37c.775.992 1.917 1.131 2.909.357.992-.776 1.132-1.917.357-2.91l-5.615-7.186c-.775-.992-1.917-1.132-2.909-.357s-1.131 1.917-.356 2.909l5.614 7.187zM21.715 39.583c.305-1.223-.288-2.208-1.51-2.513l-8.849-2.207c-1.222-.303-2.208.289-2.513 1.511-.303 1.222.288 2.207 1.511 2.512l8.848 2.206c1.222.304 2.208-.287 2.513-1.509zM21.575 56.771l-8.331 3.711c-1.151.511-1.563 1.586-1.05 2.735.511 1.151 1.586 1.563 2.736 1.052l8.331-3.711c1.151-.511 1.563-1.586 1.05-2.735-.512-1.15-1.585-1.562-2.736-1.052z"/></svg>\');\n}\n.lh-report-icon--treemap::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" widt\
-h="24px" fill="black"><path d="M3 5v14h19V5H3zm2 2h15v4H5V7zm0 10v-4h4v4H5zm6 0v-4h9v4h-9z"/></svg>\');\n}\n\n.lh-report-icon--date::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 11h2v2H7v-2zm14-5v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6c0-1.1.9-2 2-2h1V2h2v2h8V2h2v2h1a2 2 0 012 2zM5 8h14V6H5v2zm14 12V10H5v10h14zm-4-7h2v-2h-2v2zm-4 0h2v-2h-2v2z"/></svg>\');\n}\n.lh-report-icon--devices::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 6h18V4H4a2 2 0 00-2 2v11H0v3h14v-3H4V6zm19 2h-6a1 1 0 00-1 1v10c0 .6.5 1 1 1h6c.6 0 1-.5 1-1V9c0-.6-.5-1-1-1zm-1 9h-4v-7h4v7z"/></svg>\');\n}\n.lh-report-icon--world::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm7 6h-3c-.3-1.3-.8-2.5-1.4-3.6A8 8 0 0 1 18.9 8zm-7-4a14 14 0 0 1 2 4h-4a14 14 0\
- 0 1 2-4zM4.3 14a8.2 8.2 0 0 1 0-4h3.3a16.5 16.5 0 0 0 0 4H4.3zm.8 2h3a14 14 0 0 0 1.3 3.6A8 8 0 0 1 5.1 16zm3-8H5a8 8 0 0 1 4.3-3.6L8 8zM12 20a14 14 0 0 1-2-4h4a14 14 0 0 1-2 4zm2.3-6H9.7a14.7 14.7 0 0 1 0-4h4.6a14.6 14.6 0 0 1 0 4zm.3 5.6c.6-1.2 1-2.4 1.4-3.6h3a8 8 0 0 1-4.4 3.6zm1.8-5.6a16.5 16.5 0 0 0 0-4h3.3a8.2 8.2 0 0 1 0 4h-3.3z"/></svg>\');\n}\n.lh-report-icon--stopwatch::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.1-6.6L20.5 6l-1.4-1.4L17.7 6A9 9 0 0 0 3 13a9 9 0 1 0 16-5.6zm-7 12.6a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/></svg>\');\n}\n.lh-report-icon--networkspeed::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15.9 5c-.2 0-.3 0-.4.2v.2L10.1 17a2 2 0 0 0-.2 1 2 2 0 0 0 4 .4l2.4-12.9c0-.3-.2-.5-.5-.5zM1 9l2 2c2.9-2.9 6.8-4 10.5-3.6l1.2-2.7C10 3.8 4.7 5.3 1 9zm20 2 2-2a15.4 15.4 0 0 0-5.6-3.6L17\
- 8.2c1.5.7 2.9 1.6 4.1 2.8zm-4 4 2-2a9.9 9.9 0 0 0-2.7-1.9l-.5 3 1.2.9zM5 13l2 2a7.1 7.1 0 0 1 4-2l1.3-2.9C9.7 10.1 7 11 5 13z"/></svg>\');\n}\n.lh-report-icon--samples-one::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="7" cy="14" r="3"/><path d="M7 18a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm4-2a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm5.6 17.6a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>\');\n}\n.lh-report-icon--samples-many::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 18a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm4-2a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm5.6 17.6a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"\
-/><circle cx="7" cy="14" r="3"/><circle cx="11" cy="6" r="3"/></svg>\');\n}\n.lh-report-icon--chrome::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -50 562 562"><path d="M256 25.6v25.6a204 204 0 0 1 144.8 60 204 204 0 0 1 60 144.8 204 204 0 0 1-60 144.8 204 204 0 0 1-144.8 60 204 204 0 0 1-144.8-60 204 204 0 0 1-60-144.8 204 204 0 0 1 60-144.8 204 204 0 0 1 144.8-60V0a256 256 0 1 0 0 512 256 256 0 0 0 0-512v25.6z"/><path d="M256 179.2v25.6a51.3 51.3 0 0 1 0 102.4 51.3 51.3 0 0 1 0-102.4v-51.2a102.3 102.3 0 1 0-.1 204.7 102.3 102.3 0 0 0 .1-204.7v25.6z"/><path d="M256 204.8h217.6a25.6 25.6 0 0 0 0-51.2H256a25.6 25.6 0 0 0 0 51.2m44.3 76.8L191.5 470.1a25.6 25.6 0 1 0 44.4 25.6l108.8-188.5a25.6 25.6 0 1 0-44.4-25.6m-88.6 0L102.9 93.2a25.7 25.7 0 0 0-35-9.4 25.7 25.7 0 0 0-9.4 35l108.8 188.5a25.7 25.7 0 0 0 35 9.4 25.9 25.9 0 0 0 9.4-35.1"/></svg>\');\n}\n.lh-report-icon--external::before {\n  background-image: url(\'data:image/svg+x\
-ml;utf8,<svg xmlns="http://www.w3.org/2000/svg"><path d="M3.15 11.9a1.01 1.01 0 0 1-.743-.307 1.01 1.01 0 0 1-.306-.743v-7.7c0-.292.102-.54.306-.744a1.01 1.01 0 0 1 .744-.306H7v1.05H3.15v7.7h7.7V7h1.05v3.85c0 .291-.103.54-.307.743a1.01 1.01 0 0 1-.743.307h-7.7Zm2.494-2.8-.743-.744 5.206-5.206H8.401V2.1h3.5v3.5h-1.05V3.893L5.644 9.1Z"/></svg>\');\n}\n.lh-report-icon--experiment::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none"><path d="M4.50002 17C3.86136 17 3.40302 16.7187 3.12502 16.156C2.84702 15.5933 2.90936 15.069 3.31202 14.583L7.50002 9.5V4.5H6.75002C6.54202 4.5 6.36502 4.427 6.21902 4.281C6.07302 4.135 6.00002 3.958 6.00002 3.75C6.00002 3.542 6.07302 3.365 6.21902 3.219C6.36502 3.073 6.54202 3 6.75002 3H13.25C13.458 3 13.635 3.073 13.781 3.219C13.927 3.365 14 3.542 14 3.75C14 3.958 13.927 4.135 13.781 4.281C13.635 4.427 13.458 4.5 13.25 4.5H12.5V9.5L16.688 14.583C17.0767 15.069 17.132 15.5933 16.854 16\
-.156C16.5767 16.7187 16.1254 17 15.5 17H4.50002ZM4.50002 15.5H15.5L11 10V4.5H9.00002V10L4.50002 15.5Z" fill="black"/></svg>\');\n}\n\n/** These are still icons, but w/o the auto-color invert / opacity / etc. that come with .lh-report-icon */\n\n.lh-report-plain-icon {\n  display: flex;\n  align-items: center;\n}\n.lh-report-plain-icon::before {\n  content: "";\n  background-repeat: no-repeat;\n  width: var(--report-icon-size);\n  height: var(--report-icon-size);\n  display: inline-block;\n  margin-right: 5px;\n}\n\n.lh-report-plain-icon--checklist-pass::before {\n  --icon-url: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M8.938 13L13.896 8.062L12.833 7L8.938 10.875L7.167 9.125L6.104 10.188L8.938 13ZM10 18C8.90267 18 7.868 17.7917 6.896 17.375C5.924 16.9583 5.07333 16.3853 4.344 15.656C3.61467 14.9267 3.04167 14.076 2.625 13.104C2.20833 12.132 2 11.0973 2 10C2 8.88867 2.20833 7.85033 2.625 6.885C3.04167 5.92033 3.61467 5.07333 4.344 4.344C5.07333 3.61467\
- 5.924 3.04167 6.896 2.625C7.868 2.20833 8.90267 2 10 2C11.1113 2 12.1497 2.20833 13.115 2.625C14.0797 3.04167 14.9267 3.61467 15.656 4.344C16.3853 5.07333 16.9583 5.92033 17.375 6.885C17.7917 7.85033 18 8.88867 18 10C18 11.0973 17.7917 12.132 17.375 13.104C16.9583 14.076 16.3853 14.9267 15.656 15.656C14.9267 16.3853 14.0797 16.9583 13.115 17.375C12.1497 17.7917 11.1113 18 10 18ZM10 16.5C11.8053 16.5 13.34 15.868 14.604 14.604C15.868 13.34 16.5 11.8053 16.5 10C16.5 8.19467 15.868 6.66 14.604 5.396C13.34 4.132 11.8053 3.5 10 3.5C8.19467 3.5 6.66 4.132 5.396 5.396C4.132 6.66 3.5 8.19467 3.5 10C3.5 11.8053 4.132 13.34 5.396 14.604C6.66 15.868 8.19467 16.5 10 16.5Z" fill="black"/></svg>\');\n  background-color: var(--color-pass);\n  mask: var(--icon-url) center / contain no-repeat;\n}\n.lh-report-plain-icon--checklist-fail::before {\n  --icon-url: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path fill-rule="evenodd" clip-rule="evenodd" d="M17.5 10C17.\
-5 14.1421 14.1421 17.5 10 17.5C5.85786 17.5 2.5 14.1421 2.5 10C2.5 5.85786 5.85786 2.5 10 2.5C14.1421 2.5 17.5 5.85786 17.5 10ZM16 10C16 13.3137 13.3137 16 10 16C8.6135 16 7.33683 15.5297 6.32083 14.7399L14.7399 6.32083C15.5297 7.33683 16 8.6135 16 10ZM5.26016 13.6793L13.6793 5.26016C12.6633 4.47033 11.3866 4 10 4C6.68629 4 4 6.68629 4 10C4 11.3866 4.47033 12.6633 5.26016 13.6793Z" fill="black"/></svg>\');\n  background-color: var(--color-fail);\n  mask: var(--icon-url) center / contain no-repeat;\n}\n\n.lh-buttons {\n  display: flex;\n  flex-wrap: wrap;\n  margin: var(--default-padding) 0;\n}\n.lh-button {\n  height: 32px;\n  border: 1px solid var(--report-border-color-secondary);\n  border-radius: 3px;\n  color: var(--link-color);\n  background-color: var(--report-background-color);\n  margin: 5px;\n}\n\n.lh-button:first-of-type {\n  margin-left: 0;\n}\n\n/* Node */\n.lh-node {\n  display: flow-root;\n}\n\n.lh-node__snippet {\n  font-family: var(--report-font-family-monospace);\n  color: var(--snippet-color);\n  fo\
-nt-size: var(--report-monospace-font-size);\n  line-height: 20px;\n}\n\n.lh-checklist {\n  list-style: none;\n  padding: 0;\n}\n\n.lh-checklist-item {\n  margin: 10px 0 10px 0;\n}\n\n/* Score */\n\n.lh-audit__score-icon {\n  width: var(--score-icon-size);\n  height: var(--score-icon-size);\n  margin: var(--score-icon-margin);\n}\n\n.lh-audit--pass .lh-audit__display-text {\n  color: var(--color-pass-secondary);\n}\n.lh-audit--pass .lh-audit__score-icon,\n.lh-scorescale-range--pass::before {\n  border-radius: 100%;\n  background: var(--color-pass);\n}\n\n.lh-audit--average .lh-audit__display-text {\n  color: var(--color-average-secondary);\n}\n.lh-audit--average .lh-audit__score-icon,\n.lh-scorescale-range--average::before {\n  background: var(--color-average);\n  width: var(--icon-square-size);\n  height: var(--icon-square-size);\n}\n\n.lh-audit--fail .lh-audit__display-text {\n  color: var(--color-fail-secondary);\n}\n.lh-audit--fail .lh-audit__score-icon,\n.lh-audit--error .lh-audit__score-icon,\n.lh-scorescale-range--fail::bef\
-ore {\n  border-left: calc(var(--score-icon-size) / 2) solid transparent;\n  border-right: calc(var(--score-icon-size) / 2) solid transparent;\n  border-bottom: var(--score-icon-size) solid var(--color-fail);\n}\n\n.lh-audit--error .lh-audit__score-icon,\n.lh-metric--error .lh-metric__icon {\n  background-image: var(--error-icon-url);\n  background-repeat: no-repeat;\n  background-position: center;\n  border: none;\n}\n\n.lh-gauge__wrapper--fail .lh-gauge--error {\n  background-image: var(--error-icon-url);\n  background-repeat: no-repeat;\n  background-position: center;\n  transform: scale(0.5);\n  top: var(--score-container-padding);\n}\n\n.lh-audit--manual .lh-audit__display-text,\n.lh-audit--notapplicable .lh-audit__display-text {\n  color: var(--color-gray-600);\n}\n.lh-audit--manual .lh-audit__score-icon,\n.lh-audit--notapplicable .lh-audit__score-icon {\n  border: calc(0.2 * var(--score-icon-size)) solid var(--color-gray-400);\n  border-radius: 100%;\n  background: none;\n}\n\n.lh-audit--informative .lh-audit__\
-display-text {\n  color: var(--color-gray-600);\n}\n\n.lh-audit--informative .lh-audit__score-icon {\n  border: calc(0.2 * var(--score-icon-size)) solid var(--color-gray-400);\n  border-radius: 100%;\n}\n\n.lh-audit__description,\n.lh-audit__stackpack {\n  color: var(--report-text-color-secondary);\n}\n.lh-audit__adorn {\n  border: 1px solid var(--color-gray-500);\n  border-radius: 3px;\n  margin: 0 3px;\n  padding: 0 2px;\n  line-height: 1.1;\n  display: inline-block;\n  font-size: 90%;\n  color: var(--report-text-color-secondary);\n}\n\n.lh-category-header__description  {\n  text-align: center;\n  color: var(--color-gray-700);\n  margin: 0px auto;\n  max-width: 400px;\n}\n\n\n.lh-audit__display-text,\n.lh-chevron-container {\n  margin: 0 var(--audit-margin-horizontal);\n}\n.lh-chevron-container {\n  margin-right: 0;\n}\n\n.lh-audit__title-and-text {\n  flex: 1;\n}\n\n.lh-audit__title-and-text code {\n  color: var(--snippet-color);\n  font-size: var(--report-monospace-font-size);\n}\n\n/* Prepend display text with em dash separator.\
- */\n.lh-audit__display-text:not(:empty):before {\n  content: \'\\u2014\';\n  margin-right: var(--audit-margin-horizontal);\n}\n\n/* Expandable Details (Audit Groups, Audits) */\n.lh-audit__header {\n  display: flex;\n  align-items: center;\n  padding: var(--default-padding);\n}\n\n\n.lh-metricfilter {\n  display: grid;\n  justify-content: end;\n  align-items: center;\n  grid-auto-flow: column;\n  gap: 4px;\n  color: var(--color-gray-700);\n}\n\n.lh-metricfilter__radio {\n  /*\n   * Instead of hiding, position offscreen so it\'s still accessible to screen readers\n   * https://bugs.chromium.org/p/chromium/issues/detail?id=1439785\n   */\n  position: fixed;\n  left: -9999px;\n}\n.lh-metricfilter input[type=\'radio\']:focus-visible + label {\n  outline: -webkit-focus-ring-color auto 1px;\n}\n\n.lh-metricfilter__label {\n  display: inline-flex;\n  padding: 0 4px;\n  height: 16px;\n  text-decoration: underline;\n  align-items: center;\n  cursor: pointer;\n  font-size: 90%;\n}\n\n.lh-metricfilter__label--active {\n  background: var(--color-b\
-lue-primary);\n  color: var(--color-white);\n  border-radius: 3px;\n  text-decoration: none;\n}\n/* Give the \'All\' choice a more muted display */\n.lh-metricfilter__label--active[for="metric-All"] {\n  background-color: var(--color-blue-200) !important;\n  color: black !important;\n}\n\n.lh-metricfilter__text {\n  margin-right: 8px;\n}\n\n/* If audits are filtered, hide the itemcount for Passed Audits\\u2026 */\n.lh-category--filtered .lh-audit-group .lh-audit-group__itemcount {\n  display: none;\n}\n\n\n.lh-audit__header:hover {\n  background-color: var(--color-hover);\n}\n\n/* We want to hide the browser\'s default arrow marker on summary elements. Admittedly, it\'s complicated. */\n.lh-root details > summary {\n  /* Blink 89+ and Firefox will hide the arrow when display is changed from (new) default of \\`list-item\\` to block.  https://chromestatus.com/feature/6730096436051968*/\n  display: block;\n}\n/* Safari and Blink <=88 require using the -webkit-details-marker selector */\n.lh-root details > summary::-webkit-de\
-tails-marker {\n  display: none;\n}\n\n/* Perf Metric */\n\n.lh-metrics-container {\n  display: grid;\n  grid-auto-rows: 1fr;\n  grid-template-columns: 1fr 1fr;\n  grid-column-gap: var(--report-line-height);\n  margin-bottom: var(--default-padding);\n}\n\n.lh-metric {\n  border-top: 1px solid var(--report-border-color-secondary);\n}\n\n.lh-category:not(.lh--hoisted-meta) .lh-metric:nth-last-child(-n+2) {\n  border-bottom: 1px solid var(--report-border-color-secondary);\n}\n\n.lh-metric__innerwrap {\n  display: grid;\n  /**\n   * Icon -- Metric Name\n   *      -- Metric Value\n   */\n  grid-template-columns: calc(var(--score-icon-size) + var(--score-icon-margin-left) + var(--score-icon-margin-right)) 1fr;\n  align-items: center;\n  padding: var(--default-padding);\n}\n\n.lh-metric__details {\n  order: -1;\n}\n\n.lh-metric__title {\n  flex: 1;\n}\n\n.lh-calclink {\n  padding-left: calc(1ex / 3);\n}\n\n.lh-metric__description {\n  display: none;\n  grid-column-start: 2;\n  grid-column-end: 4;\n  color: var(--report-text-color-secondary)\
-;\n}\n\n.lh-metric__value {\n  font-size: var(--metric-value-font-size);\n  margin: calc(var(--default-padding) / 2) 0;\n  white-space: nowrap; /* No wrapping between metric value and the icon */\n  grid-column-start: 2;\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 535px) {\n  .lh-metrics-container {\n    display: block;\n  }\n\n  .lh-metric {\n    border-bottom: none !important;\n  }\n  .lh-category:not(.lh--hoisted-meta) .lh-metric:nth-last-child(1) {\n    border-bottom: 1px solid var(--report-border-color-secondary) !important;\n  }\n\n  /* Change the grid to 3 columns for narrow viewport. */\n  .lh-metric__innerwrap {\n  /**\n   * Icon -- Metric Name -- Metric Value\n   */\n    grid-template-columns: calc(var(--score-icon-size) + var(--score-icon-margin-left) + var(--\
-score-icon-margin-right)) 2fr 1fr;\n  }\n  .lh-metric__value {\n    justify-self: end;\n    grid-column-start: unset;\n  }\n}\n\n@container lh-container (max-width: 535px) {\n  .lh-metrics-container {\n    display: block;\n  }\n\n  .lh-metric {\n    border-bottom: none !important;\n  }\n  .lh-category:not(.lh--hoisted-meta) .lh-metric:nth-last-child(1) {\n    border-bottom: 1px solid var(--report-border-color-secondary) !important;\n  }\n\n  /* Change the grid to 3 columns for narrow viewport. */\n  .lh-metric__innerwrap {\n  /**\n   * Icon -- Metric Name -- Metric Value\n   */\n    grid-template-columns: calc(var(--score-icon-size) + var(--score-icon-margin-left) + var(--score-icon-margin-right)) 2fr 1fr;\n  }\n  .lh-metric__value {\n    justify-self: end;\n    grid-column-start: unset;\n  }\n}\n\n/* No-JS toggle switch */\n/* Keep this selector sync\'d w/ \\`magicSelector\\` in report-ui-features-test.js */\n .lh-metrics-toggle__input:checked ~ .lh-metrics-container .lh-metric__description {\n  display: block;\n}\n\n/* TODO \
-get rid of the SVGS and clean up these some more */\n.lh-metrics-toggle__input {\n  opacity: 0;\n  position: absolute;\n  right: 0;\n  top: 0px;\n}\n\n.lh-metrics-toggle__input + div > label > .lh-metrics-toggle__labeltext--hide,\n.lh-metrics-toggle__input:checked + div > label > .lh-metrics-toggle__labeltext--show {\n  display: none;\n}\n.lh-metrics-toggle__input:checked + div > label > .lh-metrics-toggle__labeltext--hide {\n  display: inline;\n}\n.lh-metrics-toggle__input:focus + div > label {\n  outline: -webkit-focus-ring-color auto 3px;\n}\n\n.lh-metrics-toggle__label {\n  cursor: pointer;\n  font-size: var(--report-font-size-secondary);\n  line-height: var(--report-line-height-secondary);\n  color: var(--color-gray-700);\n}\n\n/* Pushes the metric description toggle button to the right. */\n.lh-audit-group--metrics .lh-audit-group__header {\n  display: flex;\n  justify-content: space-between;\n}\n\n.lh-metric__icon,\n.lh-scorescale-range::before {\n  content: \'\';\n  width: var(--score-icon-size);\n  height: var(--s\
-core-icon-size);\n  display: inline-block;\n  margin: var(--score-icon-margin);\n}\n\n.lh-metric--pass .lh-metric__value {\n  color: var(--color-pass-secondary);\n}\n.lh-metric--pass .lh-metric__icon {\n  border-radius: 100%;\n  background: var(--color-pass);\n}\n\n.lh-metric--average .lh-metric__value {\n  color: var(--color-average-secondary);\n}\n.lh-metric--average .lh-metric__icon {\n  background: var(--color-average);\n  width: var(--icon-square-size);\n  height: var(--icon-square-size);\n}\n\n.lh-metric--fail .lh-metric__value {\n  color: var(--color-fail-secondary);\n}\n.lh-metric--fail .lh-metric__icon {\n  border-left: calc(var(--score-icon-size) / 2) solid transparent;\n  border-right: calc(var(--score-icon-size) / 2) solid transparent;\n  border-bottom: var(--score-icon-size) solid var(--color-fail);\n}\n\n.lh-metric--error .lh-metric__value,\n.lh-metric--error .lh-metric__description {\n  color: var(--color-fail-secondary);\n}\n\n/* Filmstrip */\n\n.lh-filmstrip-container {\n  /* smaller gap between metrics and\
- filmstrip */\n  margin: -8px auto 0 auto;\n}\n\n.lh-filmstrip {\n  display: flex;\n  justify-content: space-between;\n  justify-items: center;\n  margin-bottom: var(--default-padding);\n  width: 100%;\n}\n\n.lh-filmstrip__frame {\n  overflow: hidden;\n  line-height: 0;\n}\n\n.lh-filmstrip__thumbnail {\n  border: 1px solid var(--report-border-color-secondary);\n  max-height: 150px;\n  max-width: 120px;\n}\n\n.lh-dark .lh-perf-toggle-text {\n  color: rgba(30, 164, 70, 1);\n}\n\n.lh-perf-toggle-text a {\n  color: var(--link-color);\n}\n\n/* Audit */\n\n.lh-audit {\n  border-bottom: 1px solid var(--report-border-color-secondary);\n}\n\n/* Apply border-top to just the first audit. */\n.lh-audit {\n  border-top: 1px solid var(--report-border-color-secondary);\n}\n.lh-audit ~ .lh-audit {\n  border-top: none;\n}\n\n\n.lh-audit--error .lh-audit__display-text {\n  color: var(--color-fail-secondary);\n}\n\n/* Audit Group */\n\n.lh-audit-group {\n  margin-bottom: var(--audit-group-margin-bottom);\n  position: relative;\n}\n.lh-audit-group--metrics {\n \
- margin-bottom: calc(var(--audit-group-margin-bottom) / 2);\n}\n\n.lh-audit-group--metrics .lh-audit-group__summary {\n  margin-top: 0;\n  margin-bottom: 0;\n}\n\n.lh-audit-group__summary {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n}\n\n.lh-audit-group__header .lh-chevron {\n  margin-top: calc((var(--report-line-height) - 5px) / 2);\n}\n\n.lh-audit-group__header {\n  letter-spacing: 0.8px;\n  padding: var(--default-padding);\n  padding-left: 0;\n}\n\n.lh-audit-group__header, .lh-audit-group__summary {\n  font-size: var(--report-font-size-secondary);\n  line-height: var(--report-line-height-secondary);\n  color: var(--color-gray-700);\n}\n\n.lh-audit-group__title {\n  text-transform: uppercase;\n  font-weight: 500;\n}\n\n.lh-audit-group__itemcount {\n  color: var(--color-gray-600);\n}\n\n.lh-audit-group__footer {\n  color: var(--color-gray-600);\n  display: block;\n  margin-top: var(--default-padding);\n}\n\n.lh-details,\n.lh-category-header__description,\n.lh-audit-group__footer {\n  font-size: va\
-r(--report-font-size-secondary);\n  line-height: var(--report-line-height-secondary);\n}\n\n.lh-audit-explanation {\n  margin: var(--audit-padding-vertical) 0 calc(var(--audit-padding-vertical) / 2) var(--audit-margin-horizontal);\n  line-height: var(--audit-explanation-line-height);\n  display: inline-block;\n}\n\n.lh-audit--fail .lh-audit-explanation {\n  color: var(--color-fail-secondary);\n}\n\n/* Report */\n.lh-list {\n  margin-right: calc(var(--default-padding) * 2);\n}\n.lh-list > :not(:last-child) {\n  margin-bottom: calc(var(--default-padding) * 2);\n  border-bottom: 1px solid #A8C7FA;\n}\n.lh-list-section {\n  padding: calc(var(--default-padding) * 2) 0;\n}\n.lh-list-section__title {\n  text-decoration: underline;\n}\n\n.lh-header-container {\n  display: block;\n  margin: 0 auto;\n  position: relative;\n  word-wrap: break-word;\n}\n\n.lh-header-container .lh-scores-wrapper {\n  border-bottom: 1px solid var(--color-gray-200);\n}\n\n\n.lh-report {\n  min-width: var(--report-content-min-width);\n}\n\n.lh-exception {\n  font\
--size: large;\n}\n\n.lh-code {\n  white-space: normal;\n  margin-top: 0;\n  font-size: var(--report-monospace-font-size);\n}\n\n.lh-warnings {\n  --item-margin: calc(var(--report-line-height) / 6);\n  color: var(--color-average-secondary);\n  margin: var(--audit-padding-vertical) 0;\n  padding: var(--default-padding)\n    var(--default-padding)\n    var(--default-padding)\n    calc(var(--audit-description-padding-left));\n  background-color: var(--toplevel-warning-background-color);\n}\n.lh-warnings span {\n  font-weight: bold;\n}\n\n.lh-warnings--toplevel {\n  --item-margin: calc(var(--header-line-height) / 4);\n  color: var(--toplevel-warning-text-color);\n  margin-left: auto;\n  margin-right: auto;\n  max-width: var(--report-content-max-width-minus-edge-gap);\n  padding: var(--toplevel-warning-padding);\n  border-radius: 8px;\n}\n\n.lh-warnings__msg {\n  color: var(--toplevel-warning-message-text-color);\n  margin: 0;\n}\n\n.lh-warnings ul {\n  margin: 0;\n}\n.lh-warnings li {\n  margin: var(--item-margin) 0;\n}\n.lh-warnings\
- li:last-of-type {\n  margin-bottom: 0;\n}\n\n.lh-scores-header {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: center;\n}\n.lh-scores-header__solo {\n  padding: 0;\n  border: 0;\n}\n\n/* Gauge */\n\n.lh-gauge__wrapper--pass {\n  color: var(--color-pass-secondary);\n  fill: var(--color-pass);\n  stroke: var(--color-pass);\n}\n\n.lh-gauge__wrapper--average {\n  color: var(--color-average-secondary);\n  fill: var(--color-average);\n  stroke: var(--color-average);\n}\n\n.lh-gauge__wrapper--fail {\n  color: var(--color-fail-secondary);\n  fill: var(--color-fail);\n  stroke: var(--color-fail);\n}\n\n.lh-gauge__wrapper--not-applicable {\n  color: var(--color-not-applicable);\n  fill: var(--color-not-applicable);\n  stroke: var(--color-not-applicable);\n}\n\n.lh-fraction__wrapper .lh-fraction__content::before {\n  content: \'\';\n  height: var(--score-icon-size);\n  width: var(--score-icon-size);\n  margin: var(--score-icon-margin);\n  display: inline-block;\n}\n.lh-fraction__wrapper--pass .lh-fraction__content {\n  color: var(--\
-color-pass-secondary);\n}\n.lh-fraction__wrapper--pass .lh-fraction__background {\n  background-color: var(--color-pass);\n}\n.lh-fraction__wrapper--pass .lh-fraction__content::before {\n  background-color: var(--color-pass);\n  border-radius: 50%;\n}\n.lh-fraction__wrapper--average .lh-fraction__content {\n  color: var(--color-average-secondary);\n}\n.lh-fraction__wrapper--average .lh-fraction__background,\n.lh-fraction__wrapper--average .lh-fraction__content::before {\n  background-color: var(--color-average);\n}\n.lh-fraction__wrapper--fail .lh-fraction__content {\n  color: var(--color-fail);\n}\n.lh-fraction__wrapper--fail .lh-fraction__background {\n  background-color: var(--color-fail);\n}\n.lh-fraction__wrapper--fail .lh-fraction__content::before {\n  border-left: calc(var(--score-icon-size) / 2) solid transparent;\n  border-right: calc(var(--score-icon-size) / 2) solid transparent;\n  border-bottom: var(--score-icon-size) solid var(--color-fail);\n}\n.lh-fraction__wrapper--null .lh-fraction__content {\n  \
-color: var(--color-gray-700);\n}\n.lh-fraction__wrapper--null .lh-fraction__background {\n  background-color: var(--color-gray-700);\n}\n.lh-fraction__wrapper--null .lh-fraction__content::before {\n  border-radius: 50%;\n  border: calc(0.2 * var(--score-icon-size)) solid var(--color-gray-700);\n}\n\n.lh-fraction__background {\n  position: absolute;\n  height: 100%;\n  width: 100%;\n  border-radius: calc(var(--gauge-circle-size) / 2);\n  opacity: 0.1;\n  z-index: -1;\n}\n\n.lh-fraction__content-wrapper {\n  height: var(--gauge-circle-size);\n  display: flex;\n  align-items: center;\n}\n\n.lh-fraction__content {\n  display: flex;\n  position: relative;\n  align-items: center;\n  justify-content: center;\n  font-size: calc(0.3 * var(--gauge-circle-size));\n  line-height: calc(0.4 * var(--gauge-circle-size));\n  width: max-content;\n  min-width: calc(1.5 * var(--gauge-circle-size));\n  padding: calc(0.1 * var(--gauge-circle-size)) calc(0.2 * var(--gauge-circle-size));\n  --score-icon-size: calc(0.21 * var(--gauge-circle-siz\
-e));\n  --score-icon-margin: 0 calc(0.15 * var(--gauge-circle-size)) 0 0;\n}\n\n.lh-gauge {\n  stroke-linecap: round;\n  width: var(--gauge-circle-size);\n  height: var(--gauge-circle-size);\n}\n\n.lh-category .lh-gauge {\n  --gauge-circle-size: var(--gauge-circle-size-big);\n}\n\n.lh-gauge-base {\n  opacity: 0.1;\n}\n\n.lh-gauge-arc {\n  fill: none;\n  transform-origin: 50% 50%;\n  animation: load-gauge var(--transition-length) ease both;\n  animation-delay: 250ms;\n}\n\n.lh-gauge__svg-wrapper {\n  position: relative;\n  height: var(--gauge-circle-size);\n}\n.lh-category .lh-gauge__svg-wrapper,\n.lh-category .lh-fraction__wrapper {\n  --gauge-circle-size: var(--gauge-circle-size-big);\n}\n\n/* The plugin badge overlay */\n.lh-gauge__wrapper--plugin .lh-gauge__svg-wrapper::before {\n  width: var(--plugin-badge-size);\n  height: var(--plugin-badge-size);\n  background-color: var(--plugin-badge-background-color);\n  background-image: var(--plugin-icon-url);\n  background-repeat: no-repeat;\n  background-size: var(--plugin-icon-\
-size);\n  background-position: 58% 50%;\n  content: "";\n  position: absolute;\n  right: -6px;\n  bottom: 0px;\n  display: block;\n  z-index: 100;\n  box-shadow: 0 0 4px rgba(0,0,0,.2);\n  border-radius: 25%;\n}\n.lh-category .lh-gauge__wrapper--plugin .lh-gauge__svg-wrapper::before {\n  width: var(--plugin-badge-size-big);\n  height: var(--plugin-badge-size-big);\n}\n\n@keyframes load-gauge {\n  from { stroke-dasharray: 0 352; }\n}\n\n.lh-gauge__percentage {\n  width: 100%;\n  height: var(--gauge-circle-size);\n  line-height: var(--gauge-circle-size);\n  position: absolute;\n  font-family: var(--report-font-family-monospace);\n  font-size: calc(var(--gauge-circle-size) * 0.34 + 1.3px);\n  text-align: center;\n  top: var(--score-container-padding);\n}\n\n.lh-category .lh-gauge__percentage {\n  --gauge-circle-size: var(--gauge-circle-size-big);\n  --gauge-percentage-font-size: var(--gauge-percentage-font-size-big);\n}\n\n.lh-gauge__wrapper,\n.lh-fraction__wrapper {\n  position: relative;\n  display: flex;\n  align-items: cent\
-er;\n  flex-direction: column;\n  text-decoration: none;\n  padding: var(--score-container-padding);\n\n  --transition-length: 1s;\n\n  /* Contain the layout style paint & layers during animation*/\n  contain: content;\n  will-change: opacity; /* Only using for layer promotion */\n}\n\n.lh-gauge__label,\n.lh-fraction__label {\n  font-size: var(--gauge-label-font-size);\n  font-weight: 500;\n  line-height: var(--gauge-label-line-height);\n  margin-top: 10px;\n  text-align: center;\n  color: var(--report-text-color);\n  word-break: keep-all;\n}\n\n/* TODO(#8185) use more BEM (.lh-gauge__label--big) instead of relying on descendant selector */\n.lh-category .lh-gauge__label,\n.lh-category .lh-fraction__label {\n  --gauge-label-font-size: var(--gauge-label-font-size-big);\n  --gauge-label-line-height: var(--gauge-label-line-height-big);\n  margin-top: 14px;\n}\n\n.lh-scores-header .lh-gauge__wrapper,\n.lh-scores-header .lh-fraction__wrapper,\n.lh-sticky-header .lh-gauge__wrapper,\n.lh-sticky-header .lh-fraction__wrapper {\n\
-  width: var(--gauge-wrapper-width);\n}\n\n.lh-scorescale {\n  display: inline-flex;\n\n  gap: calc(var(--default-padding) * 4);\n  margin: 16px auto 0 auto;\n  font-size: var(--report-font-size-secondary);\n  color: var(--color-gray-700);\n\n}\n\n.lh-scorescale-range {\n  display: flex;\n  align-items: center;\n  font-family: var(--report-font-family-monospace);\n  white-space: nowrap;\n}\n\n.lh-category-header__finalscreenshot .lh-scorescale {\n  border: 0;\n  display: flex;\n  justify-content: center;\n}\n\n.lh-category-header__finalscreenshot .lh-scorescale-range {\n  font-family: unset;\n  font-size: 12px;\n}\n\n.lh-scorescale-wrap {\n  display: contents;\n}\n\n/* Hide category score gauages if it\'s a single category report */\n.lh-header--solo-category .lh-scores-wrapper {\n  display: none;\n}\n\n\n.lh-categories {\n  width: 100%;\n}\n\n.lh-category {\n  padding: var(--category-padding);\n  max-width: var(--report-content-max-width);\n  margin: 0 auto;\n\n  scroll-margin-top: calc(var(--sticky-header-buffer) - 1em);\n}\n\n.lh-categ\
-ory-wrapper {\n  border-bottom: 1px solid var(--color-gray-200);\n}\n.lh-category-wrapper:last-of-type {\n  border-bottom: 0;\n}\n\n.lh-category-header {\n  margin-bottom: var(--section-padding-vertical);\n}\n\n.lh-category-header .lh-score__gauge {\n  max-width: 400px;\n  width: auto;\n  margin: 0px auto;\n}\n\n.lh-category-header__finalscreenshot {\n  display: grid;\n  grid-template: none / 1fr 1px 1fr;\n  justify-items: center;\n  align-items: center;\n  gap: var(--report-line-height);\n  min-height: 288px;\n  margin-bottom: var(--default-padding);\n}\n\n.lh-final-ss-image {\n  /* constrain the size of the image to not be too large */\n  max-height: calc(var(--gauge-circle-size-big) * 2.8);\n  max-width: calc(var(--gauge-circle-size-big) * 3.5);\n  border: 1px solid var(--color-gray-200);\n  padding: 4px;\n  border-radius: 3px;\n  display: block;\n}\n\n.lh-category-headercol--separator {\n  background: var(--color-gray-200);\n  width: 1px;\n  height: var(--gauge-circle-size-big);\n}\n\n/**\n* This media query is a temporary f\
-allback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 780px) {\n  .lh-category-header__finalscreenshot {\n    grid-template: 1fr 1fr / none\n  }\n  .lh-category-headercol--separator {\n    display: none;\n  }\n}\n\n@container lh-container (max-width: 780px) {\n  .lh-category-header__finalscreenshot {\n    grid-template: 1fr 1fr / none\n  }\n  .lh-category-headercol--separator {\n    display: none;\n  }\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 964px) {\n  .lh-report {\n    margin-left: 0;\n    width: 100%;\n  }\n}\n\n/* 964 fits the min-width of the filmstrip */\n@container lh-con\
-tainer (max-width: 964px) {\n  .lh-report {\n    margin-left: 0;\n    width: 100%;\n  }\n}\n\n@media print {\n  body {\n    -webkit-print-color-adjust: exact; /* print background colors */\n  }\n  .lh-container {\n    display: block;\n  }\n  .lh-report {\n    margin-left: 0;\n    padding-top: 0;\n  }\n  .lh-categories {\n    margin-top: 0;\n  }\n  .lh-buttons, .lh-highlighter {\n    /* hide stickyheader marker when printing. crbug.com/41486992 */\n    display: none;\n  }\n}\n\n.lh-table {\n  position: relative;\n  border-collapse: separate;\n  border-spacing: 0;\n  /* Can\'t assign padding to table, so shorten the width instead. */\n  width: calc(100% - var(--audit-description-padding-left) - var(--stackpack-padding-horizontal));\n  border: 1px solid var(--report-border-color-secondary);\n}\n\n.lh-table thead th {\n  position: sticky;\n  top: var(--sticky-header-buffer);\n  z-index: 1;\n  background-color: var(--report-background-color);\n  border-bottom: 1px solid var(--report-border-color-secondary);\n  font-weight: normal;\n \
- color: var(--color-gray-600);\n  /* See text-wrapping comment on .lh-container. */\n  word-break: normal;\n}\n\n.lh-row--group {\n  background-color: var(--table-group-header-background-color);\n}\n\n.lh-row--group td {\n  font-weight: bold;\n  font-size: 1.05em;\n  color: var(--table-group-header-text-color);\n}\n\n.lh-row--group td:first-child {\n  display: block;\n  min-width: max-content;\n  font-weight: normal;\n}\n\n.lh-row--group .lh-text {\n  color: inherit;\n  text-decoration: none;\n  display: inline-block;\n}\n\n.lh-row--group a.lh-link:hover {\n  text-decoration: underline;\n}\n\n.lh-row--group .lh-audit__adorn {\n  text-transform: capitalize;\n  font-weight: normal;\n  padding: 2px 3px 1px 3px;\n}\n\n.lh-row--group .lh-audit__adorn1p {\n  color: var(--link-color);\n  border-color: var(--link-color);\n}\n\n.lh-row--group .lh-report-icon--external::before {\n  content: "";\n  background-repeat: no-repeat;\n  width: 14px;\n  height: 16px;\n  opacity: 0.7;\n  display: inline-block;\n  vertical-align: middle;\n}\n\n.lh-row--gro\
-up .lh-report-icon--external {\n  visibility: hidden;\n}\n\n.lh-row--group:hover .lh-report-icon--external {\n  visibility: visible;\n}\n\n.lh-dark .lh-report-icon--external::before {\n  filter: invert(1);\n}\n\n/** Manages indentation of two-level and three-level nested adjacent rows */\n\n.lh-row--group ~ [data-entity]:not(.lh-row--group) td:first-child {\n  padding-left: 20px;\n}\n\n.lh-row--group ~ [data-entity]:not(.lh-row--group) ~ .lh-sub-item-row td:first-child {\n  margin-left: 20px;\n  padding-left: 10px;\n  border-left: 1px solid #A8C7FA;\n  display: block;\n}\n\n.lh-row--even {\n  background-color: var(--table-group-header-background-color);\n}\n.lh-row--hidden {\n  display: none;\n}\n\n.lh-table th,\n.lh-table td {\n  padding: var(--default-padding);\n}\n\n.lh-table tr {\n  vertical-align: middle;\n}\n\n.lh-table tr:hover {\n  background-color: var(--table-higlight-background-color);\n}\n\n/* Looks unnecessary, but mostly for keeping the <th>s left-aligned */\n.lh-table-column--text,\n.lh-table-column--source-location,\
-\n.lh-table-column--url,\n/* .lh-table-column--thumbnail, */\n/* .lh-table-column--empty,*/\n.lh-table-column--code,\n.lh-table-column--node {\n  text-align: left;\n}\n\n.lh-table-column--code {\n  min-width: 100px;\n}\n\n.lh-table-column--bytes,\n.lh-table-column--timespanMs,\n.lh-table-column--ms,\n.lh-table-column--numeric {\n  text-align: right;\n  word-break: normal;\n}\n\n\n\n.lh-table .lh-table-column--thumbnail {\n  width: var(--image-preview-size);\n}\n\n.lh-table-column--url {\n  min-width: 250px;\n}\n\n.lh-table-column--text {\n  min-width: 80px;\n}\n\n/* Keep columns narrow if they follow the URL column */\n/* 12% was determined to be a decent narrow width, but wide enough for column headings */\n.lh-table-column--url + th.lh-table-column--bytes,\n.lh-table-column--url + .lh-table-column--bytes + th.lh-table-column--bytes,\n.lh-table-column--url + .lh-table-column--ms,\n.lh-table-column--url + .lh-table-column--ms + th.lh-table-column--bytes,\n.lh-table-column--url + .lh-table-column--bytes + th.lh-table-column--t\
-imespanMs {\n  width: 12%;\n}\n\n/** Tweak styling for tables in insight audits. */\n.lh-audit[id$="-insight"] .lh-table {\n  border: none;\n}\n\n.lh-audit[id$="-insight"] .lh-table thead th {\n  font-weight: bold;\n  color: unset;\n}\n\n.lh-audit[id$="-insight"] .lh-table th,\n.lh-audit[id$="-insight"] .lh-table td {\n  padding: calc(var(--default-padding) / 2);\n}\n\n.lh-audit[id$="-insight"] .lh-table .lh-row--even,\n.lh-audit[id$="-insight"] .lh-table tr:not(.lh-row--group):hover {\n  background-color: unset;\n}\n\n.lh-text__url-host {\n  display: inline;\n}\n\n.lh-text__url-host {\n  margin-left: calc(var(--report-font-size) / 2);\n  opacity: 0.6;\n  font-size: 90%\n}\n\n.lh-thumbnail {\n  object-fit: cover;\n  width: var(--image-preview-size);\n  height: var(--image-preview-size);\n  display: block;\n}\n\n.lh-unknown pre {\n  overflow: scroll;\n  border: solid 1px var(--color-gray-200);\n}\n\n.lh-text__url > a {\n  color: inherit;\n  text-decoration: none;\n}\n\n.lh-text__url > a:hover {\n  text-decoration: underline dotted #999;\n\
-}\n\n.lh-sub-item-row {\n  margin-left: 20px;\n  margin-bottom: 0;\n  color: var(--color-gray-700);\n}\n\n.lh-sub-item-row td {\n  padding-top: 4px;\n  padding-bottom: 4px;\n  padding-left: 20px;\n}\n\n.lh-sub-item-row .lh-element-screenshot {\n  zoom: 0.6;\n}\n\n/* Chevron\n   https://codepen.io/paulirish/pen/LmzEmK\n */\n.lh-chevron {\n  --chevron-angle: 42deg;\n  /* Edge doesn\'t support transform: rotate(calc(...)), so we define it here */\n  --chevron-angle-right: -42deg;\n  width: var(--chevron-size);\n  height: var(--chevron-size);\n  margin-top: calc((var(--report-line-height) - 12px) / 2);\n}\n\n.lh-chevron__lines {\n  transition: transform 0.4s;\n  transform: translateY(var(--report-line-height));\n}\n.lh-chevron__line {\n stroke: var(--chevron-line-stroke);\n stroke-width: var(--chevron-size);\n stroke-linecap: square;\n transform-origin: 50%;\n transform: rotate(var(--chevron-angle));\n transition: transform 300ms, stroke 300ms;\n}\n\n.lh-expandable-details .lh-chevron__line-right,\n.lh-expandable-details[open] .lh-ch\
-evron__line-left {\n transform: rotate(var(--chevron-angle-right));\n}\n\n.lh-expandable-details[open] .lh-chevron__line-right {\n  transform: rotate(var(--chevron-angle));\n}\n\n\n.lh-expandable-details[open]  .lh-chevron__lines {\n transform: translateY(calc(var(--chevron-size) * -1));\n}\n\n.lh-expandable-details[open] {\n  animation: 300ms openDetails forwards;\n  padding-bottom: var(--default-padding);\n}\n\n@keyframes openDetails {\n  from {\n    outline: 1px solid var(--report-background-color);\n  }\n  to {\n   outline: 1px solid;\n   box-shadow: 0 2px 4px rgba(0, 0, 0, .24);\n  }\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 780px) {\n  /* no black outline if we\'re not confident the entire table can be displayed within bounds */\n  .lh-expandable-details[open] {\n    \
-animation: none;\n  }\n}\n\n@container lh-container (max-width: 780px) {\n  /* no black outline if we\'re not confident the entire table can be displayed within bounds */\n  .lh-expandable-details[open] {\n    animation: none;\n  }\n}\n\n.lh-expandable-details[open] summary, details.lh-clump > summary {\n  border-bottom: 1px solid var(--report-border-color-secondary);\n}\ndetails.lh-clump[open] > summary {\n  border-bottom-width: 0;\n}\n\n\n\ndetails .lh-clump-toggletext--hide,\ndetails[open] .lh-clump-toggletext--show { display: none; }\ndetails[open] .lh-clump-toggletext--hide { display: block;}\n\n\n/* Tooltip */\n.lh-tooltip-boundary {\n  position: relative;\n}\n\n.lh-tooltip {\n  position: absolute;\n  display: none; /* Don\'t retain these layers when not needed */\n  opacity: 0;\n  background: #ffffff;\n  white-space: pre-line; /* Render newlines in the text */\n  min-width: 246px;\n  max-width: 275px;\n  padding: 15px;\n  border-radius: 5px;\n  text-align: initial;\n  line-height: 1.4;\n}\n\n/**\n* This media query is a temp\
-orary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 535px) {\n  .lh-tooltip {\n    min-width: 45cqi;\n    padding: 3cqi;\n  }\n}\n\n/* shrink tooltips to not be cutoff on left edge of narrow container\n   45vw is chosen to be ~= width of the left column of metrics\n*/\n@container lh-container (max-width: 535px) {\n  .lh-tooltip {\n    min-width: 45cqi;\n    padding: 3cqi;\n  }\n}\n\n.lh-tooltip-boundary:hover .lh-tooltip {\n  display: block;\n  animation: fadeInTooltip 250ms;\n  animation-fill-mode: forwards;\n  animation-delay: 850ms;\n  bottom: 100%;\n  z-index: 1;\n  will-change: opacity;\n  right: 0;\n  pointer-events: none;\n}\n\n.lh-tooltip::before {\n  content: "";\n  border: solid transparent;\n  border-bottom-color: #fff;\n  border-width: 10px;\n  position: absolute;\n  bottom: -20px;\n  right: 6px;\n  transform: rot\
-ate(180deg);\n  pointer-events: none;\n}\n\n@keyframes fadeInTooltip {\n  0% { opacity: 0; }\n  75% { opacity: 1; }\n  100% { opacity: 1;  filter: drop-shadow(1px 0px 1px #aaa) drop-shadow(0px 2px 4px hsla(206, 6%, 25%, 0.15)); pointer-events: auto; }\n}\n\n/* Element screenshot */\n.lh-element-screenshot {\n  float: left;\n  margin-right: 20px;\n}\n.lh-element-screenshot__content {\n  overflow: hidden;\n  min-width: 110px;\n  display: flex;\n  justify-content: center;\n  background-color: var(--report-background-color);\n}\n.lh-element-screenshot__image {\n  position: relative;\n  /* Set by ElementScreenshotRenderer.installFullPageScreenshotCssVariable */\n  background-image: var(--element-screenshot-url);\n  outline: 2px solid #777;\n  background-color: white;\n  background-repeat: no-repeat;\n}\n.lh-element-screenshot__mask {\n  position: absolute;\n  background: #555;\n  opacity: 0.8;\n}\n.lh-element-screenshot__element-marker {\n  position: absolute;\n  outline: 2px solid var(--color-lime-400);\n}\n.lh-element-screensh\
-ot__overlay {\n  position: fixed;\n  top: 0;\n  left: 0;\n  right: 0;\n  bottom: 0;\n  z-index: 2000; /* .lh-topbar is 1000 */\n  background: var(--screenshot-overlay-background);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  cursor: zoom-out;\n}\n\n.lh-element-screenshot__overlay .lh-element-screenshot {\n  margin-right: 0; /* clearing margin used in thumbnail case */\n  outline: 1px solid var(--color-gray-700);\n}\n\n.lh-screenshot-overlay--enabled .lh-element-screenshot {\n  cursor: zoom-out;\n}\n.lh-screenshot-overlay--enabled .lh-node .lh-element-screenshot {\n  cursor: zoom-in;\n}\n\n\n.lh-meta__items {\n  --meta-icon-size: calc(var(--report-icon-size) * 0.667);\n  padding: var(--default-padding);\n  display: grid;\n  grid-template-columns: 1fr 1fr 1fr;\n  background-color: var(--env-item-background-color);\n  border-radius: 3px;\n  margin: 0 0 var(--default-padding) 0;\n  font-size: 12px;\n  column-gap: var(--default-padding);\n  color: var(--color-gray-700);\n}\n\n.lh-meta__item {\n  display\
-: block;\n  list-style-type: none;\n  position: relative;\n  padding: 0 0 0 calc(var(--meta-icon-size) + var(--default-padding) * 2);\n  cursor: unset; /* disable pointer cursor from report-icon */\n}\n\n.lh-meta__item.lh-tooltip-boundary {\n  text-decoration: dotted underline var(--color-gray-500);\n  cursor: help;\n}\n\n.lh-meta__item.lh-report-icon::before {\n  position: absolute;\n  left: var(--default-padding);\n  width: var(--meta-icon-size);\n  height: var(--meta-icon-size);\n}\n\n.lh-meta__item.lh-report-icon:hover::before {\n  opacity: 0.7;\n}\n\n.lh-meta__item .lh-tooltip {\n  color: var(--color-gray-800);\n}\n\n.lh-meta__item .lh-tooltip::before {\n  right: auto; /* Set the tooltip arrow to the leftside */\n  left: 6px;\n}\n\n.lh-meta__item:hover .lh-tooltip {\n  right: auto;\n  left: 6px;\n}\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/Goog\
-leChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 640px) {\n  .lh-meta__items {\n    grid-template-columns: 1fr 1fr;\n  }\n}\n\n/* Change the grid for narrow container */\n@container lh-container (max-width: 640px) {\n  .lh-meta__items {\n    grid-template-columns: 1fr 1fr;\n  }\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 535px) {\n  .lh-meta__items {\n    display: block;\n  }\n}\n\n@container lh-container (max-width: 535px) {\n  .lh-meta__items {\n    display: block;\n  }\n}\n\n/* Explodey gauge */\n\n.lh-exp-gauge-component {\n  margin-bottom: 10px;\n}\n\n.lh-exp-gauge-component circle {\n  stroke: currentcolor;\n  r: var(--radius);\n}\n\n.lh-exp-gauge-component text {\n  font-size: calc(var(--radius) * 0.2);\n}\n\n.lh-exp-gauge-component .lh-exp-gauge {\n  margin: 0 a\
-uto;\n  width: 225px;\n  stroke-width: var(--stroke-width);\n  stroke-linecap: round;\n\n  /* for better rendering perf */\n  contain: strict;\n  height: 225px;\n  will-change: transform;\n}\n.lh-exp-gauge-component .lh-exp-gauge--faded {\n  opacity: 0.1;\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper {\n  font-family: var(--report-font-family-monospace);\n  text-align: center;\n  text-decoration: none;\n  transition: .3s;\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--pass {\n  color: var(--color-pass);\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--average {\n  color: var(--color-average);\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--fail {\n  color: var(--color-fail);\n}\n.lh-exp-gauge-component .state--expanded {\n  transition: color .3s;\n}\n.lh-exp-gauge-component .state--highlight {\n  color: var(--color-highlight);\n}\n.lh-exp-gauge-component .lh-exp-gauge__svg-wrapper {\n  display: flex;\n  flex-direction: column-reverse;\n}\n\n.lh-exp-gauge-component .lh-exp-gauge__label {\n  fill: var(--report\
--text-color);\n  font-family: var(--report-font-family);\n  font-size: 12px;\n}\n\n.lh-exp-gauge-component .lh-exp-gauge__cutout {\n  opacity: .999;\n  transition: opacity .3s;\n}\n.lh-exp-gauge-component .state--highlight .lh-exp-gauge__cutout {\n  opacity: 0;\n}\n\n.lh-exp-gauge-component .lh-exp-gauge__inner {\n  color: inherit;\n}\n.lh-exp-gauge-component .lh-exp-gauge__base {\n  fill: currentcolor;\n}\n\n\n.lh-exp-gauge-component .lh-exp-gauge__arc {\n  fill: none;\n  transition: opacity .3s;\n}\n.lh-exp-gauge-component .lh-exp-gauge__arc--metric {\n  color: var(--metric-color);\n  stroke-dashoffset: var(--metric-offset);\n  opacity: 0.3;\n}\n.lh-exp-gauge-component .lh-exp-gauge-hovertarget {\n  color: currentcolor;\n  opacity: 0.001;\n  stroke-linecap: butt;\n  stroke-width: 24;\n  /* hack. move the hover target out of the center. ideally i tweak the r instead but that rquires considerably more math. */\n  transform: scale(1.15);\n}\n.lh-exp-gauge-component .lh-exp-gauge__arc--metric.lh-exp-gauge--miniarc {\n  opacit\
-y: 0;\n  stroke-dasharray: 0 calc(var(--circle-meas) * var(--radius));\n  transition: 0s .005s;\n}\n.lh-exp-gauge-component .state--expanded .lh-exp-gauge__arc--metric.lh-exp-gauge--miniarc {\n  opacity: .999;\n  stroke-dasharray: var(--metric-array);\n  transition: 0.3s; /*  calc(.005s + var(--i)*.05s); entrace animation */\n}\n.lh-exp-gauge-component .state--expanded .lh-exp-gauge__inner .lh-exp-gauge__arc {\n  opacity: 0;\n}\n\n\n.lh-exp-gauge-component .lh-exp-gauge__percentage {\n  text-anchor: middle;\n  dominant-baseline: middle;\n  opacity: .999;\n  font-size: calc(var(--radius) * 0.625);\n  transition: opacity .3s ease-in;\n}\n.lh-exp-gauge-component .state--highlight .lh-exp-gauge__percentage {\n  opacity: 0;\n}\n\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--fail .lh-exp-gauge__percentage {\n  fill: var(--color-fail);\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--average .lh-exp-gauge__percentage {\n  fill: var(--color-average);\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--pass .lh-exp-gau\
-ge__percentage {\n  fill: var(--color-pass);\n}\n\n.lh-exp-gauge-component .lh-cover {\n  fill: none;\n  opacity: .001;\n  pointer-events: none;\n}\n.lh-exp-gauge-component .state--expanded .lh-cover {\n  pointer-events: auto;\n}\n\n.lh-exp-gauge-component .metric {\n  transform: scale(var(--scale-initial));\n  opacity: 0;\n  transition: transform .1s .2s ease-out,  opacity .3s ease-out;\n  pointer-events: none;\n}\n.lh-exp-gauge-component .metric text {\n  pointer-events: none;\n}\n.lh-exp-gauge-component .metric__value {\n  fill: currentcolor;\n  opacity: 0;\n  transition: opacity 0.2s;\n}\n.lh-exp-gauge-component .state--expanded .metric {\n  transform: scale(1);\n  opacity: .999;\n  transition: transform .3s ease-out,  opacity .3s ease-in,  stroke-width .1s ease-out;\n  transition-delay: calc(var(--i)*.05s);\n  pointer-events: auto;\n}\n.lh-exp-gauge-component .state--highlight .metric {\n  opacity: .3;\n}\n.lh-exp-gauge-component .state--highlight .metric--highlight {\n  opacity: .999;\n  stroke-width: calc(1.5*var(--s\
-troke-width));\n}\n.lh-exp-gauge-component .state--highlight .metric--highlight .metric__value {\n  opacity: 0.999;\n}\n\n\n/*\n the initial first load peek\n*/\n.lh-exp-gauge-component .lh-exp-gauge__bg {  /* needed for the use zindex stacking w/ transparency */\n  fill: var(--report-background-color);\n  stroke: var(--report-background-color);\n}\n.lh-exp-gauge-component .state--peek .metric {\n  transition-delay: 0ms;\n  animation: peek var(--peek-dur) cubic-bezier(0.46, 0.03, 0.52, 0.96);\n  animation-fill-mode: forwards;\n}\n.lh-exp-gauge-component .state--peek .lh-exp-gauge__inner .lh-exp-gauge__arc {\n  opacity: 1;\n}\n.lh-exp-gauge-component .state--peek .lh-exp-gauge__arc.lh-exp-gauge--faded {\n  opacity: 0.3; /* just a tad stronger cuz its fighting with a big solid arg */\n}\n/* do i need to set expanded and override this? */\n.lh-exp-gauge-component .state--peek .lh-exp-gauge__arc--metric.lh-exp-gauge--miniarc {\n  transition: opacity 0.3s;\n}\n.lh-exp-gauge-component .state--peek {\n  color: unset;\n}\n.l\
-h-exp-gauge-component .state--peek .metric__label {\n  display: none;\n}\n\n.lh-exp-gauge-component .metric__label {\n  fill: var(--report-text-color);\n}\n\n@keyframes peek {\n  /* biggest it should go is 0.92. smallest is 0.8 */\n  0% {\n    transform: scale(0.8);\n    opacity: 0.8;\n  }\n\n  50% {\n    transform: scale(0.92);\n    opacity: 1;\n  }\n\n  100% {\n    transform: scale(0.8);\n    opacity: 0.8;\n  }\n}\n\n.lh-exp-gauge-component .wrapper {\n  width: 620px;\n}\n\n/*# sourceURL=report-styles.css */\n`),e.append(t),e}function dt(o){let e=o.createFragment(),t=o.createElement("style");t.append(`\n    .lh-topbar {\n      position: sticky;\n      top: 0;\n      left: 0;\n      right: 0;\n      z-index: 1000;\n      display: flex;\n      align-items: center;\n      height: var(--topbar-height);\n      padding: var(--topbar-padding);\n      font-size: var(--report-font-size-secondary);\n      background-color: var(--topbar-background-color);\n      border-bottom: 1px solid var(--color-gray-200);\n    }\n\n    .lh-topbar__logo \
-{\n      width: var(--topbar-logo-size);\n      height: var(--topbar-logo-size);\n      user-select: none;\n      flex: none;\n    }\n\n    .lh-topbar__url {\n      margin: var(--topbar-padding);\n      text-decoration: none;\n      color: var(--report-text-color);\n      text-overflow: ellipsis;\n      overflow: hidden;\n      white-space: nowrap;\n    }\n\n    .lh-tools {\n      display: flex;\n      align-items: center;\n      margin-left: auto;\n      will-change: transform;\n      min-width: var(--report-icon-size);\n    }\n    .lh-tools__button {\n      width: var(--report-icon-size);\n      min-width: 24px;\n      height: var(--report-icon-size);\n      cursor: pointer;\n      margin-right: 5px;\n      /* This is actually a button element, but we want to style it like a transparent div. */\n      display: flex;\n      background: none;\n      color: inherit;\n      border: none;\n      padding: 0;\n      font: inherit;\n    }\n    .lh-tools__button svg {\n      fill: var(--tools-icon-color);\n    }\n    .lh-dark .lh-t\
-ools__button svg {\n      filter: invert(1);\n    }\n    .lh-tools__button.lh-active + .lh-tools__dropdown {\n      opacity: 1;\n      clip: rect(-1px, 194px, 270px, -3px);\n      visibility: visible;\n    }\n    .lh-tools__dropdown {\n      position: absolute;\n      background-color: var(--report-background-color);\n      border: 1px solid var(--report-border-color);\n      border-radius: 3px;\n      padding: calc(var(--default-padding) / 2) 0;\n      cursor: pointer;\n      top: 36px;\n      right: 0;\n      box-shadow: 1px 1px 3px #ccc;\n      min-width: 125px;\n      clip: rect(0, 164px, 0, 0);\n      visibility: hidden;\n      opacity: 0;\n      transition: all 200ms cubic-bezier(0,0,0.2,1);\n    }\n    .lh-tools__dropdown a {\n      color: currentColor;\n      text-decoration: none;\n      white-space: nowrap;\n      padding: 0 6px;\n      line-height: 2;\n    }\n    .lh-tools__dropdown a:hover,\n    .lh-tools__dropdown a:focus {\n      background-color: var(--color-gray-200);\n      outline: none;\n    }\n    /* \
-save-gist option hidden in report. */\n    .lh-tools__dropdown a[data-action=\'save-gist\'] {\n      display: none;\n    }\n\n    .lh-locale-selector {\n      width: 100%;\n      color: var(--report-text-color);\n      background-color: var(--locale-selector-background-color);\n      padding: 2px;\n    }\n    .lh-tools-locale {\n      display: flex;\n      align-items: center;\n      flex-direction: row-reverse;\n    }\n    .lh-tools-locale__selector-wrapper {\n      transition: opacity 0.15s;\n      opacity: 0;\n      max-width: 200px;\n    }\n    .lh-button.lh-tool-locale__button {\n      height: var(--topbar-height);\n      color: var(--tools-icon-color);\n      padding: calc(var(--default-padding) / 2);\n    }\n    .lh-tool-locale__button.lh-active + .lh-tools-locale__selector-wrapper {\n      opacity: 1;\n      clip: rect(-1px, 255px, 242px, -3px);\n      visibility: visible;\n      margin: 0 4px;\n    }\n\n    /**\n    * This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\
-\n    * TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n    * See https://github.com/GoogleChrome/lighthouse/pull/16332\n    */\n    @media screen and (max-width: 964px) {\n      .lh-tools__dropdown {\n        right: 0;\n        left: initial;\n      }\n    }\n\n    @container lh-container (max-width: 964px) {\n      .lh-tools__dropdown {\n        right: 0;\n        left: initial;\n      }\n    }\n\n    @media print {\n      .lh-topbar {\n        position: static;\n        margin-left: 0;\n      }\n\n      .lh-tools__dropdown {\n        display: none;\n      }\n    }\n  `),e.append(t);let n=o.createElement("div","lh-topbar"),r=o.createElementNS("http://www.w3.org/2000/svg","svg","lh-topbar__logo");r.setAttribute("role","img"),r.setAttribute("title","Lighthouse logo"),r.setAttribute("fill","none"),r.setAttribute("xmlns","http://www.w3.org/2000/svg"),r.setAttribute("viewBox","0 0 48 48");let i=o.createElementNS("http://www.w3.org/2000/svg","path");i.setAttribute("d","m14 7 10\
--7 10 7v10h5v7h-5l5 24H9l5-24H9v-7h5V7Z"),i.setAttribute("fill","#F63");let a=o.createElementNS("http://www.w3.org/2000/svg","path");a.setAttribute("d","M31.561 24H14l-1.689 8.105L31.561 24ZM18.983 48H9l1.022-4.907L35.723 32.27l1.663 7.98L18.983 48Z"),a.setAttribute("fill","#FFA385");let l=o.createElementNS("http://www.w3.org/2000/svg","path");l.setAttribute("fill","#FF3"),l.setAttribute("d","M20.5 10h7v7h-7z"),r.append(" ",i," ",a," ",l," ");let s=o.createElement("a","lh-topbar__url");s.setAttribute("href",""),s.setAttribute("target","_blank"),s.setAttribute("rel","noopener");let c=o.createElement("div","lh-tools"),d=o.createElement("div","lh-tools-locale lh-hidden"),h=o.createElement("button","lh-button lh-tool-locale__button");h.setAttribute("id","lh-button__swap-locales"),h.setAttribute("title","Show Language Picker"),h.setAttribute("aria-label","Toggle language picker"),h.setAttribute("aria-haspopup","menu"),h.setAttribute("aria-expanded","false"),h.setAttribute("aria-controls","l\
-h-tools-locale__selector-wrapper");let p=o.createElementNS("http://www.w3.org/2000/svg","svg");p.setAttribute("width","20px"),p.setAttribute("height","20px"),p.setAttribute("viewBox","0 0 24 24"),p.setAttribute("fill","currentColor");let g=o.createElementNS("http://www.w3.org/2000/svg","path");g.setAttribute("d","M0 0h24v24H0V0z"),g.setAttribute("fill","none");let b=o.createElementNS("http://www.w3.org/2000/svg","path");b.setAttribute("d","M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"),p.append(g,b),h.append(" ",p," ");let w=o.createElement("div","lh-tools-locale__selector-wrapper");w.setAttribute("id","lh-tools-locale__selector-wrapper"),w.setAttribute("role","menu"),w.setAttribute("aria-labelledby","lh-button__swap-locales"),w.setAttrib\
-ute("aria-hidden","true"),w.append(" "," "),d.append(" ",h," ",w," ");let f=o.createElement("button","lh-tools__button");f.setAttribute("id","lh-tools-button"),f.setAttribute("title","Tools menu"),f.setAttribute("aria-label","Toggle report tools menu"),f.setAttribute("aria-haspopup","menu"),f.setAttribute("aria-expanded","false"),f.setAttribute("aria-controls","lh-tools-dropdown");let u=o.createElementNS("http://www.w3.org/2000/svg","svg");u.setAttribute("width","100%"),u.setAttribute("height","100%"),u.setAttribute("viewBox","0 0 24 24");let v=o.createElementNS("http://www.w3.org/2000/svg","path");v.setAttribute("d","M0 0h24v24H0z"),v.setAttribute("fill","none");let _=o.createElementNS("http://www.w3.org/2000/svg","path");_.setAttribute("d","M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"),u.append(" ",v," ",_," "),f.append(" ",u," ");let x=o.createElement("div","lh-tools__dropdown");x.s\
-etAttribute("id","lh-tools-dropdown"),x.setAttribute("role","menu"),x.setAttribute("aria-labelledby","lh-tools-button");let S=o.createElement("a","lh-report-icon lh-report-icon--print");S.setAttribute("role","menuitem"),S.setAttribute("tabindex","-1"),S.setAttribute("href","#"),S.setAttribute("data-i18n","dropdownPrintSummary"),S.setAttribute("data-action","print-summary");let A=o.createElement("a","lh-report-icon lh-report-icon--print");A.setAttribute("role","menuitem"),A.setAttribute("tabindex","-1"),A.setAttribute("href","#"),A.setAttribute("data-i18n","dropdownPrintExpanded"),A.setAttribute("data-action","print-expanded");let z=o.createElement("a","lh-report-icon lh-report-icon--copy");z.setAttribute("role","menuitem"),z.setAttribute("tabindex","-1"),z.setAttribute("href","#"),z.setAttribute("data-i18n","dropdownCopyJSON"),z.setAttribute("data-action","copy");let M=o.createElement("a","lh-report-icon lh-report-icon--download lh-hidden");M.setAttribute("role","menuitem"),M.setAttrib\
-ute("tabindex","-1"),M.setAttribute("href","#"),M.setAttribute("data-i18n","dropdownSaveHTML"),M.setAttribute("data-action","save-html");let $=o.createElement("a","lh-report-icon lh-report-icon--download");$.setAttribute("role","menuitem"),$.setAttribute("tabindex","-1"),$.setAttribute("href","#"),$.setAttribute("data-i18n","dropdownSaveJSON"),$.setAttribute("data-action","save-json");let R=o.createElement("a","lh-report-icon lh-report-icon--open");R.setAttribute("role","menuitem"),R.setAttribute("tabindex","-1"),R.setAttribute("href","#"),R.setAttribute("data-i18n","dropdownViewer"),R.setAttribute("data-action","open-viewer");let N=o.createElement("a","lh-report-icon lh-report-icon--open");N.setAttribute("role","menuitem"),N.setAttribute("tabindex","-1"),N.setAttribute("href","#"),N.setAttribute("data-i18n","dropdownSaveGist"),N.setAttribute("data-action","save-gist");let D=o.createElement("a","lh-report-icon lh-report-icon--open lh-hidden");D.setAttribute("role","menuitem"),D.setAttr\
-ibute("tabindex","-1"),D.setAttribute("href","#"),D.setAttribute("data-i18n","dropdownViewUnthrottledTrace"),D.setAttribute("data-action","view-unthrottled-trace");let I=o.createElement("a","lh-report-icon lh-report-icon--dark");return I.setAttribute("role","menuitem"),I.setAttribute("tabindex","-1"),I.setAttribute("href","#"),I.setAttribute("data-i18n","dropdownDarkTheme"),I.setAttribute("data-action","toggle-dark"),x.append(" ",S," ",A," ",z," "," ",M," ",$," ",R," ",N," "," ",D," ",I," "),c.append(" ",d," ",f," ",x," "),n.append(" "," ",r," ",s," ",c," "),e.append(n),e}function ht(o){let e=o.createFragment(),t=o.createElement("div","lh-warnings lh-warnings--toplevel"),n=o.createElement("p","lh-warnings__msg"),r=o.createElement("ul");return t.append(" ",n," ",r," "),e.append(t),e}function be(o,e){switch(e){case"3pFilter":return Ge(o);case"audit":return Be(o);case"categoryHeader":return qe(o);case"chevron":return je(o);case"clump":return We(o);case"crc":return Ke(o);case"crcChain":ret\
-urn Je(o);case"elementScreenshot":return Ze(o);case"explodeyGauge":return Qe(o);case"footer":return Ye(o);case"fraction":return Xe(o);case"gauge":return et(o);case"heading":return tt(o);case"metric":return nt(o);case"scorescale":return rt(o);case"scoresWrapper":return ot(o);case"snippet":return it(o);case"snippetContent":return at(o);case"snippetHeader":return lt(o);case"snippetLine":return st(o);case"styles":return ct(o);case"topbar":return dt(o);case"warningsToplevel":return ht(o)}throw new Error("unexpected component: "+e)}var ee=class{constructor(e,t){this._document=e,this._lighthouseChannel="unknown",this._componentCache=new Map,this.rootEl=t}createElement(e,t){let n=this._document.createElement(e);if(t)for(let r of t.split(/\\s+/))r&&n.classList.add(r);return n}createElementNS(e,t,n){let r=this._document.createElementNS(e,t);if(n)for(let i of n.split(/\\s+/))i&&r.classList.add(i);return r}createSVGElement(e,t){return this._document.createElementNS("http://www.w3.org/2000/svg",e,t)}\
-createFragment(){return this._document.createDocumentFragment()}createTextNode(e){return this._document.createTextNode(e)}createChildOf(e,t,n){let r=this.createElement(t,n);return e.append(r),r}createComponent(e){let t=this._componentCache.get(e);if(t){let r=t.cloneNode(!0);return this.findAll("style",r).forEach(i=>i.remove()),r}return t=be(this,e),this._componentCache.set(e,t),t.cloneNode(!0)}clearComponentCache(){this._componentCache.clear()}convertMarkdownLinkSnippets(e,t={}){let n=this.createElement("span");for(let r of E.splitMarkdownLink(e)){let i=r.text.includes("`")?this.convertMarkdownCodeSnippets(r.text):r.text;if(!r.isLink){n.append(i);continue}let a=new URL(r.linkHref);(["https://developers.google.com","https://web.dev","https://developer.chrome.com"].includes(a.origin)||t.alwaysAppendUtmSource)&&(a.searchParams.set("utm_source","lighthouse"),a.searchParams.set("utm_medium",this._lighthouseChannel));let s=this.createElement("a");s.rel="noopener",s.target="_blank",s.append(i\
-),this.safelySetHref(s,a.href),n.append(s)}return n}safelySetHref(e,t){if(t=t||"",t.startsWith("#")){e.href=t;return}let n=["https:","http:"],r;try{r=new URL(t)}catch{}r&&n.includes(r.protocol)&&(e.href=r.href)}safelySetBlobHref(e,t){if(t.type!=="text/html"&&t.type!=="application/json")throw new Error("Unsupported blob type");let n=URL.createObjectURL(t);e.href=n}convertMarkdownCodeSnippets(e){let t=this.createElement("span");for(let n of E.splitMarkdownCodeSpans(e))if(n.isCode){let r=this.createElement("code");r.textContent=n.text,t.append(r)}else t.append(this._document.createTextNode(n.text));return t}setLighthouseChannel(e){this._lighthouseChannel=e}document(){return this._document}isDevTools(){return!!this._document.querySelector(".lh-devtools")}find(e,t=this.rootEl??this._document){let n=this.maybeFind(e,t);if(n===null)throw new Error(`query ${e} not found`);return n}maybeFind(e,t=this.rootEl??this._document){return t.querySelector(e)}findAll(e,t){return Array.from(t.querySelecto\
-rAll(e))}fireEventOn(e,t=this._document,n){let r=new CustomEvent(e,n?{detail:n}:void 0);t.dispatchEvent(r)}saveFile(e,t){let n=this.createElement("a");n.download=t,this.safelySetBlobHref(n,e),this._document.body.append(n),n.click(),this._document.body.removeChild(n),setTimeout(()=>URL.revokeObjectURL(n.href),500)}};var _e=0,m=class o{static i18n=null;static strings={};static reportJson=null;static apply(e){o.strings={...we,...e.providedStrings},o.i18n=e.i18n,o.reportJson=e.reportJson}static getUniqueSuffix(){return _e++}static resetUniqueSuffix(){_e=0}};var ye="data:image/jpeg;base64,";function xe(o){o.configSettings.locale||(o.configSettings.locale="en"),o.configSettings.formFactor||(o.configSettings.formFactor=o.configSettings.emulatedFormFactor),o.finalDisplayedUrl=E.getFinalDisplayedUrl(o),o.mainDocumentUrl=E.getMainDocumentUrl(o);for(let n of Object.values(o.audits))if((n.scoreDisplayMode==="not_applicable"||n.scoreDisplayMode==="not-applicable")&&(n.scoreDisplayMode="notApplicabl\
-e"),n.scoreDisplayMode==="informative"&&(n.score=1),n.details){if((n.details.type===void 0||n.details.type==="diagnostic")&&(n.details.type="debugdata"),n.details.type==="filmstrip")for(let r of n.details.items)r.data.startsWith(ye)||(r.data=ye+r.data);if(n.details.type==="table")for(let r of n.details.headings){let{itemType:i,text:a}=r;i!==void 0&&(r.valueType=i,delete r.itemType),a!==void 0&&(r.label=a,delete r.text);let l=r.subItemsHeading?.itemType;r.subItemsHeading&&l!==void 0&&(r.subItemsHeading.valueType=l,delete r.subItemsHeading.itemType)}if(n.id==="third-party-summary"&&(n.details.type==="opportunity"||n.details.type==="table")){let{headings:r,items:i}=n.details;if(r[0].valueType==="link"){r[0].valueType="text";for(let a of i)typeof a.entity=="object"&&a.entity.type==="link"&&(a.entity=a.entity.text);n.details.isEntityGrouped=!0}}}let[e]=o.lighthouseVersion.split(".").map(Number),t=o.categories.performance;if(t){if(e<9){o.categoryGroups||(o.categoryGroups={}),o.categoryGroups\
-.hidden={title:""};for(let n of t.auditRefs)n.group?n.group==="load-opportunities"&&(n.group="diagnostics"):n.group="hidden"}else if(e<12)for(let n of t.auditRefs)n.group||(n.group="diagnostics")}if(e<12&&t){let n=new Map;for(let r of t.auditRefs){let i=r.relevantAudits;if(!(!i||!r.acronym))for(let a of i){let l=n.get(a)||[];l.push(r.acronym),n.set(a,l)}}for(let[r,i]of n){if(!i.length)continue;let a=o.audits[r];if(a&&!a.metricSavings){a.metricSavings={};for(let l of i)a.metricSavings[l]=0}}}if(o.environment||(o.environment={benchmarkIndex:0,networkUserAgent:o.userAgent,hostUserAgent:o.userAgent}),o.configSettings.screenEmulation||(o.configSettings.screenEmulation={width:-1,height:-1,deviceScaleFactor:-1,mobile:/mobile/i.test(o.environment.hostUserAgent),disabled:!1}),o.i18n||(o.i18n={}),o.audits["full-page-screenshot"]){let n=o.audits["full-page-screenshot"].details;n?o.fullPageScreenshot={screenshot:n.screenshot,nodes:n.nodes}:o.fullPageScreenshot=null,delete o.audits["full-page-scree\
-nshot"]}}var O=E.RATINGS,k=class o{static prepareReportResult(e){let t=JSON.parse(JSON.stringify(e));xe(t);for(let r of Object.values(t.audits))r.details&&(r.details.type==="opportunity"||r.details.type==="table")&&!r.details.isEntityGrouped&&t.entities&&o.classifyEntities(t.entities,r.details);if(typeof t.categories!="object")throw new Error("No categories provided.");let n=new Map;for(let r of Object.values(t.categories))r.auditRefs.forEach(i=>{i.acronym&&n.set(i.acronym,i)}),r.auditRefs.forEach(i=>{let a=t.audits[i.id];i.result=a;let l=Object.keys(i.result.metricSavings||{});if(l.length){i.relevantMetrics=[];for(let s of l){let c=n.get(s);c&&i.relevantMetrics.push(c)}}if(t.stackPacks){let s=[i.id,...i.result.replacesAudits??[]];t.stackPacks.forEach(c=>{let d=s.find(h=>c.descriptions[h]);d&&c.descriptions[d]&&(i.stackPacks=i.stackPacks||[],i.stackPacks.push({title:c.title,iconDataURL:c.iconDataURL,description:c.descriptions[d]}))})}});return t}static getUrlLocatorFn(e){let t=e.find(r\
-=>r.valueType==="url")?.key;if(t&&typeof t=="string")return r=>{let i=r[t];if(typeof i=="string")return i};let n=e.find(r=>r.valueType==="source-location")?.key;if(n)return r=>{let i=r[n];if(typeof i=="object"&&i.type==="source-location")return i.url}}static classifyEntities(e,t){let{items:n,headings:r}=t;if(!n.length||n.some(a=>a.entity))return;let i=o.getUrlLocatorFn(r);if(i)for(let a of n){let l=i(a);if(!l)continue;let s="";try{s=E.parseURL(l).origin}catch{}if(!s)continue;let c=e.find(d=>d.origins.includes(s));c&&(a.entity=c.name)}}static getTableItemSortComparator(e){return(t,n)=>{for(let r of e){let i=t[r],a=n[r];if((typeof i!=typeof a||!["number","string"].includes(typeof i))&&console.warn(`Warning: Attempting to sort unsupported value type: ${r}.`),typeof i=="number"&&typeof a=="number"&&i!==a)return a-i;if(typeof i=="string"&&typeof a=="string"&&i!==a)return i.localeCompare(a)}return 0}}static getEmulationDescriptions(e){let t,n,r,i=e.throttling,a=m.i18n,l=m.strings;switch(e.th\
-rottlingMethod){case"provided":r=n=t=l.throttlingProvided;break;case"devtools":{let{cpuSlowdownMultiplier:p,requestLatencyMs:g}=i;t=`${a.formatNumber(p)}x slowdown (DevTools)`,n=`${a.formatMilliseconds(g)} HTTP RTT, ${a.formatKbps(i.downloadThroughputKbps)} down, ${a.formatKbps(i.uploadThroughputKbps)} up (DevTools)`,r=g===150*3.75&&i.downloadThroughputKbps===1.6*1024*.9&&i.uploadThroughputKbps===750*.9?l.runtimeSlow4g:l.runtimeCustom;break}case"simulate":{let{cpuSlowdownMultiplier:p,rttMs:g,throughputKbps:b}=i;t=`${a.formatNumber(p)}x slowdown (Simulated)`,n=`${a.formatMilliseconds(g)} TCP RTT, ${a.formatKbps(b)} throughput (Simulated)`,r=g===150&&b===1.6*1024?l.runtimeSlow4g:l.runtimeCustom;break}default:r=t=n=l.runtimeUnknown}let s=e.channel==="devtools"?!1:e.screenEmulation.disabled,c=e.channel==="devtools"?e.formFactor==="mobile":e.screenEmulation.mobile,d=l.runtimeMobileEmulation;s?d=l.runtimeNoEmulation:c||(d=l.runtimeDesktopEmulation);let h=s?void 0:`${e.screenEmulation.width}x\
-${e.screenEmulation.height}, DPR ${e.screenEmulation.deviceScaleFactor}`;return{deviceEmulation:d,screenEmulation:h,cpuThrottling:t,networkThrottling:n,summary:r}}static showAsPassed(e){switch(e.scoreDisplayMode){case"manual":case"notApplicable":return!0;case"error":case"informative":return!1;case"numeric":case"binary":default:return Number(e.score)>=O.PASS.minScore}}static calculateRating(e,t){if(t==="manual"||t==="notApplicable")return O.PASS.label;if(t==="error")return O.ERROR.label;if(e===null)return O.FAIL.label;let n=O.FAIL.label;return e>=O.PASS.minScore?n=O.PASS.label:e>=O.AVERAGE.minScore&&(n=O.AVERAGE.label),n}static calculateCategoryFraction(e){let t=0,n=0,r=0,i=0;for(let a of e.auditRefs){let l=o.showAsPassed(a.result);if(!(a.group==="hidden"||a.result.scoreDisplayMode==="manual"||a.result.scoreDisplayMode==="notApplicable")){if(a.result.scoreDisplayMode==="informative"){l||++r;continue}++t,i+=a.weight,l&&n++}}return{numPassed:n,numPassableAudits:t,numInformative:r,totalWei\
-ght:i}}static isPluginCategory(e){return e.startsWith("lighthouse-plugin-")}static shouldDisplayAsFraction(e){return e==="timespan"||e==="snapshot"}},we={varianceDisclaimer:"Values are estimated and may vary. The [performance score is calculated](https://developer.chrome.com/docs/lighthouse/performance/performance-scoring/) directly from these metrics.",calculatorLink:"See calculator.",showRelevantAudits:"Show audits relevant to:",opportunityResourceColumnLabel:"Opportunity",opportunitySavingsColumnLabel:"Estimated Savings",errorMissingAuditInfo:"Report error: no audit information",errorLabel:"Error!",warningHeader:"Warnings: ",warningAuditsGroupTitle:"Passed audits but with warnings",passedAuditsGroupTitle:"Passed audits",notApplicableAuditsGroupTitle:"Not applicable",manualAuditsGroupTitle:"Additional items to manually check",toplevelWarningsMessage:"There were issues affecting this run of Lighthouse:",crcInitialNavigation:"Initial Navigation",crcLongestDurationLabel:"Maximum critica\
-l path latency:",snippetExpandButtonLabel:"Expand snippet",snippetCollapseButtonLabel:"Collapse snippet",lsPerformanceCategoryDescription:"[Lighthouse](https://developers.google.com/web/tools/lighthouse/) analysis of the current page on an emulated mobile network. Values are estimated and may vary.",labDataTitle:"Lab Data",thirdPartyResourcesLabel:"Show 3rd-party resources",viewTreemapLabel:"View Treemap",viewTraceLabel:"View Trace",dropdownPrintSummary:"Print Summary",dropdownPrintExpanded:"Print Expanded",dropdownCopyJSON:"Copy JSON",dropdownSaveHTML:"Save as HTML",dropdownSaveJSON:"Save as JSON",dropdownViewer:"Open in Viewer",dropdownSaveGist:"Save as Gist",dropdownDarkTheme:"Toggle Dark Theme",dropdownViewUnthrottledTrace:"View Unthrottled Trace",runtimeSettingsDevice:"Device",runtimeSettingsNetworkThrottling:"Network throttling",runtimeSettingsCPUThrottling:"CPU throttling",runtimeSettingsUANetwork:"User agent (network)",runtimeSettingsBenchmark:"Unthrottled CPU/Memory Power",run\
-timeSettingsAxeVersion:"Axe version",runtimeSettingsScreenEmulation:"Screen emulation",footerIssue:"File an issue",runtimeNoEmulation:"No emulation",runtimeMobileEmulation:"Emulated Moto G Power",runtimeDesktopEmulation:"Emulated Desktop",runtimeUnknown:"Unknown",runtimeSingleLoad:"Single page session",runtimeAnalysisWindow:"Initial page load",runtimeAnalysisWindowTimespan:"User interactions timespan",runtimeAnalysisWindowSnapshot:"Point-in-time snapshot",runtimeSingleLoadTooltip:"This data is taken from a single page session, as opposed to field data summarizing many sessions.",throttlingProvided:"Provided by environment",show:"Show",hide:"Hide",expandView:"Expand view",collapseView:"Collapse view",runtimeSlow4g:"Slow 4G throttling",runtimeCustom:"Custom throttling",firstPartyChipLabel:"1st party",openInANewTabTooltip:"Open in a new tab",unattributable:"Unattributable",unscoredLabel:"Unscored",unscoredTitle:"This audit does not contribute to the overall category score."};var G=class{c\
-onstructor(e,t){this.dom=e,this.detailsRenderer=t}get _clumpTitles(){return{warning:m.strings.warningAuditsGroupTitle,manual:m.strings.manualAuditsGroupTitle,passed:m.strings.passedAuditsGroupTitle,notApplicable:m.strings.notApplicableAuditsGroupTitle}}renderAudit(e){let t=m.strings,n=this.dom.createComponent("audit"),r=this.dom.find("div.lh-audit",n);r.id=e.result.id;let i=e.result.scoreDisplayMode;e.result.displayValue&&(this.dom.find(".lh-audit__display-text",r).textContent=e.result.displayValue);let a=this.dom.find(".lh-audit__title",r);a.append(this.dom.convertMarkdownCodeSnippets(e.result.title));let l=this.dom.find(".lh-audit__description",r);l.append(this.dom.convertMarkdownLinkSnippets(e.result.description));for(let p of e.relevantMetrics||[]){let g=this.dom.createChildOf(l,"span","lh-audit__adorn");g.title=`Relevant to ${p.result.title}`,g.textContent=p.acronym||p.id}if(e.weight===0){let p=this.dom.createChildOf(l,"span","lh-audit__adorn");p.title=m.strings.unscoredTitle,p.te\
-xtContent=m.strings.unscoredLabel}e.stackPacks&&e.stackPacks.forEach(p=>{let g=this.dom.createElement("img","lh-audit__stackpack__img");g.src=p.iconDataURL,g.alt=p.title;let b=this.dom.convertMarkdownLinkSnippets(p.description,{alwaysAppendUtmSource:!0}),w=this.dom.createElement("div","lh-audit__stackpack");w.append(g,b),this.dom.find(".lh-audit__stackpacks",r).append(w)});let s=this.dom.find("details",r);if(e.result.details){let p=this.detailsRenderer.render(e.result.details);p&&(p.classList.add("lh-details"),s.append(p))}if(this.dom.find(".lh-chevron-container",r).append(this._createChevron()),this._setRatingClass(r,e.result.score,i),e.result.scoreDisplayMode==="error"){r.classList.add("lh-audit--error");let p=this.dom.find(".lh-audit__display-text",r);p.textContent=t.errorLabel,p.classList.add("lh-tooltip-boundary");let g=this.dom.createChildOf(p,"div","lh-tooltip lh-tooltip--error");g.textContent=e.result.errorMessage||t.errorMissingAuditInfo}else if(e.result.explanation){let p=thi\
-s.dom.createChildOf(a,"div","lh-audit-explanation");p.textContent=e.result.explanation}let c=e.result.warnings;if(!c||c.length===0)return r;let d=this.dom.find("summary",s),h=this.dom.createChildOf(d,"div","lh-warnings");if(this.dom.createChildOf(h,"span").textContent=t.warningHeader,c.length===1)h.append(this.dom.createTextNode(c.join("")));else{let p=this.dom.createChildOf(h,"ul");for(let g of c){let b=this.dom.createChildOf(p,"li");b.textContent=g}}return r}injectFinalScreenshot(e,t,n){let r=t["final-screenshot"];if(!r||r.scoreDisplayMode==="error"||!r.details||r.details.type!=="screenshot")return null;let i=this.dom.createElement("img","lh-final-ss-image"),a=r.details.data;i.src=a,i.alt=r.title;let l=this.dom.find(".lh-category .lh-category-header",e),s=this.dom.createElement("div","lh-category-headercol"),c=this.dom.createElement("div","lh-category-headercol lh-category-headercol--separator"),d=this.dom.createElement("div","lh-category-headercol");s.append(...l.childNodes),s.appen\
-d(n),d.append(i),l.append(s,c,d),l.classList.add("lh-category-header__finalscreenshot")}_createChevron(){let e=this.dom.createComponent("chevron");return this.dom.find("svg.lh-chevron",e)}_setRatingClass(e,t,n){let r=k.calculateRating(t,n);return e.classList.add(`lh-audit--${n.toLowerCase()}`),n!=="informative"&&e.classList.add(`lh-audit--${r}`),e}renderCategoryHeader(e,t,n){let r=this.dom.createComponent("categoryHeader"),i=this.dom.find(".lh-score__gauge",r),a=this.renderCategoryScore(e,t,n);if(i.append(a),e.description){let l=this.dom.convertMarkdownLinkSnippets(e.description);this.dom.find(".lh-category-header__description",r).append(l)}return r}renderAuditGroup(e){let t=this.dom.createElement("div","lh-audit-group"),n=this.dom.createElement("div","lh-audit-group__header");this.dom.createChildOf(n,"span","lh-audit-group__title").textContent=e.title,t.append(n);let r=null;return e.description&&(r=this.dom.convertMarkdownLinkSnippets(e.description),r.classList.add("lh-audit-group__de\
-scription","lh-audit-group__footer"),t.append(r)),[t,r]}_renderGroupedAudits(e,t){let n=new Map,r="NotAGroup";n.set(r,[]);for(let a of e){let l=a.group||r,s=n.get(l)||[];s.push(a),n.set(l,s)}let i=[];for(let[a,l]of n){if(a===r){for(let h of l)i.push(this.renderAudit(h));continue}let s=t[a],[c,d]=this.renderAuditGroup(s);for(let h of l)c.insertBefore(this.renderAudit(h),d);c.classList.add(`lh-audit-group--${a}`),i.push(c)}return i}renderUnexpandableClump(e,t){let n=this.dom.createElement("div");return this._renderGroupedAudits(e,t).forEach(i=>n.append(i)),n}renderClump(e,{auditRefsOrEls:t,description:n,openByDefault:r}){let i=this.dom.createComponent("clump"),a=this.dom.find(".lh-clump",i);r&&a.setAttribute("open","");let l=this.dom.find(".lh-audit-group__header",a),s=this._clumpTitles[e];this.dom.find(".lh-audit-group__title",l).textContent=s;let c=this.dom.find(".lh-audit-group__itemcount",a);c.textContent=`(${t.length})`;let d=t.map(p=>p instanceof HTMLElement?p:this.renderAudit(p));\
-a.append(...d);let h=this.dom.find(".lh-audit-group",i);if(n){let p=this.dom.convertMarkdownLinkSnippets(n);p.classList.add("lh-audit-group__description","lh-audit-group__footer"),h.append(p)}return this.dom.find(".lh-clump-toggletext--show",h).textContent=m.strings.show,this.dom.find(".lh-clump-toggletext--hide",h).textContent=m.strings.hide,a.classList.add(`lh-clump--${e.toLowerCase()}`),h}renderCategoryScore(e,t,n){let r;if(n&&k.shouldDisplayAsFraction(n.gatherMode)?r=this.renderCategoryFraction(e):r=this.renderScoreGauge(e,t),n?.omitLabel&&this.dom.find(".lh-gauge__label,.lh-fraction__label",r).remove(),n?.onPageAnchorRendered){let i=this.dom.find("a",r);n.onPageAnchorRendered(i)}return r}renderScoreGauge(e,t){let n=this.dom.createComponent("gauge"),r=this.dom.find("a.lh-gauge__wrapper",n);k.isPluginCategory(e.id)&&r.classList.add("lh-gauge__wrapper--plugin");let i=Number(e.score),a=this.dom.find(".lh-gauge",n),l=this.dom.find("circle.lh-gauge-arc",a);l&&this._setGaugeArc(l,i);let \
-s=Math.round(i*100),c=this.dom.find("div.lh-gauge__percentage",n);return c.textContent=s.toString(),e.score===null&&(c.classList.add("lh-gauge--error"),c.textContent="",c.title=m.strings.errorLabel),e.auditRefs.length===0||this.hasApplicableAudits(e)?r.classList.add(`lh-gauge__wrapper--${k.calculateRating(e.score)}`):(r.classList.add("lh-gauge__wrapper--not-applicable"),c.textContent="-",c.title=m.strings.notApplicableAuditsGroupTitle),this.dom.find(".lh-gauge__label",n).textContent=e.title,n}renderCategoryFraction(e){let t=this.dom.createComponent("fraction"),n=this.dom.find("a.lh-fraction__wrapper",t),{numPassed:r,numPassableAudits:i,totalWeight:a}=k.calculateCategoryFraction(e),l=r/i,s=this.dom.find(".lh-fraction__content",t),c=this.dom.createElement("span");c.textContent=`${r}/${i}`,s.append(c);let d=k.calculateRating(l);return a===0&&(d="null"),n.classList.add(`lh-fraction__wrapper--${d}`),this.dom.find(".lh-fraction__label",t).textContent=e.title,t}hasApplicableAudits(e){return e\
-.auditRefs.some(t=>t.result.scoreDisplayMode!=="notApplicable")}_setGaugeArc(e,t){let n=2*Math.PI*Number(e.getAttribute("r")),r=Number(e.getAttribute("stroke-width")),i=.25*r/n;e.style.transform=`rotate(${-90+i*360}deg)`;let a=t*n-r/2;t===0&&(e.style.opacity="0"),t===1&&(a=n),e.style.strokeDasharray=`${Math.max(a,0)} ${n}`}_auditHasWarning(e){return!!e.result.warnings?.length}_getClumpIdForAuditRef(e){let t=e.result.scoreDisplayMode;return t==="manual"||t==="notApplicable"?t:k.showAsPassed(e.result)?this._auditHasWarning(e)?"warning":"passed":"failed"}render(e,t={},n){let r=this.dom.createElement("div","lh-category");r.id=e.id,r.append(this.renderCategoryHeader(e,t,n));let i=new Map;i.set("failed",[]),i.set("warning",[]),i.set("manual",[]),i.set("passed",[]),i.set("notApplicable",[]);for(let l of e.auditRefs){if(l.group==="hidden")continue;let s=this._getClumpIdForAuditRef(l),c=i.get(s);c.push(l),i.set(s,c)}for(let l of i.values())l.sort((s,c)=>c.weight-s.weight);let a=i.get("failed")?\
-.length;for(let[l,s]of i){if(s.length===0)continue;if(l==="failed"){let p=this.renderUnexpandableClump(s,t);p.classList.add("lh-clump--failed"),r.append(p);continue}let c=l==="manual"?e.manualDescription:void 0,d=l==="warning"||l==="manual"&&a===0,h=this.renderClump(l,{auditRefsOrEls:s,description:c,openByDefault:d});r.append(h)}return r}};var Y=class{static createSegment(e,t,n,r){let i=e[t],a=Object.keys(e),l=a.indexOf(t)===a.length-1,s=!!i.children&&Object.keys(i.children).length>0,c=Array.isArray(n)?n.slice(0):[];return typeof r<"u"&&c.push(!r),{node:i,isLastChild:l,hasChildren:s,treeMarkers:c}}static createChainNode(e,t,n){let r=e.createComponent("crcChain"),i,a,l,s,c;"request"in t.node?(a=t.node.request.transferSize,l=t.node.request.url,i=(t.node.request.endTime-t.node.request.startTime)*1e3,s=!1):(a=t.node.transferSize,l=t.node.url,i=t.node.navStartToEndTime,s=!0,c=t.node.isLongest);let d=e.find(".lh-crc-node",r);d.setAttribute("title",l),c&&d.classList.add("lh-crc-node__longest"\
-);let h=e.find(".lh-crc-node__tree-marker",r);t.treeMarkers.forEach(f=>{let u=f?"lh-tree-marker lh-vert":"lh-tree-marker";h.append(e.createElement("span",u),e.createElement("span","lh-tree-marker"))});let p=t.isLastChild?"lh-tree-marker lh-up-right":"lh-tree-marker lh-vert-right",g=t.hasChildren?"lh-tree-marker lh-horiz-down":"lh-tree-marker lh-right";h.append(e.createElement("span",p),e.createElement("span","lh-tree-marker lh-right"),e.createElement("span",g));let b=n.renderTextURL(l),w=e.find(".lh-crc-node__tree-value",r);if(w.append(b),!t.hasChildren||s){let f=e.createElement("span","lh-crc-node__chain-duration");f.textContent=" - "+m.i18n.formatMilliseconds(i)+", ";let u=e.createElement("span","lh-crc-node__chain-size");u.textContent=m.i18n.formatBytesToKiB(a,.01),w.append(f,u)}return r}static buildTree(e,t,n,r){if(n.append(Q.createChainNode(e,t,r)),t.node.children)for(let i of Object.keys(t.node.children)){let a=Q.createSegment(t.node.children,i,t.treeMarkers,t.isLastChild);Q.buil\
-dTree(e,a,n,r)}}static render(e,t,n){let r=e.createComponent("crc"),i=e.find(".lh-crc",r);e.find(".lh-crc-initial-nav",r).textContent=m.strings.crcInitialNavigation,e.find(".lh-crc__longest_duration_label",r).textContent=m.strings.crcLongestDurationLabel,e.find(".lh-crc__longest_duration",r).textContent=m.i18n.formatMilliseconds(t.longestChain.duration);let a=t.chains;for(let l of Object.keys(a)){let s=Q.createSegment(a,l);Q.buildTree(e,s,i,n)}return e.find(".lh-crc-container",r)}},Q=Y;function pt(o,e){return e.left<=o.width&&0<=e.right&&e.top<=o.height&&0<=e.bottom}function ke(o,e,t){return o<e?e:o>t?t:o}function ut(o){return{x:o.left+o.width/2,y:o.top+o.height/2}}var V=class o{static getScreenshotPositions(e,t,n){let r=ut(e),i=ke(r.x-t.width/2,0,n.width-t.width),a=ke(r.y-t.height/2,0,n.height-t.height);return{screenshot:{left:i,top:a},clip:{left:e.left-i,top:e.top-a}}}static renderClipPathInScreenshot(e,t,n,r,i){let a=e.find("clipPath",t),l=`clip-${m.getUniqueSuffix()}`;a.id=l,t.styl\
-e.clipPath=`url(#${l})`;let s=n.top/i.height,c=s+r.height/i.height,d=n.left/i.width,h=d+r.width/i.width,p=[`0,0             1,0            1,${s}          0,${s}`,`0,${c}     1,${c}    1,1               0,1`,`0,${s}        ${d},${s} ${d},${c} 0,${c}`,`${h},${s} 1,${s}       1,${c}       ${h},${c}`];for(let g of p){let b=e.createElementNS("http://www.w3.org/2000/svg","polygon");b.setAttribute("points",g),a.append(b)}}static installFullPageScreenshot(e,t){e.style.setProperty("--element-screenshot-url",`url(\'${t.data}\')`)}static installOverlayFeature(e){let{dom:t,rootEl:n,overlayContainerEl:r,fullPageScreenshot:i}=e,a="lh-screenshot-overlay--enabled";n.classList.contains(a)||(n.classList.add(a),n.addEventListener("click",l=>{let s=l.target;if(!s)return;let c=s.closest(".lh-node > .lh-element-screenshot");if(!c)return;let d=t.createElement("div","lh-element-screenshot__overlay");r.append(d);let h={width:d.clientWidth*.95,height:d.clientHeight*.8},p={width:Number(c.dataset.rectWidth),height\
-:Number(c.dataset.rectHeight),left:Number(c.dataset.rectLeft),right:Number(c.dataset.rectLeft)+Number(c.dataset.rectWidth),top:Number(c.dataset.rectTop),bottom:Number(c.dataset.rectTop)+Number(c.dataset.rectHeight)},g=o.render(t,i.screenshot,p,h);if(!g){d.remove();return}d.append(g),d.addEventListener("click",()=>d.remove())}))}static _computeZoomFactor(e,t){let r={x:t.width/e.width,y:t.height/e.height},i=.75*Math.min(r.x,r.y);return Math.min(1,i)}static render(e,t,n,r){if(!pt(t,n))return null;let i=e.createComponent("elementScreenshot"),a=e.find("div.lh-element-screenshot",i);a.dataset.rectWidth=n.width.toString(),a.dataset.rectHeight=n.height.toString(),a.dataset.rectLeft=n.left.toString(),a.dataset.rectTop=n.top.toString();let l=this._computeZoomFactor(n,r),s={width:r.width/l,height:r.height/l};s.width=Math.min(t.width,s.width),s.height=Math.min(t.height,s.height);let c={width:s.width*l,height:s.height*l},d=o.getScreenshotPositions(n,s,{width:t.width,height:t.height}),h=e.find("div.\
-lh-element-screenshot__image",a);h.style.width=c.width+"px",h.style.height=c.height+"px",h.style.backgroundPositionY=-(d.screenshot.top*l)+"px",h.style.backgroundPositionX=-(d.screenshot.left*l)+"px",h.style.backgroundSize=`${t.width*l}px ${t.height*l}px`;let p=e.find("div.lh-element-screenshot__element-marker",a);p.style.width=n.width*l+"px",p.style.height=n.height*l+"px",p.style.left=d.clip.left*l+"px",p.style.top=d.clip.top*l+"px";let g=e.find("div.lh-element-screenshot__mask",a);return g.style.width=c.width+"px",g.style.height=c.height+"px",o.renderClipPathInScreenshot(e,g,d.clip,n,s),a}};var gt=["http://","https://","data:"],mt=["bytes","numeric","ms","timespanMs"],X=class{constructor(e,t={}){this._dom=e,this._fullPageScreenshot=t.fullPageScreenshot,this._entities=t.entities}render(e){switch(e.type){case"filmstrip":return this._renderFilmstrip(e);case"list":return this._renderList(e);case"checklist":return this._renderChecklist(e);case"table":case"opportunity":return this._renderT\
-able(e);case"network-tree":case"criticalrequestchain":return Y.render(this._dom,e,this);case"screenshot":case"debugdata":case"treemap-data":return null;default:return this._renderUnknown(e.type,e)}}_renderBytes(e){let t=m.i18n.formatBytesToKiB(e.value,e.granularity||.1),n=this._renderText(t);return n.title=m.i18n.formatBytes(e.value),n}_renderMilliseconds(e){let t;return e.displayUnit==="duration"?t=m.i18n.formatDuration(e.value):t=m.i18n.formatMilliseconds(e.value,e.granularity||10),this._renderText(t)}renderTextURL(e){let t=e,n,r,i;try{let l=E.parseURL(t);n=l.file==="/"?l.origin:l.file,r=l.file==="/"||l.hostname===""?"":`(${l.hostname})`,i=t}catch{n=t}let a=this._dom.createElement("div","lh-text__url");if(a.append(this._renderLink({text:n,url:t})),r){let l=this._renderText(r);l.classList.add("lh-text__url-host"),a.append(l)}return i&&(a.title=t,a.dataset.url=t),a}_renderLink(e){let t=this._dom.createElement("a");if(this._dom.safelySetHref(t,e.url),!t.href){let n=this._renderText(e.te\
-xt);return n.classList.add("lh-link"),n}return t.rel="noopener",t.target="_blank",t.textContent=e.text,t.classList.add("lh-link"),t}_renderText(e){let t=this._dom.createElement("div","lh-text");return t.textContent=e,t}_renderNumeric(e){let t=m.i18n.formatNumber(e.value,e.granularity||.1),n=this._dom.createElement("div","lh-numeric");return n.textContent=t,n}_renderThumbnail(e){let t=this._dom.createElement("img","lh-thumbnail"),n=e;return t.src=n,t.title=n,t.alt="",t}_renderUnknown(e,t){console.error(`Unknown details type: ${e}`,t);let n=this._dom.createElement("details","lh-unknown");return this._dom.createChildOf(n,"summary").textContent=`We don\'t know how to render audit details of type \\`${e}\\`. The Lighthouse version that collected this data is likely newer than the Lighthouse version of the report renderer. Expand for the raw JSON.`,this._dom.createChildOf(n,"pre").textContent=JSON.stringify(t,null,2),n}_renderTableValue(e,t){if(e==null)return null;if(typeof e=="object")switch(e\
-.type){case"code":return this._renderCode(e.value);case"link":return this._renderLink(e);case"node":return this.renderNode(e);case"numeric":return this._renderNumeric(e);case"text":return this._renderText(e.value);case"source-location":return this.renderSourceLocation(e);case"url":return this.renderTextURL(e.value);default:return this._renderUnknown(e.type,e)}switch(t.valueType){case"bytes":{let n=Number(e);return this._renderBytes({value:n,granularity:t.granularity})}case"code":{let n=String(e);return this._renderCode(n)}case"ms":{let n={value:Number(e),granularity:t.granularity,displayUnit:t.displayUnit};return this._renderMilliseconds(n)}case"numeric":{let n=Number(e);return this._renderNumeric({value:n,granularity:t.granularity})}case"text":{let n=String(e);return this._renderText(n)}case"thumbnail":{let n=String(e);return this._renderThumbnail(n)}case"timespanMs":{let n=Number(e);return this._renderMilliseconds({value:n})}case"url":{let n=String(e);return gt.some(r=>n.startsWith(r\
-))?this.renderTextURL(n):this._renderCode(n)}default:return this._renderUnknown(t.valueType,e)}}_getDerivedSubItemsHeading(e){return e.subItemsHeading?{key:e.subItemsHeading.key||"",valueType:e.subItemsHeading.valueType||e.valueType,granularity:e.subItemsHeading.granularity||e.granularity,displayUnit:e.subItemsHeading.displayUnit||e.displayUnit,label:""}:null}_renderTableRow(e,t){let n=this._dom.createElement("tr");for(let r of t){if(!r||!r.key){this._dom.createChildOf(n,"td","lh-table-column--empty");continue}let i=e[r.key],a;if(i!=null&&(a=this._renderTableValue(i,r)),a){let l=`lh-table-column--${r.valueType}`;this._dom.createChildOf(n,"td",l).append(a)}else this._dom.createChildOf(n,"td","lh-table-column--empty")}return n}_renderTableRowsFromItem(e,t){let n=this._dom.createFragment();if(n.append(this._renderTableRow(e,t)),!e.subItems)return n;let r=t.map(this._getDerivedSubItemsHeading);if(!r.some(Boolean))return n;for(let i of e.subItems.items){let a=this._renderTableRow(i,r);a.cla\
-ssList.add("lh-sub-item-row"),n.append(a)}return n}_adornEntityGroupRow(e){let t=e.dataset.entity;if(!t)return;let n=this._entities?.find(i=>i.name===t);if(!n)return;let r=this._dom.find("td",e);if(n.category){let i=this._dom.createElement("span");i.classList.add("lh-audit__adorn"),i.textContent=n.category,r.append(" ",i)}if(n.isFirstParty){let i=this._dom.createElement("span");i.classList.add("lh-audit__adorn","lh-audit__adorn1p"),i.textContent=m.strings.firstPartyChipLabel,r.append(" ",i)}if(n.homepage){let i=this._dom.createElement("a");i.href=n.homepage,i.target="_blank",i.title=m.strings.openInANewTabTooltip,i.classList.add("lh-report-icon--external"),r.append(" ",i)}}_renderEntityGroupRow(e,t){let n={...t[0]};n.valueType="text";let r=[n,...t.slice(1)],i=this._dom.createFragment();return i.append(this._renderTableRow(e,r)),this._dom.find("tr",i).classList.add("lh-row--group"),i}_getEntityGroupItems(e){let{items:t,headings:n,sortedBy:r}=e;if(!t.length||e.isEntityGrouped||!t.some(d=\
->d.entity))return[];let i=new Set(e.skipSumming||[]),a=[];for(let d of n)!d.key||i.has(d.key)||mt.includes(d.valueType)&&a.push(d.key);let l=n[0].key;if(!l)return[];let s=new Map;for(let d of t){let h=typeof d.entity=="string"?d.entity:void 0,p=s.get(h)||{[l]:h||m.strings.unattributable,entity:h};for(let g of a)p[g]=Number(p[g]||0)+Number(d[g]||0);s.set(h,p)}let c=[...s.values()];return r&&c.sort(k.getTableItemSortComparator(r)),c}_renderTable(e){if(!e.items.length)return this._dom.createElement("span");let t=this._dom.createElement("table","lh-table"),n=this._dom.createChildOf(t,"thead"),r=this._dom.createChildOf(n,"tr");for(let l of e.headings){let c=`lh-table-column--${l.valueType||"text"}`,d=this._dom.createElement("div","lh-text");d.textContent=l.label,this._dom.createChildOf(r,"th",c).append(d)}let i=this._getEntityGroupItems(e),a=this._dom.createChildOf(t,"tbody");if(i.length)for(let l of i){let s=typeof l.entity=="string"?l.entity:void 0,c=this._renderEntityGroupRow(l,e.heading\
-s);for(let h of e.items.filter(p=>p.entity===s))c.append(this._renderTableRowsFromItem(h,e.headings));let d=this._dom.findAll("tr",c);s&&d.length&&(d.forEach(h=>h.dataset.entity=s),this._adornEntityGroupRow(d[0])),a.append(c)}else{let l=!0;for(let s of e.items){let c=this._renderTableRowsFromItem(s,e.headings),d=this._dom.findAll("tr",c),h=d[0];if(typeof s.entity=="string"&&(h.dataset.entity=s.entity),e.isEntityGrouped&&s.entity)h.classList.add("lh-row--group"),this._adornEntityGroupRow(h);else for(let p of d)p.classList.add(l?"lh-row--even":"lh-row--odd");l=!l,a.append(c)}}return t}_renderListValue(e){return e.type==="node"?this.renderNode(e):e.type==="text"?this._renderText(e.value):this.render(e)}_renderList(e){let t=this._dom.createElement("div","lh-list");return e.items.forEach(n=>{if(n.type==="list-section"){let i=this._dom.createElement("div","lh-list-section");n.title&&this._dom.createChildOf(i,"div","lh-list-section__title").append(this._dom.convertMarkdownLinkSnippets(n.title\
-)),n.description&&this._dom.createChildOf(i,"div","lh-list-section__description").append(this._dom.convertMarkdownLinkSnippets(n.description));let a=this._renderListValue(n.value);a&&i.append(a),t.append(i);return}let r=this._renderListValue(n);r&&t.append(r)}),t}_renderChecklist(e){let t=this._dom.createElement("ul","lh-checklist");return Object.values(e.items).forEach(n=>{let r=this._dom.createChildOf(t,"li","lh-checklist-item"),i=n.value?"lh-report-plain-icon--checklist-pass":"lh-report-plain-icon--checklist-fail";this._dom.createChildOf(r,"span",`lh-report-plain-icon ${i}`).textContent=n.label}),t}renderNode(e){let t=this._dom.createElement("span","lh-node");if(e.nodeLabel){let a=this._dom.createElement("div");a.textContent=e.nodeLabel,t.append(a)}if(e.snippet){let a=this._dom.createElement("div");a.classList.add("lh-node__snippet"),a.textContent=e.snippet,t.append(a)}if(e.selector&&(t.title=e.selector),e.path&&t.setAttribute("data-path",e.path),e.selector&&t.setAttribute("data-sel\
-ector",e.selector),e.snippet&&t.setAttribute("data-snippet",e.snippet),!this._fullPageScreenshot)return t;let n=e.lhId&&this._fullPageScreenshot.nodes[e.lhId];if(!n||n.width===0||n.height===0)return t;let r={width:147,height:100},i=V.render(this._dom,this._fullPageScreenshot.screenshot,n,r);return i&&t.prepend(i),t}renderSourceLocation(e){if(!e.url)return null;let t=`${e.url}:${e.line+1}:${e.column}`,n;e.original&&(n=`${e.original.file||"<unmapped>"}:${e.original.line+1}:${e.original.column}`);let r;if(e.urlProvider==="network"&&n)r=this._renderLink({url:e.url,text:n}),r.title=`maps to generated location ${t}`;else if(e.urlProvider==="network"&&!n)r=this.renderTextURL(e.url),this._dom.find(".lh-link",r).textContent+=`:${e.line+1}:${e.column}`;else if(e.urlProvider==="comment"&&n)r=this._renderText(`${n} (from source map)`),r.title=`${t} (from sourceURL)`;else if(e.urlProvider==="comment"&&!n)r=this._renderText(`${t} (from sourceURL)`);else return null;return r.classList.add("lh-source-\
-location"),r.setAttribute("data-source-url",e.url),r.setAttribute("data-source-line",String(e.line)),r.setAttribute("data-source-column",String(e.column)),r}_renderFilmstrip(e){let t=this._dom.createElement("div","lh-filmstrip");for(let n of e.items){let r=this._dom.createChildOf(t,"div","lh-filmstrip__frame"),i=this._dom.createChildOf(r,"img","lh-filmstrip__thumbnail");i.src=n.data,i.alt="Screenshot"}return t}_renderCode(e){let t=this._dom.createElement("pre","lh-code");return t.textContent=e,t}};var te=class{constructor(e){e==="en-XA"&&(e="de"),this._locale=e,this._cachedNumberFormatters=new Map}_formatNumberWithGranularity(e,t,n={}){if(t!==void 0){let a=-Math.log10(t);Number.isInteger(a)||(console.warn(`granularity of ${t} is invalid. Using 1 instead`),t=1),t<1&&(n={...n},n.minimumFractionDigits=n.maximumFractionDigits=Math.ceil(a)),e=Math.round(e/t)*t,Object.is(e,-0)&&(e=0)}else Math.abs(e)<5e-4&&(e=0);let r,i=[n.minimumFractionDigits,n.maximumFractionDigits,n.style,n.unit,n.unitDi\
-splay,this._locale].join("");return r=this._cachedNumberFormatters.get(i),r||(r=new Intl.NumberFormat(this._locale,n),this._cachedNumberFormatters.set(i,r)),r.format(e).replace(" ","\\xA0")}formatNumber(e,t){return this._formatNumberWithGranularity(e,t)}formatInteger(e){return this._formatNumberWithGranularity(e,1)}formatPercent(e){return new Intl.NumberFormat(this._locale,{style:"percent"}).format(e)}formatBytesToKiB(e,t=void 0){return this._formatNumberWithGranularity(e/1024,t)+"\\xA0KiB"}formatBytesToMiB(e,t=void 0){return this._formatNumberWithGranularity(e/1048576,t)+"\\xA0MiB"}formatBytes(e,t=1){return this._formatNumberWithGranularity(e,t,{style:"unit",unit:"byte",unitDisplay:"long"})}formatBytesWithBestUnit(e,t=.1){return e>=1048576?this.formatBytesToMiB(e,t):e>=1024?this.formatBytesToKiB(e,t):this._formatNumberWithGranularity(e,t,{style:"unit",unit:"byte",unitDisplay:"narrow"})}formatKbps(e,t=void 0){return this._formatNumberWithGranularity(e,t,{style:"unit",unit:"kilobit-per-sec\
-ond",unitDisplay:"short"})}formatMilliseconds(e,t=void 0){return this._formatNumberWithGranularity(e,t,{style:"unit",unit:"millisecond",unitDisplay:"short"})}formatSeconds(e,t=void 0){return this._formatNumberWithGranularity(e/1e3,t,{style:"unit",unit:"second",unitDisplay:"narrow"})}formatDateTime(e){let t={month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"numeric",timeZoneName:"short"},n;try{n=new Intl.DateTimeFormat(this._locale,t)}catch{t.timeZone="UTC",n=new Intl.DateTimeFormat(this._locale,t)}return n.format(new Date(e))}formatDuration(e){let t=e/1e3;if(Math.round(t)===0)return"None";let n=[],r={day:3600*24,hour:3600,minute:60,second:1};return Object.keys(r).forEach(i=>{let a=r[i],l=Math.floor(t/a);if(l>0){t-=l*a;let s=this._formatNumberWithGranularity(l,1,{style:"unit",unit:i,unitDisplay:"narrow"});n.push(s)}}),n.join(" ")}};function Ee(o){let e=o.createComponent("explodeyGauge");return o.find(".lh-exp-gauge-component",e)}function Se(o,e,t){let n=o.find("div.lh-ex\
-p-gauge__wrapper",e);n.className="",n.classList.add("lh-exp-gauge__wrapper",`lh-exp-gauge__wrapper--${k.calculateRating(t.score)}`),vt(o,n,t)}function ft(o,e,t){t=t||o/32;let n=o/t,r=.5*t,i=n+r+t,a=2*Math.PI*n,l=Math.acos(1-.5*Math.pow(.5*t/n,2))*n,s=2*Math.PI*i,c=Math.acos(1-.5*Math.pow(.5*t/i,2))*i;return{radiusInner:n,radiusOuter:i,circumferenceInner:a,circumferenceOuter:s,getArcLength:()=>Math.max(0,Number(e*a)),getMetricArcLength:(d,h=!1)=>{let p=h?0:2*c;return Math.max(0,Number(d*s-r-p))},endDiffInner:l,endDiffOuter:c,strokeWidth:t,strokeGap:r}}function vt(o,e,t){let i=Number(t.score),{radiusInner:a,radiusOuter:l,circumferenceInner:s,circumferenceOuter:c,getArcLength:d,getMetricArcLength:h,endDiffInner:p,endDiffOuter:g,strokeWidth:b,strokeGap:w}=ft(128,i),f=o.find("svg.lh-exp-gauge",e);o.find(".lh-exp-gauge__label",f).textContent=t.title,f.setAttribute("viewBox",[-64,-64/2,128,128/2].join(" ")),f.style.setProperty("--stroke-width",`${b}px`),f.style.setProperty("--circle-meas",(2*\
-Math.PI).toFixed(4));let u=o.find("g.lh-exp-gauge__outer",e),v=o.find("g.lh-exp-gauge__inner",e),_=o.find("circle.lh-cover",u),x=o.find("circle.lh-exp-gauge__arc",v),S=o.find("text.lh-exp-gauge__percentage",v);u.style.setProperty("--scale-initial",String(a/l)),u.style.setProperty("--radius",`${l}px`),_.style.setProperty("--radius",`${.5*(a+l)}px`),_.setAttribute("stroke-width",String(w)),f.style.setProperty("--radius",`${a}px`),x.setAttribute("stroke-dasharray",`${d()} ${(s-d()).toFixed(4)}`),x.setAttribute("stroke-dashoffset",String(.25*s-p)),S.textContent=Math.round(i*100).toString();let A=l+b,z=l-b,M=t.auditRefs.filter(y=>y.group==="metrics"&&y.weight),$=M.reduce((y,C)=>y+=C.weight,0),R=.25*c-g-.5*w,N=-.5*Math.PI;u.querySelectorAll(".metric").forEach(y=>{M.map(F=>`metric--${F.id}`).find(F=>y.classList.contains(F))||y.remove()}),M.forEach((y,C)=>{let L=y.acronym??y.id,F=!u.querySelector(`.metric--${L}`),T=o.maybeFind(`g.metric--${L}`,u)||o.createSVGElement("g"),B=o.maybeFind(`.metric\
---${L} circle.lh-exp-gauge--faded`,u)||o.createSVGElement("circle"),K=o.maybeFind(`.metric--${L} circle.lh-exp-gauge--miniarc`,u)||o.createSVGElement("circle"),q=o.maybeFind(`.metric--${L} circle.lh-exp-gauge-hovertarget`,u)||o.createSVGElement("circle"),P=o.maybeFind(`.metric--${L} text.metric__label`,u)||o.createSVGElement("text"),H=o.maybeFind(`.metric--${L} text.metric__value`,u)||o.createSVGElement("text");T.classList.add("metric",`metric--${L}`),B.classList.add("lh-exp-gauge__arc","lh-exp-gauge__arc--metric","lh-exp-gauge--faded"),K.classList.add("lh-exp-gauge__arc","lh-exp-gauge__arc--metric","lh-exp-gauge--miniarc"),q.classList.add("lh-exp-gauge__arc","lh-exp-gauge__arc--metric","lh-exp-gauge-hovertarget");let j=y.weight/$,de=h(j),he=y.result.score?y.result.score*j:0,pe=h(he),Pe=j*c,ue=h(j,!0),ge=k.calculateRating(y.result.score,y.result.scoreDisplayMode);T.style.setProperty("--metric-rating",ge),T.style.setProperty("--metric-color",`var(--color-${ge})`),T.style.setProperty("--\
-metric-offset",`${R}`),T.style.setProperty("--i",C.toString()),B.setAttribute("stroke-dasharray",`${de} ${c-de}`),K.style.setProperty("--metric-array",`${pe} ${c-pe}`),q.setAttribute("stroke-dasharray",`${ue} ${c-ue-g}`),P.classList.add("metric__label"),H.classList.add("metric__value"),P.textContent=L,H.textContent=`+${Math.round(he*100)}`;let me=N+j*Math.PI,J=Math.cos(me),Z=Math.sin(me);switch(!0){case J>0:H.setAttribute("text-anchor","end");break;case J<0:P.setAttribute("text-anchor","end");break;case J===0:P.setAttribute("text-anchor","middle"),H.setAttribute("text-anchor","middle");break}switch(!0){case Z>0:P.setAttribute("dominant-baseline","hanging");break;case Z<0:H.setAttribute("dominant-baseline","hanging");break;case Z===0:P.setAttribute("dominant-baseline","middle"),H.setAttribute("dominant-baseline","middle");break}P.setAttribute("x",(A*J).toFixed(2)),P.setAttribute("y",(A*Z).toFixed(2)),H.setAttribute("x",(z*J).toFixed(2)),H.setAttribute("y",(z*Z).toFixed(2)),F&&(T.appendC\
-hild(B),T.appendChild(K),T.appendChild(q),T.appendChild(P),T.appendChild(H),u.appendChild(T)),R-=Pe,N+=j*2*Math.PI});let D=u.querySelector(".lh-exp-gauge-underhovertarget")||o.createSVGElement("circle");D.classList.add("lh-exp-gauge__arc","lh-exp-gauge__arc--metric","lh-exp-gauge-hovertarget","lh-exp-gauge-underhovertarget");let I=h(1,!0);if(D.setAttribute("stroke-dasharray",`${I} ${c-I-g}`),D.isConnected||u.prepend(D),f.dataset.listenersSetup)return;f.dataset.listenersSetup=!0,De(f),f.addEventListener("pointerover",y=>{if(y.target===f&&f.classList.contains("state--expanded")){f.classList.remove("state--expanded"),f.classList.contains("state--highlight")&&(f.classList.remove("state--highlight"),o.find(".metric--highlight",f).classList.remove("metric--highlight"));return}if(!(y.target instanceof Element))return;let C=y.target.parentNode;if(C instanceof SVGElement){if(C&&C===v){f.classList.contains("state--expanded")?f.classList.contains("state--highlight")&&(f.classList.remove("state--h\
-ighlight"),o.find(".metric--highlight",f).classList.remove("metric--highlight")):f.classList.add("state--expanded");return}if(C&&C.classList&&C.classList.contains("metric")){let L=C.style.getPropertyValue("--metric-rating");if(e.style.setProperty("--color-highlight",`var(--color-${L}-secondary)`),!f.classList.contains("state--highlight"))f.classList.add("state--highlight"),C.classList.add("metric--highlight");else{let F=o.find(".metric--highlight",f);C!==F&&(F.classList.remove("metric--highlight"),C.classList.add("metric--highlight"))}}}}),f.addEventListener("mouseleave",()=>{f.classList.remove("state--highlight"),f.querySelector(".metric--highlight")?.classList.remove("metric--highlight")});async function De(y){if(await new Promise(P=>setTimeout(P,1e3)),y.classList.contains("state--expanded"))return;let C=o.find(".lh-exp-gauge__inner",y),L=`uniq-${Math.random()}`;C.setAttribute("id",L);let F=o.createSVGElement("use");F.setAttribute("href",`#${L}`),y.appendChild(F);let T=2.5;y.style.se\
-tProperty("--peek-dur",`${T}s`),y.classList.add("state--peek","state--expanded");let B=()=>{y.classList.remove("state--peek","state--expanded"),F.remove()},K=setTimeout(()=>{y.removeEventListener("mouseenter",q),B()},T*1e3*1.5);function q(){clearTimeout(K),B()}y.addEventListener("mouseenter",q,{once:!0})}}var ne=class extends G{_renderMetric(e){let t=this.dom.createComponent("metric"),n=this.dom.find(".lh-metric",t);n.id=e.result.id;let r=k.calculateRating(e.result.score,e.result.scoreDisplayMode);n.classList.add(`lh-metric--${r}`);let i=this.dom.find(".lh-metric__title",t);i.textContent=e.result.title;let a=this.dom.find(".lh-metric__value",t);a.textContent=e.result.displayValue||"";let l=this.dom.find(".lh-metric__description",t);if(l.append(this.dom.convertMarkdownLinkSnippets(e.result.description)),e.result.scoreDisplayMode==="error"){l.textContent="",a.textContent="Error!";let s=this.dom.createChildOf(l,"span");s.textContent=e.result.errorMessage||"Report error: no metric informat\
-ion"}else e.result.scoreDisplayMode==="notApplicable"&&(a.textContent="--");return n}_getScoringCalculatorHref(e){let t=e.filter(h=>h.group==="metrics"),n=e.find(h=>h.id==="interactive"),r=e.find(h=>h.id==="first-cpu-idle"),i=e.find(h=>h.id==="first-meaningful-paint");n&&t.push(n),r&&t.push(r),i&&typeof i.result.score=="number"&&t.push(i);let a=h=>Math.round(h*100)/100,s=[...t.map(h=>{let p;return typeof h.result.numericValue=="number"?(p=h.id==="cumulative-layout-shift"?a(h.result.numericValue):Math.round(h.result.numericValue),p=p.toString()):p="null",[h.acronym||h.id,p]})];m.reportJson&&(s.push(["device",m.reportJson.configSettings.formFactor]),s.push(["version",m.reportJson.lighthouseVersion]));let c=new URLSearchParams(s),d=new URL("https://googlechrome.github.io/lighthouse/scorecalc/");return d.hash=c.toString(),d.href}overallImpact(e,t){if(!e.result.metricSavings)return{overallImpact:0,overallLinearImpact:0};let n=0,r=0;for(let[i,a]of Object.entries(e.result.metricSavings)){if(a\
-===void 0)continue;let l=t.find(g=>g.acronym===i);if(!l||l.result.score===null)continue;let s=l.result.numericValue;if(!s)continue;let c=a/s*l.weight;r+=c;let d=l.result.scoringOptions;if(!d)continue;let p=(E.computeLogNormalScore(d,s-a)-l.result.score)*l.weight;n+=p}return{overallImpact:n,overallLinearImpact:r}}render(e,t,n){let r=m.strings,i=this.dom.createElement("div","lh-category");i.id=e.id,i.append(this.renderCategoryHeader(e,t,n));let a=e.auditRefs.filter(p=>p.group==="metrics");if(a.length){let[p,g]=this.renderAuditGroup(t.metrics),b=this.dom.createElement("input","lh-metrics-toggle__input"),w=`lh-metrics-toggle${m.getUniqueSuffix()}`;b.setAttribute("aria-label","Toggle the display of metric descriptions"),b.type="checkbox",b.id=w,p.prepend(b);let f=this.dom.find(".lh-audit-group__header",p),u=this.dom.createChildOf(f,"label","lh-metrics-toggle__label");u.htmlFor=w;let v=this.dom.createChildOf(u,"span","lh-metrics-toggle__labeltext--show"),_=this.dom.createChildOf(u,"span","lh\
--metrics-toggle__labeltext--hide");v.textContent=m.strings.expandView,_.textContent=m.strings.collapseView;let x=this.dom.createElement("div","lh-metrics-container");if(p.insertBefore(x,g),a.forEach(S=>{x.append(this._renderMetric(S))}),i.querySelector(".lh-gauge__wrapper")){let S=this.dom.find(".lh-category-header__description",i),A=this.dom.createChildOf(S,"div","lh-metrics__disclaimer"),z=this.dom.convertMarkdownLinkSnippets(r.varianceDisclaimer);A.append(z);let M=this.dom.createChildOf(A,"a","lh-calclink");M.target="_blank",M.textContent=r.calculatorLink,this.dom.safelySetHref(M,this._getScoringCalculatorHref(e.auditRefs))}p.classList.add("lh-audit-group--metrics"),i.append(p)}let l=this.dom.createChildOf(i,"div","lh-filmstrip-container"),c=e.auditRefs.find(p=>p.id==="screenshot-thumbnails")?.result;if(c?.details){l.id=c.id;let p=this.detailsRenderer.render(c.details);p&&l.append(p)}let d=this.renderFilterableSection(e,t,["insights","diagnostics"],a);if(d&&(d.classList.add("lh-perf\
--audits"),i.append(d)),(!n||n?.gatherMode==="navigation")&&e.score!==null){let p=Ee(this.dom);Se(this.dom,p,e),this.dom.find(".lh-score__gauge",i).replaceWith(p)}return i}renderFilterableSection(e,t,n,r){if(n.some(u=>!t[u]))return null;let i=this.dom.createElement("div"),a=u=>u.group??"",s=e.auditRefs.filter(u=>n.includes(a(u))).map(u=>{let{overallImpact:v,overallLinearImpact:_}=this.overallImpact(u,r),x=u.result.guidanceLevel||1,S=this.renderAudit(u);return{auditRef:u,auditEl:S,overallImpact:v,overallLinearImpact:_,guidanceLevel:x}}),c=s.filter(u=>!k.showAsPassed(u.auditRef.result)),d=s.filter(u=>k.showAsPassed(u.auditRef.result)),h={};for(let u of n){let v=this.renderAuditGroup(t[u]);v[0].classList.add(`lh-audit-group--${u}`),h[u]=v}function p(u){for(let v of s)if(u==="All")v.auditEl.hidden=!1;else{let _=v.auditRef.result.metricSavings?.[u]===void 0;v.auditEl.hidden=_}c.sort((v,_)=>{let x=v.auditRef.result.score||0,S=_.auditRef.result.score||0;if(x!==S)return x-S;if(u!=="All"){let A=\
-v.auditRef.result.metricSavings?.[u]??-1,z=_.auditRef.result.metricSavings?.[u]??-1;if(A!==z)return z-A}return v.overallImpact!==_.overallImpact?_.overallImpact*_.guidanceLevel-v.overallImpact*v.guidanceLevel:v.overallImpact===0&&_.overallImpact===0&&v.overallLinearImpact!==_.overallLinearImpact?_.overallLinearImpact*_.guidanceLevel-v.overallLinearImpact*v.guidanceLevel:_.guidanceLevel-v.guidanceLevel});for(let v of c){if(!v.auditRef.group)continue;let _=h[a(v.auditRef)];if(!_)continue;let[x,S]=_;x.insertBefore(v.auditEl,S)}}let g=new Set;for(let u of c){let v=u.auditRef.result.metricSavings||{};for(let[_,x]of Object.entries(v))typeof x=="number"&&g.add(_)}let b=r.filter(u=>u.acronym&&g.has(u.acronym));b.length&&this.renderMetricAuditFilter(b,i,p),p("All");for(let u of n)if(c.some(v=>a(v.auditRef)===u)){let v=h[u];if(!v)continue;i.append(v[0])}if(!d.length)return i;let w={auditRefsOrEls:d.map(u=>u.auditEl),groupDefinitions:t},f=this.renderClump("passed",w);return i.append(f),i}renderMe\
-tricAuditFilter(e,t,n){let r=this.dom.createElement("div","lh-metricfilter"),i=this.dom.createChildOf(r,"span","lh-metricfilter__text");i.textContent=m.strings.showRelevantAudits;let a=[{acronym:"All",id:"All"},...e],l=m.getUniqueSuffix();for(let s of a){let c=`metric-${s.acronym}-${l}`,d=this.dom.createChildOf(r,"input","lh-metricfilter__radio");d.type="radio",d.name=`metricsfilter-${l}`,d.id=c;let h=this.dom.createChildOf(r,"label","lh-metricfilter__label");h.htmlFor=c,h.title="result"in s?s.result.title:"",h.textContent=s.acronym||s.id,s.acronym==="All"&&(d.checked=!0,h.classList.add("lh-metricfilter__label--active")),t.append(r),d.addEventListener("input",p=>{for(let b of t.querySelectorAll("label.lh-metricfilter__label"))b.classList.toggle("lh-metricfilter__label--active",b.htmlFor===c);t.classList.toggle("lh-category--filtered",s.acronym!=="All"),n(s.acronym||"All");let g=t.querySelectorAll("div.lh-audit-group, details.lh-audit-group");for(let b of g){b.hidden=!1;let w=Array.from\
-(b.querySelectorAll("div.lh-audit")),f=!!w.length&&w.every(u=>u.hidden);b.hidden=f}})}}};var re=class{constructor(e){this._dom=e,this._opts={}}renderReport(e,t,n){if(!this._dom.rootEl&&t){console.warn("Please adopt the new report API in renderer/api.js.");let i=t.closest(".lh-root");i?this._dom.rootEl=i:(t.classList.add("lh-root","lh-vars"),this._dom.rootEl=t)}else this._dom.rootEl&&t&&(this._dom.rootEl=t);n&&(this._opts=n),this._dom.setLighthouseChannel(e.configSettings.channel||"unknown");let r=k.prepareReportResult(e);return this._dom.rootEl.textContent="",this._dom.rootEl.append(this._renderReport(r)),this._opts.occupyEntireViewport&&this._dom.rootEl.classList.add("lh-max-viewport"),this._dom.rootEl}_renderReportTopbar(e){let t=this._dom.createComponent("topbar"),n=this._dom.find("a.lh-topbar__url",t);return n.textContent=e.finalDisplayedUrl,n.title=e.finalDisplayedUrl,this._dom.safelySetHref(n,e.finalDisplayedUrl),t}_renderReportHeader(){let e=this._dom.createComponent("heading"),\
-t=this._dom.createComponent("scoresWrapper");return this._dom.find(".lh-scores-wrapper-placeholder",e).replaceWith(t),e}_renderReportFooter(e){let t=this._dom.createComponent("footer");return this._renderMetaBlock(e,t),this._dom.find(".lh-footer__version_issue",t).textContent=m.strings.footerIssue,this._dom.find(".lh-footer__version",t).textContent=e.lighthouseVersion,t}_renderMetaBlock(e,t){let n=k.getEmulationDescriptions(e.configSettings||{}),r=e.userAgent.match(/(\\w*Chrome\\/[\\d.]+)/),i=Array.isArray(r)?r[1].replace("/"," ").replace("Chrome","Chromium"):"Chromium",a=e.configSettings.channel,l=e.environment.benchmarkIndex.toFixed(0),s=e.environment.credits?.["axe-core"],c=[`${m.strings.runtimeSettingsBenchmark}: ${l}`,`${m.strings.runtimeSettingsCPUThrottling}: ${n.cpuThrottling}`];n.screenEmulation&&c.push(`${m.strings.runtimeSettingsScreenEmulation}: ${n.screenEmulation}`),s&&c.push(`${m.strings.runtimeSettingsAxeVersion}: ${s}`);let d=m.strings.runtimeAnalysisWindow;e.gatherMode==\
-="timespan"?d=m.strings.runtimeAnalysisWindowTimespan:e.gatherMode==="snapshot"&&(d=m.strings.runtimeAnalysisWindowSnapshot);let h=[["date",`Captured at ${m.i18n.formatDateTime(e.fetchTime)}`],["devices",`${n.deviceEmulation} with Lighthouse ${e.lighthouseVersion}`,c.join(`\n`)],["samples-one",m.strings.runtimeSingleLoad,m.strings.runtimeSingleLoadTooltip],["stopwatch",d],["networkspeed",`${n.summary}`,`${m.strings.runtimeSettingsNetworkThrottling}: ${n.networkThrottling}`],["chrome",`Using ${i}`+(a?` with ${a}`:""),`${m.strings.runtimeSettingsUANetwork}: "${e.environment.networkUserAgent}"`]],p=this._dom.find(".lh-meta__items",t);for(let[g,b,w]of h){let f=this._dom.createChildOf(p,"li","lh-meta__item");if(f.textContent=b,w){f.classList.add("lh-tooltip-boundary");let u=this._dom.createChildOf(f,"div","lh-tooltip");u.textContent=w}f.classList.add("lh-report-icon",`lh-report-icon--${g}`)}}_renderReportWarnings(e){if(!e.runWarnings||e.runWarnings.length===0)return this._dom.createElement("\
-div");let t=this._dom.createComponent("warningsToplevel"),n=this._dom.find(".lh-warnings__msg",t);n.textContent=m.strings.toplevelWarningsMessage;let r=[];for(let i of e.runWarnings){let a=this._dom.createElement("li");a.append(this._dom.convertMarkdownLinkSnippets(i)),r.push(a)}return this._dom.find("ul",t).append(...r),t}_renderScoreGauges(e,t,n){let r=[],i=[];for(let a of Object.values(e.categories)){let s=(n[a.id]||t).renderCategoryScore(a,e.categoryGroups||{},{gatherMode:e.gatherMode}),c=this._dom.find("a.lh-gauge__wrapper, a.lh-fraction__wrapper",s);c&&(this._dom.safelySetHref(c,`#${a.id}`),c.addEventListener("click",d=>{if(!c.matches(\'[href^="#"]\'))return;let h=c.getAttribute("href"),p=this._dom.rootEl;if(!h||!p)return;let g=this._dom.find(h,p);d.preventDefault(),g.scrollIntoView()}),this._opts.onPageAnchorRendered?.(c)),k.isPluginCategory(a.id)?i.push(s):r.push(s)}return[...r,...i]}_renderReport(e){m.apply({providedStrings:e.i18n.rendererFormattedStrings,i18n:new te(e.configSet\
-tings.locale),reportJson:e});let t=new X(this._dom,{fullPageScreenshot:e.fullPageScreenshot??void 0,entities:e.entities}),n=new G(this._dom,t),r={performance:new ne(this._dom,t)},i=this._dom.createElement("div");i.append(this._renderReportHeader());let a=this._dom.createElement("div","lh-container"),l=this._dom.createElement("div","lh-report");l.append(this._renderReportWarnings(e));let s;Object.keys(e.categories).length===1?i.classList.add("lh-header--solo-category"):s=this._dom.createElement("div","lh-scores-header");let d=this._dom.createElement("div");if(d.classList.add("lh-scorescale-wrap"),d.append(this._dom.createComponent("scorescale")),s){let b=this._dom.find(".lh-scores-container",i);s.append(...this._renderScoreGauges(e,n,r)),b.append(s,d);let w=this._dom.createElement("div","lh-sticky-header");w.append(...this._renderScoreGauges(e,n,r)),a.append(w)}let h=this._dom.createElement("div","lh-categories");l.append(h);let p={gatherMode:e.gatherMode};for(let b of Object.values(e.c\
-ategories)){let w=r[b.id]||n;w.dom.createChildOf(h,"div","lh-category-wrapper").append(w.render(b,e.categoryGroups,p))}n.injectFinalScreenshot(h,e.audits,d);let g=this._dom.createFragment();return this._opts.omitGlobalStyles||g.append(this._dom.createComponent("styles")),this._opts.omitTopbar||g.append(this._renderReportTopbar(e)),g.append(a),l.append(this._renderReportFooter(e)),a.append(i,l),e.fullPageScreenshot&&V.installFullPageScreenshot(this._dom.rootEl,e.fullPageScreenshot.screenshot),g}};function W(o,e){let t=o.rootEl;typeof e>"u"?t.classList.toggle("lh-dark"):t.classList.toggle("lh-dark",e)}var bt=typeof btoa<"u"?btoa:o=>Buffer.from(o).toString("base64"),_t=typeof atob<"u"?atob:o=>Buffer.from(o,"base64").toString();async function wt(o,e){let t=new TextEncoder().encode(o);if(e.gzip)if(typeof CompressionStream<"u"){let i=new CompressionStream("gzip"),a=i.writable.getWriter();a.write(t),a.close();let l=await new Response(i.readable).arrayBuffer();t=new Uint8Array(l)}else t=window\
-.pako.gzip(o);let n="",r=5e3;for(let i=0;i<t.length;i+=r)n+=String.fromCharCode(...t.subarray(i,i+r));return bt(n)}function yt(o,e){let t=_t(o),n=Uint8Array.from(t,r=>r.charCodeAt(0));return e.gzip?window.pako.ungzip(n,{to:"string"}):new TextDecoder().decode(n)}var Ce={toBase64:wt,fromBase64:yt};function se(){let o=window.location.host.endsWith(".vercel.app"),e=new URLSearchParams(window.location.search).has("dev");return o?`https://${window.location.host}/gh-pages`:e?"http://localhost:7333":"https://googlechrome.github.io/lighthouse"}function ce(o){let e=o.generatedTime,t=o.fetchTime||e;return`${o.lighthouseVersion}-${o.finalDisplayedUrl}-${t}`}function xt(o,e,t){let n=new URL(e).origin;window.addEventListener("message",function i(a){a.origin===n&&r&&a.data.opened&&(r.postMessage(o,n),window.removeEventListener("message",i))});let r=window.open(e,t)}async function Ae(o,e,t){let n=new URL(e),r=!!window.CompressionStream;n.hash=await Ce.toBase64(JSON.stringify(o),{gzip:r}),r&&n.searchPa\
-rams.set("gzip","1"),window.open(n.toString(),t)}async function Le(o){let e="viewer-"+ce(o),t=se()+"/viewer/";await Ae({lhr:o},t,e)}async function ze(o){let e="viewer-"+ce(o),t=se()+"/viewer/";xt({lhr:o},t,e)}function Me(o){if(!o.audits["script-treemap-data"].details)throw new Error("no script treemap data found");let t={lhr:{mainDocumentUrl:o.mainDocumentUrl,finalUrl:o.finalUrl,finalDisplayedUrl:o.finalDisplayedUrl,audits:{"script-treemap-data":o.audits["script-treemap-data"]},configSettings:{locale:o.configSettings.locale}}},n=se()+"/treemap/",r="treemap-"+ce(o);Ae(t,n,r)}var oe=class{constructor(e){this._dom=e,this._toggleEl,this._menuEl,this.onDocumentKeyDown=this.onDocumentKeyDown.bind(this),this.onToggleClick=this.onToggleClick.bind(this),this.onToggleKeydown=this.onToggleKeydown.bind(this),this.onMenuFocusOut=this.onMenuFocusOut.bind(this),this.onMenuKeydown=this.onMenuKeydown.bind(this),this._getNextMenuItem=this._getNextMenuItem.bind(this),this._getNextSelectableNode=this._get\
-NextSelectableNode.bind(this),this._getPreviousMenuItem=this._getPreviousMenuItem.bind(this)}setup(e){this._toggleEl=this._dom.find(".lh-topbar button.lh-tools__button",this._dom.rootEl),this._toggleEl.addEventListener("click",this.onToggleClick),this._toggleEl.addEventListener("keydown",this.onToggleKeydown),this._menuEl=this._dom.find(".lh-topbar div.lh-tools__dropdown",this._dom.rootEl),this._menuEl.addEventListener("keydown",this.onMenuKeydown),this._menuEl.addEventListener("click",e)}close(){this._toggleEl.classList.remove("lh-active"),this._toggleEl.setAttribute("aria-expanded","false"),this._menuEl.contains(this._dom.document().activeElement)&&this._toggleEl.focus(),this._menuEl.removeEventListener("focusout",this.onMenuFocusOut),this._dom.document().removeEventListener("keydown",this.onDocumentKeyDown)}open(e){this._toggleEl.classList.contains("lh-active")?e.focus():this._menuEl.addEventListener("transitionend",()=>{e.focus()},{once:!0}),this._toggleEl.classList.add("lh-active"\
-),this._toggleEl.setAttribute("aria-expanded","true"),this._menuEl.addEventListener("focusout",this.onMenuFocusOut),this._dom.document().addEventListener("keydown",this.onDocumentKeyDown)}onToggleClick(e){e.preventDefault(),e.stopImmediatePropagation(),this._toggleEl.classList.contains("lh-active")?this.close():this.open(this._getNextMenuItem())}onToggleKeydown(e){switch(e.code){case"ArrowUp":e.preventDefault(),this.open(this._getPreviousMenuItem());break;case"ArrowDown":case"Enter":case" ":e.preventDefault(),this.open(this._getNextMenuItem());break;default:}}onMenuKeydown(e){let t=e.target;switch(e.code){case"ArrowUp":e.preventDefault(),this._getPreviousMenuItem(t).focus();break;case"ArrowDown":e.preventDefault(),this._getNextMenuItem(t).focus();break;case"Home":e.preventDefault(),this._getNextMenuItem().focus();break;case"End":e.preventDefault(),this._getPreviousMenuItem().focus();break;default:}}onDocumentKeyDown(e){e.keyCode===27&&this.close()}onMenuFocusOut(e){let t=e.relatedTarge\
-t;this._menuEl.contains(t)||this.close()}_getNextSelectableNode(e,t){let n=e.filter(i=>i instanceof HTMLElement).filter(i=>!(i.hasAttribute("disabled")||window.getComputedStyle(i).display==="none")),r=t?n.indexOf(t)+1:0;return r>=n.length&&(r=0),n[r]}_getNextMenuItem(e){let t=Array.from(this._menuEl.childNodes);return this._getNextSelectableNode(t,e)}_getPreviousMenuItem(e){let t=Array.from(this._menuEl.childNodes).reverse();return this._getNextSelectableNode(t,e)}};var ie=class{constructor(e,t){this.lhr,this._reportUIFeatures=e,this._dom=t,this._dropDownMenu=new oe(this._dom),this._copyAttempt=!1,this.topbarEl,this.categoriesEl,this.stickyHeaderEl,this.highlightEl,this.onDropDownMenuClick=this.onDropDownMenuClick.bind(this),this.onKeyUp=this.onKeyUp.bind(this),this.onCopy=this.onCopy.bind(this),this.collapseAllDetails=this.collapseAllDetails.bind(this)}enable(e){this.lhr=e,this._dom.rootEl.addEventListener("keyup",this.onKeyUp),this._dom.document().addEventListener("copy",this.onCopy)\
-,this._dropDownMenu.setup(this.onDropDownMenuClick),this._setUpCollapseDetailsAfterPrinting(),this._dom.find(".lh-topbar__logo",this._dom.rootEl).addEventListener("click",()=>W(this._dom)),this._setupStickyHeader()}onDropDownMenuClick(e){e.preventDefault();let t=e.target;if(!(!t||!t.hasAttribute("data-action"))){switch(t.getAttribute("data-action")){case"copy":this.onCopyButtonClick();break;case"print-summary":this.collapseAllDetails(),this._print();break;case"print-expanded":this.expandAllDetails(),this._print();break;case"save-json":{let n=JSON.stringify(this.lhr,null,2);this._reportUIFeatures._saveFile(new Blob([n],{type:"application/json"}));break}case"save-html":{let n=this._reportUIFeatures.getReportHtml();try{this._reportUIFeatures._saveFile(new Blob([n],{type:"text/html"}))}catch(r){this._dom.fireEventOn("lh-log",this._dom.document(),{cmd:"error",msg:"Could not export as HTML. "+r.message})}break}case"open-viewer":{this._dom.isDevTools()?Le(this.lhr):ze(this.lhr);break}case"sav\
-e-gist":{this._reportUIFeatures.saveAsGist();break}case"toggle-dark":{W(this._dom);break}case"view-unthrottled-trace":this._reportUIFeatures._opts.onViewTrace?.()}this._dropDownMenu.close()}}onCopy(e){this._copyAttempt&&e.clipboardData&&(e.preventDefault(),e.clipboardData.setData("text/plain",JSON.stringify(this.lhr,null,2)),this._dom.fireEventOn("lh-log",this._dom.document(),{cmd:"log",msg:"Report JSON copied to clipboard"})),this._copyAttempt=!1}onCopyButtonClick(){this._dom.fireEventOn("lh-analytics",this._dom.document(),{name:"copy"});try{this._dom.document().queryCommandSupported("copy")&&(this._copyAttempt=!0,this._dom.document().execCommand("copy")||(this._copyAttempt=!1,this._dom.fireEventOn("lh-log",this._dom.document(),{cmd:"warn",msg:"Your browser does not support copy to clipboard."})))}catch(e){this._copyAttempt=!1,this._dom.fireEventOn("lh-log",this._dom.document(),{cmd:"log",msg:e.message})}}onKeyUp(e){(e.ctrlKey||e.metaKey)&&e.keyCode===80&&this._dropDownMenu.close()}ex\
-pandAllDetails(){this._dom.findAll(".lh-categories details",this._dom.rootEl).map(t=>t.open=!0)}collapseAllDetails(){this._dom.findAll(".lh-categories details",this._dom.rootEl).map(t=>t.open=!1)}_print(){this._reportUIFeatures._opts.onPrintOverride?this._reportUIFeatures._opts.onPrintOverride(this._dom.rootEl):self.print()}resetUIState(){this._dropDownMenu.close()}_getScrollParent(e){let{overflowY:t}=window.getComputedStyle(e);return t!=="visible"&&t!=="hidden"?e:e.parentElement?this._getScrollParent(e.parentElement):document}_setUpCollapseDetailsAfterPrinting(){"onbeforeprint"in self?self.addEventListener("afterprint",this.collapseAllDetails):self.matchMedia("print").addListener(t=>{t.matches?this.expandAllDetails():this.collapseAllDetails()})}_setupStickyHeader(){this.topbarEl=this._dom.find("div.lh-topbar",this._dom.rootEl),this.categoriesEl=this._dom.find("div.lh-categories",this._dom.rootEl),requestAnimationFrame(()=>requestAnimationFrame(()=>{try{this.stickyHeaderEl=this._dom.fi\
-nd("div.lh-sticky-header",this._dom.rootEl)}catch{return}this.highlightEl=this._dom.createChildOf(this.stickyHeaderEl,"div","lh-highlighter");let e=this._getScrollParent(this._dom.find(".lh-container",this._dom.rootEl));e.addEventListener("scroll",()=>this._updateStickyHeader());let t=e instanceof window.Document?document.documentElement:e;new window.ResizeObserver(()=>this._updateStickyHeader()).observe(t)}))}_updateStickyHeader(){if(!this.stickyHeaderEl)return;let e=this.topbarEl.getBoundingClientRect().bottom,t=this.categoriesEl.getBoundingClientRect().top,n=e>=t,i=Array.from(this._dom.rootEl.querySelectorAll(".lh-category")).filter(h=>h.getBoundingClientRect().top-window.innerHeight/2<0),a=i.length>0?i.length-1:0,l=this.stickyHeaderEl.querySelectorAll(".lh-gauge__wrapper, .lh-fraction__wrapper"),s=l[a],c=l[0].getBoundingClientRect().left,d=s.getBoundingClientRect().left-c;this.highlightEl.style.transform=`translate(${d}px)`,this.stickyHeaderEl.classList.toggle("lh-sticky-header--vi\
-sible",n)}};function kt(o,e){let t=e?new Date(e):new Date,n=t.toLocaleTimeString("en-US",{hour12:!1}),r=t.toLocaleDateString("en-US",{year:"numeric",month:"2-digit",day:"2-digit"}).split("/");r.unshift(r.pop());let i=r.join("-");return`${o}_${i}_${n}`.replace(/[/?<>\\\\:*|"]/g,"-")}function Te(o){let e=new URL(o.finalDisplayedUrl).hostname;return kt(e,o.fetchTime)}function Et(o){return Array.from(o.tBodies[0].rows)}var ae=class{constructor(e,t={}){this.json,this._dom=e,this._opts=t,this._topbar=t.omitTopbar?null:new ie(this,e),this.onMediaQueryChange=this.onMediaQueryChange.bind(this)}initFeatures(e){this.json=e,this._fullPageScreenshot=E.getFullPageScreenshot(e),this._topbar&&(this._topbar.enable(e),this._topbar.resetUIState()),this._setupMediaQueryListeners(),this._setupThirdPartyFilter(),this._setupElementScreenshotOverlay(this._dom.rootEl);let t=this._dom.isDevTools()||this._opts.disableDarkMode||this._opts.disableAutoDarkModeAndFireworks;!t&&window.matchMedia("(prefers-color-scheme:\
- dark)").matches&&W(this._dom,!0);let r=["performance","accessibility","best-practices","seo"].every(s=>{let c=e.categories[s];return c&&c.score===1}),i=this._opts.disableFireworks||this._opts.disableAutoDarkModeAndFireworks;if(r&&!i&&(this._enableFireworks(),t||W(this._dom,!0)),e.categories.performance&&e.categories.performance.auditRefs.some(s=>!!(s.group==="metrics"&&e.audits[s.id].errorMessage))){let s=this._dom.find("input.lh-metrics-toggle__input",this._dom.rootEl);s.checked=!0}this.json.audits["script-treemap-data"]&&this.json.audits["script-treemap-data"].details&&this.addButton({text:m.strings.viewTreemapLabel,icon:"treemap",onClick:()=>Me(this.json)}),this._opts.onViewTrace&&(e.configSettings.throttlingMethod==="simulate"?this._dom.find(\'a[data-action="view-unthrottled-trace"]\',this._dom.rootEl).classList.remove("lh-hidden"):this.addButton({text:m.strings.viewTraceLabel,onClick:()=>this._opts.onViewTrace?.()})),this._opts.getStandaloneReportHTML&&this._dom.find(\'a[data-action\
-="save-html"]\',this._dom.rootEl).classList.remove("lh-hidden");for(let s of this._dom.findAll("[data-i18n]",this._dom.rootEl)){let d=s.getAttribute("data-i18n");s.textContent=m.strings[d]}}addButton(e){let t=this._dom.rootEl.querySelector(".lh-audit-group--metrics");if(!t)return;let n=t.querySelector(".lh-buttons");n||(n=this._dom.createChildOf(t,"div","lh-buttons"));let r=["lh-button"];e.icon&&(r.push("lh-report-icon"),r.push(`lh-report-icon--${e.icon}`));let i=this._dom.createChildOf(n,"button",r.join(" "));return i.textContent=e.text,i.addEventListener("click",e.onClick),i}resetUIState(){this._topbar&&this._topbar.resetUIState()}getReportHtml(){if(!this._opts.getStandaloneReportHTML)throw new Error("`getStandaloneReportHTML` is not set");return this.resetUIState(),this._opts.getStandaloneReportHTML()}saveAsGist(){throw new Error("Cannot save as gist from base report")}_enableFireworks(){this._dom.find(".lh-scores-container",this._dom.rootEl).classList.add("lh-score100")}_setupMediaQ\
-ueryListeners(){let e=self.matchMedia("(max-width: 500px)");e.addListener(this.onMediaQueryChange),this.onMediaQueryChange(e)}_resetUIState(){this._topbar&&this._topbar.resetUIState()}onMediaQueryChange(e){this._dom.rootEl.classList.toggle("lh-narrow",e.matches)}_setupThirdPartyFilter(){let e=["uses-rel-preconnect","third-party-facades","network-dependency-tree-insight"],t=["legacy-javascript","legacy-javascript-insight"];Array.from(this._dom.rootEl.querySelectorAll("table.lh-table")).filter(i=>i.querySelector("td.lh-table-column--url, td.lh-table-column--source-location")).filter(i=>{let a=i.closest(".lh-audit");if(!a)throw new Error(".lh-table not within audit");return!e.includes(a.id)}).forEach(i=>{let a=Et(i),l=a.filter(f=>!f.classList.contains("lh-sub-item-row")),s=this._getThirdPartyRows(l,E.getFinalDisplayedUrl(this.json)),c=a.some(f=>f.classList.contains("lh-row--even")),d=this._dom.createComponent("3pFilter"),h=this._dom.find("input",d);h.addEventListener("change",f=>{let u=f.\
-target instanceof HTMLInputElement&&!f.target.checked,v=!0,_=l[0];for(;_;){let x=u&&s.includes(_);do _.classList.toggle("lh-row--hidden",x),c&&(_.classList.toggle("lh-row--even",!x&&v),_.classList.toggle("lh-row--odd",!x&&!v)),_=_.nextElementSibling;while(_&&_.classList.contains("lh-sub-item-row"));x||(v=!v)}});let p=s.filter(f=>!f.classList.contains("lh-row--group")).length;this._dom.find(".lh-3p-filter-count",d).textContent=`${p}`,this._dom.find(".lh-3p-ui-string",d).textContent=m.strings.thirdPartyResourcesLabel;let g=s.length===l.length,b=!s.length;if((g||b)&&(this._dom.find("div.lh-3p-filter",d).hidden=!0),!i.parentNode)return;i.parentNode.insertBefore(d,i);let w=i.closest(".lh-audit");if(!w)throw new Error(".lh-table not within audit");t.includes(w.id)&&!g&&h.click()})}_setupElementScreenshotOverlay(e){this._fullPageScreenshot&&V.installOverlayFeature({dom:this._dom,rootEl:e,overlayContainerEl:e,fullPageScreenshot:this._fullPageScreenshot})}_getThirdPartyRows(e,t){let n=E.getEnti\
-tyFromUrl(t,this.json.entities),r=this.json.entities?.find(a=>a.isFirstParty===!0)?.name,i=[];for(let a of e){if(r){if(!a.dataset.entity||a.dataset.entity===r)continue}else{let l=a.querySelector("div.lh-text__url");if(!l)continue;let s=l.dataset.url;if(!s||!(E.getEntityFromUrl(s,this.json.entities)!==n))continue}i.push(a)}return i}_saveFile(e){let t=e.type.match("json")?".json":".html",n=Te({finalDisplayedUrl:E.getFinalDisplayedUrl(this.json),fetchTime:this.json.fetchTime})+t;this._opts.onSaveFileOverride?this._opts.onSaveFileOverride(e,n):this._dom.saveFile(e,n)}};function Fe(o,e={}){let t=document.createElement("article");t.classList.add("lh-root","lh-vars");let n=new ee(t.ownerDocument,t);return new re(n).renderReport(o,t,e),new ae(n,e).initFeatures(o),t}var le=class{constructor(e){this.el=e;let t=document.createElement("style");if(t.textContent=`\n      #lh-log {\n        position: fixed;\n        background-color: #323232;\n        color: #fff;\n        min-height: 48px;\n        min-wi\
-dth: 288px;\n        padding: 16px 24px;\n        box-shadow: 0 2px 5px 0 rgba(0, 0, 0, 0.26);\n        border-radius: 2px;\n        margin: 12px;\n        font-size: 14px;\n        cursor: default;\n        transition: transform 0.3s, opacity 0.3s;\n        transform: translateY(100px);\n        opacity: 0;\n        bottom: 0;\n        left: 0;\n        z-index: 3;\n        display: flex;\n        flex-direction: row;\n        justify-content: center;\n        align-items: center;\n      }\n      \n      #lh-log.lh-show {\n        opacity: 1;\n        transform: translateY(0);\n      }\n    `,!this.el.parentNode)throw new Error("element needs to be in the DOM");this.el.parentNode.insertBefore(t,this.el),this._id=void 0}log(e,t=!0){this._id&&clearTimeout(this._id),this.el.textContent=e,this.el.classList.add("lh-show"),t&&(this._id=setTimeout(()=>{this.el.classList.remove("lh-show")},7e3))}warn(e){this.log("Warning: "+e)}error(e){this.log(e),setTimeout(()=>{throw new Error(e)},0)}hide(){this._id&&clearTimeout\
-(this._id),this.el.classList.remove("lh-show")}};function St(){let o=window.__LIGHTHOUSE_JSON__,e=Fe(o,{occupyEntireViewport:!0,getStandaloneReportHTML(){return document.documentElement.outerHTML}});document.body.append(e),document.addEventListener("lh-analytics",t=>{let n=t;"gtag"in window&&window.gtag("event",n.detail.name,n.detail.data??{})}),document.addEventListener("lh-log",t=>{let n=document.querySelector("div#lh-log");if(!n)return;let r=new le(n),i=t.detail;switch(i.cmd){case"log":r.log(i.msg);break;case"warn":r.warn(i.msg);break;case"error":r.error(i.msg);break;case"hide":r.hide();break}})}window.__initLighthouseReport__=St;})();\n/**\n * @license\n * Copyright 2017 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n */\n/**\n * @license\n * Copyright 2023 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n */\n/**\n * @license\n * Copyright 2020 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n */\n/**\n * @license Copyright 2023 The Lighthouse Authors. All Rights Reserved.\n * Licensed u\
-nder the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0\n * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.\n*/\n/**\n * @license\n * Copyright 2018 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n */\n/**\n * @license\n * Copyright 2017 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n *\n * Dummy text for ensuring report robustness: <\\/script> pre$`post %%LIGHTHOUSE_JSON%%\n * (this is handled by terser)\n */\n/**\n * @license\n * Copyright 2021 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n */\n'
+-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>\');\n  \n  --baseline-high-icon-url: url("data:image/svg+xml;utf8,<svg width=\'18\' height=\'10\' viewBox=\'0 0 540 300\' fill=\'none\' xmlns=\'http://www.w3.org/2000/svg\'> <path d=\'M420 30L390 60L480 150L390 240L330 180L300 210L390 300L540 150L420 30Z\' fill=\'%23C4EED0\'/> <path d=\'M150 0L30 120L60 150L150 60L210 120L240 90L150 0Z\' fill=\'%23C4EED0\'/> <path d=\'M390 0L420 30L150 300L0 150L30 120L150 240L390 0Z\' fill=\'%231EA446\'/> </svg>");\n  --baseline-low-icon-url: url("data:image/svg+xml;utf8,<svg width=\'18\' height=\'10\' viewBox=\'0 0 540 300\' fill=\'none\' xmlns=\'http://www.w3.org/2000/svg\'> <path d=\'M150 0L180 30L150 60L120 30L150 0Z\' fill=\'%23A8C7FA\'/> <path d=\'M210 60L240 90L210 120L180 90L210 60Z\' fill=\'%23A8C7FA\'/> <path d=\'M450 60L480 90L450 120L420 90L450 60Z\' fill=\'%23A8C7FA\'/> <path d=\'M510 120L540 150L510 180L480 150L510 120Z\' fill=\'%23A8C7FA\'/> <path d=\'M450 180L480 210L450 240L4\
+20 210L450 180Z\' fill=\'%23A8C7FA\'/> <path d=\'M390 240L420 270L390 300L360 270L390 240Z\' fill=\'%23A8C7FA\'/> <path d=\'M330 180L360 210L330 240L300 210L330 180Z\' fill=\'%23A8C7FA\'/> <path d=\'M90 60L120 90L90 120L60 90L90 60Z\' fill=\'%23A8C7FA\'/> <path d=\'M390 0L420 30L150 300L0 150L30 120L150 240L390 0Z\' fill=\'%231B6EF3\'/> </svg>");\n  --baseline-limited-icon-url: url("data:image/svg+xml;utf8,<svg width=\'18\' height=\'10\' viewBox=\'0 0 540 300\' fill=\'none\' xmlns=\'http://www.w3.org/2000/svg\'> <path d=\'M150 0L240 90L210 120L120 30L150 0Z\' fill=\'%23F09409\'/> <path d=\'M420 30L540 150L420 270L390 240L480 150L390 60L420 30Z\' fill=\'%23C6C6C6\'/> <path d=\'M330 180L300 210L390 300L420 270L330 180Z\' fill=\'%23F09409\'/> <path d=\'M120 30L150 60L60 150L150 240L120 270L0 150L120 30Z\' fill=\'%23C6C6C6\'/> <path d=\'M390 0L420 30L150 300L120 270L390 0Z\' fill=\'%23F09409\'/> </svg>");\n}\n\n@media not print {\n  .lh-dark {\n    /* Pallete */\n    --color-gray-200: var(--color-gray-800);\n    --color-gray-300: #616161;\n    --\
+color-gray-400: var(--color-gray-600);\n    --color-gray-700: var(--color-gray-400);\n    --color-gray-50: #757575;\n    --color-gray-600: var(--color-gray-500);\n    --color-green-700: var(--color-green);\n    --color-orange-700: var(--color-orange);\n    --color-red-700: var(--color-red);\n    --color-teal-600: var(--color-cyan-500);\n\n    /* Context-specific colors */\n    --color-hover: rgba(0, 0, 0, 0.2);\n    --color-informative: var(--color-blue-200);\n\n    /* Component variables */\n    --env-item-background-color: #393535;\n    --link-color: var(--color-blue-200);\n    --locale-selector-background-color: var(--color-gray-200);\n    --plugin-badge-background-color: var(--color-gray-800);\n    --report-background-color: var(--color-gray-900);\n    --report-border-color-secondary: var(--color-gray-200);\n    --report-text-color-secondary: var(--color-gray-400);\n    --report-text-color: var(--color-gray-100);\n    --snippet-color: var(--color-cyan-500);\n    --topbar-background-color: var(--color-gra\
+y);\n    --toplevel-warning-background-color: hsl(33deg 14% 18%);\n    --toplevel-warning-message-text-color: var(--color-orange-700);\n    --toplevel-warning-text-color: var(--color-gray-100);\n    --table-group-header-background-color: rgba(186, 196, 206, 0.15);\n    --table-group-header-text-color: var(--color-gray-100);\n    --table-higlight-background-color: rgba(186, 196, 206, 0.09);\n\n    /* SVGs */\n    --plugin-icon-url: var(--plugin-icon-url-dark);\n  }\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media only screen and (max-width: 480px) {\n  .lh-vars {\n    --audit-group-margin-bottom: 20px;\n    --edge-gap-padding: var(--default-padding);\n    --env-name-min-width: 120px;\n    --gauge-circle-size-big: 96px;\n    --gauge-circle-size: 72px;\n    --gauge-label-font-size-big: 22px;\n  \
+  --gauge-label-font-size: 14px;\n    --gauge-label-line-height-big: 26px;\n    --gauge-label-line-height: 20px;\n    --gauge-percentage-font-size-big: 34px;\n    --gauge-percentage-font-size: 26px;\n    --gauge-wrapper-width: 112px;\n    --header-padding: 16px 0 16px 0;\n    --image-preview-size: 24px;\n    --plugin-icon-size: 75%;\n    --report-font-size: 14px;\n    --report-line-height: 20px;\n    --score-icon-margin-left: 2px;\n    --score-icon-size: 10px;\n    --topbar-height: 28px;\n    --topbar-logo-size: 20px;\n  }\n}\n\n@container lh-container (max-width: 480px) {\n  .lh-vars {\n    --audit-group-margin-bottom: 20px;\n    --edge-gap-padding: var(--default-padding);\n    --env-name-min-width: 120px;\n    --gauge-circle-size-big: 96px;\n    --gauge-circle-size: 72px;\n    --gauge-label-font-size-big: 22px;\n    --gauge-label-font-size: 14px;\n    --gauge-label-line-height-big: 26px;\n    --gauge-label-line-height: 20px;\n    --gauge-percentage-font-size-big: 34px;\n    --gauge-percentage-font-size: 26px;\n   \
+ --gauge-wrapper-width: 112px;\n    --header-padding: 16px 0 16px 0;\n    --image-preview-size: 24px;\n    --plugin-icon-size: 75%;\n    --report-font-size: 14px;\n    --report-line-height: 20px;\n    --score-icon-margin-left: 2px;\n    --score-icon-size: 10px;\n    --topbar-height: 28px;\n    --topbar-logo-size: 20px;\n  }\n}\n\n.lh-vars.lh-devtools {\n  --audit-explanation-line-height: 14px;\n  --audit-group-margin-bottom: 20px;\n  --audit-group-padding-vertical: 12px;\n  --audit-padding-vertical: 4px;\n  --category-padding: 12px;\n  --default-padding: 12px;\n  --env-name-min-width: 120px;\n  --footer-padding-vertical: 8px;\n  --gauge-circle-size-big: 72px;\n  --gauge-circle-size: 64px;\n  --gauge-label-font-size-big: 22px;\n  --gauge-label-font-size: 14px;\n  --gauge-label-line-height-big: 26px;\n  --gauge-label-line-height: 20px;\n  --gauge-percentage-font-size-big: 34px;\n  --gauge-percentage-font-size: 26px;\n  --gauge-wrapper-width: 97px;\n  --header-line-height: 20px;\n  --header-padding: 16px 0 16px 0;\n  --s\
+creenshot-overlay-background: transparent;\n  --plugin-icon-size: 75%;\n  --report-font-size: 12px;\n  --report-line-height: 20px;\n  --score-icon-margin-left: 2px;\n  --score-icon-size: 10px;\n  --section-padding-vertical: 8px;\n}\n\n.lh-devtools :focus-visible {\n  outline: -webkit-focus-ring-color auto 1px;\n}\n\n.lh-container:has(.lh-sticky-header) {\n  --sticky-header-buffer: calc(var(--topbar-height) + var(--sticky-header-height));\n}\n\n.lh-container:not(.lh-topbar + .lh-container) {\n  --topbar-height: 0;\n  --sticky-header-height: 0;\n  --sticky-header-buffer: 0;\n}\n\n.lh-max-viewport {\n  display: flex;\n  flex-direction: column;\n  min-height: 100vh;\n  width: 100%;\n}\n\n.lh-devtools.lh-root {\n  height: 100%;\n}\n.lh-devtools.lh-root img {\n  /* Override devtools default \'min-width: 0\' so svg without size in a flexbox isn\'t collapsed. */\n  min-width: auto;\n}\n.lh-devtools .lh-container {\n  overflow-y: scroll;\n  height: calc(100% - var(--topbar-height));\n  /** The .lh-container is the scroll parent in DevTo\
+ols so we exclude the topbar from the sticky header buffer. */\n  --sticky-header-buffer: 0;\n}\n.lh-devtools .lh-container:has(.lh-sticky-header) {\n  /** The .lh-container is the scroll parent in DevTools so we exclude the topbar from the sticky header buffer. */\n  --sticky-header-buffer: var(--sticky-header-height);\n}\n@media print {\n  .lh-devtools .lh-container {\n    overflow: unset;\n  }\n}\n.lh-devtools .lh-sticky-header {\n  /* This is normally the height of the topbar, but we want it to stick to the top of our scroll container .lh-container\\` */\n  top: 0;\n}\n.lh-devtools .lh-element-screenshot__overlay {\n  position: absolute;\n}\n\n@keyframes fadeIn {\n  0% { opacity: 0;}\n  100% { opacity: 0.6;}\n}\n\n.lh-root *, .lh-root *::before, .lh-root *::after {\n  box-sizing: border-box;\n}\n\n.lh-root {\n  font-family: var(--report-font-family);\n  font-size: var(--report-font-size);\n  margin: 0;\n  line-height: var(--report-line-height);\n  background: var(--report-background-color);\n  color: var(--report-tex\
+t-color);\n}\n\n.lh-root [hidden] {\n  display: none !important;\n}\n\n.lh-root pre {\n  margin: 0;\n}\n\n.lh-root pre,\n.lh-root code {\n  font-family: var(--report-font-family-monospace);\n}\n\n.lh-root details > summary {\n  cursor: pointer;\n}\n\n.lh-hidden {\n  display: none !important;\n}\n\n.lh-container {\n  /*\n  Text wrapping in the report is so much FUN!\n  We have a \\`word-break: break-word;\\` globally here to prevent a few common scenarios, namely\n  long non-breakable text (usually URLs) found in:\n    1. The footer\n    2. .lh-node (outerHTML)\n    3. .lh-code\n\n  With that sorted, the next challenge is appropriate column sizing and text wrapping inside our\n  .lh-details tables. Even more fun.\n    * We don\'t want table headers ("Est Savings (ms)") to wrap or their column values, but\n      we\'d be happy for the URL column to wrap if the URLs are particularly long.\n    * We want the narrow columns to remain narrow, providing the most column width for URL\n    * We don\'t want the table to extend past 100% \
+width.\n    * Long URLs in the URL column can wrap. Util.getURLDisplayName maxes them out at 64 characters,\n      but they do not get any overflow:ellipsis treatment.\n  */\n  word-break: break-word;\n\n  container-name: lh-container;\n  container-type: inline-size;\n}\n\n.lh-audit-group a,\n.lh-category-header__description a,\n.lh-audit__description a,\n.lh-warnings a,\n.lh-footer a,\n.lh-table-column--link a {\n  color: var(--link-color);\n}\n\n.lh-audit__description, .lh-audit__stackpack, .lh-list-section__description {\n  --inner-audit-padding-right: var(--stackpack-padding-horizontal);\n  padding-left: var(--audit-description-padding-left);\n  padding-right: var(--inner-audit-padding-right);\n  padding-top: 8px;\n  padding-bottom: 8px;\n}\n\n.lh-details {\n  margin-top: var(--default-padding);\n  margin-bottom: var(--default-padding);\n  margin-left: var(--audit-description-padding-left);\n}\n\n.lh-audit__stackpack {\n  display: flex;\n  align-items: center;\n}\n\n.lh-audit__stackpack__img {\n  max-width: 30px;\n  marg\
+in-right: var(--default-padding)\n}\n\n/* Report header */\n\n.lh-report-icon {\n  display: flex;\n  align-items: center;\n  padding: 10px 12px;\n  cursor: pointer;\n}\n.lh-report-icon[disabled] {\n  opacity: 0.3;\n  pointer-events: none;\n}\n\n.lh-report-icon::before {\n  content: "";\n  margin: 4px;\n  background-repeat: no-repeat;\n  width: var(--report-icon-size);\n  height: var(--report-icon-size);\n  opacity: 0.7;\n  display: inline-block;\n  vertical-align: middle;\n}\n.lh-report-icon:hover::before {\n  opacity: 1;\n}\n.lh-dark .lh-report-icon::before {\n  filter: invert(1);\n}\n.lh-report-icon--print::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/><path fill="none" d="M0 0h24v24H0z"/></svg>\');\n}\n.lh-report-icon--copy::before {\n  background-image: url(\'data:image/\
+svg+xml;utf8,<svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h24v24H0z" fill="none"/><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>\');\n}\n.lh-report-icon--open::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h24v24H0z" fill="none"/><path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h4v-2H5V8h14v10h-4v2h4c1.1 0 2-.9 2-2V6c0-1.1-.89-2-2-2zm-7 6l-4 4h3v6h2v-6h3l-4-4z"/></svg>\');\n}\n.lh-report-icon--download::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/><path d="M0 0h24v24H0z" fill="none"/></svg>\');\n}\n.lh-report-icon--dark::before {\n  background-image:url(\'data:image/svg+xml;utf8,<svg xmlns="http\
+://www.w3.org/2000/svg" height="24" viewBox="0 0 100 125"><path d="M50 23.587c-16.27 0-22.799 12.574-22.799 21.417 0 12.917 10.117 22.451 12.436 32.471h20.726c2.32-10.02 12.436-19.554 12.436-32.471 0-8.843-6.528-21.417-22.799-21.417zM39.637 87.161c0 3.001 1.18 4.181 4.181 4.181h.426l.41 1.231C45.278 94.449 46.042 95 48.019 95h3.963c1.978 0 2.74-.551 3.365-2.427l.409-1.231h.427c3.002 0 4.18-1.18 4.18-4.181V80.91H39.637v6.251zM50 18.265c1.26 0 2.072-.814 2.072-2.073v-9.12C52.072 5.813 51.26 5 50 5c-1.259 0-2.072.813-2.072 2.073v9.12c0 1.259.813 2.072 2.072 2.072zM68.313 23.727c.994.774 2.135.634 2.91-.357l5.614-7.187c.776-.992.636-2.135-.356-2.909-.992-.776-2.135-.636-2.91.357l-5.613 7.186c-.778.993-.636 2.135.355 2.91zM91.157 36.373c-.306-1.222-1.291-1.815-2.513-1.51l-8.85 2.207c-1.222.305-1.814 1.29-1.51 2.512.305 1.223 1.291 1.814 2.513 1.51l8.849-2.206c1.223-.305 1.816-1.291 1.511-2.513zM86.757 60.48l-8.331-3.709c-1.15-.512-2.225-.099-2.736 1.052-.512 1.151-.1 2.224 1.051 2.737l8.33 \
+3.707c1.15.514 2.225.101 2.736-1.05.513-1.149.1-2.223-1.05-2.737zM28.779 23.37c.775.992 1.917 1.131 2.909.357.992-.776 1.132-1.917.357-2.91l-5.615-7.186c-.775-.992-1.917-1.132-2.909-.357s-1.131 1.917-.356 2.909l5.614 7.187zM21.715 39.583c.305-1.223-.288-2.208-1.51-2.513l-8.849-2.207c-1.222-.303-2.208.289-2.513 1.511-.303 1.222.288 2.207 1.511 2.512l8.848 2.206c1.222.304 2.208-.287 2.513-1.509zM21.575 56.771l-8.331 3.711c-1.151.511-1.563 1.586-1.05 2.735.511 1.151 1.586 1.563 2.736 1.052l8.331-3.711c1.151-.511 1.563-1.586 1.05-2.735-.512-1.15-1.585-1.562-2.736-1.052z"/></svg>\');\n}\n.lh-report-icon--treemap::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="black"><path d="M3 5v14h19V5H3zm2 2h15v4H5V7zm0 10v-4h4v4H5zm6 0v-4h9v4h-9z"/></svg>\');\n}\n\n.lh-report-icon--date::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><pat\
+h d="M7 11h2v2H7v-2zm14-5v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6c0-1.1.9-2 2-2h1V2h2v2h8V2h2v2h1a2 2 0 012 2zM5 8h14V6H5v2zm14 12V10H5v10h14zm-4-7h2v-2h-2v2zm-4 0h2v-2h-2v2z"/></svg>\');\n}\n.lh-report-icon--devices::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 6h18V4H4a2 2 0 00-2 2v11H0v3h14v-3H4V6zm19 2h-6a1 1 0 00-1 1v10c0 .6.5 1 1 1h6c.6 0 1-.5 1-1V9c0-.6-.5-1-1-1zm-1 9h-4v-7h4v7z"/></svg>\');\n}\n.lh-report-icon--world::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm7 6h-3c-.3-1.3-.8-2.5-1.4-3.6A8 8 0 0 1 18.9 8zm-7-4a14 14 0 0 1 2 4h-4a14 14 0 0 1 2-4zM4.3 14a8.2 8.2 0 0 1 0-4h3.3a16.5 16.5 0 0 0 0 4H4.3zm.8 2h3a14 14 0 0 0 1.3 3.6A8 8 0 0 1 5.1 16zm3-8H5a8 8 0 0 1 4.3-3.6L8 8zM12 20a14 14 0 0 1-2-4h4a14 14 0 0 1-2 4zm2.3-6H9.7a14.7 14.7 0 0 1 0-4h4.6a14.6 14.6 0 0 1 0 4zm.3 5.6c.6-1.2 1-2\
+.4 1.4-3.6h3a8 8 0 0 1-4.4 3.6zm1.8-5.6a16.5 16.5 0 0 0 0-4h3.3a8.2 8.2 0 0 1 0 4h-3.3z"/></svg>\');\n}\n.lh-report-icon--stopwatch::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.1-6.6L20.5 6l-1.4-1.4L17.7 6A9 9 0 0 0 3 13a9 9 0 1 0 16-5.6zm-7 12.6a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/></svg>\');\n}\n.lh-report-icon--networkspeed::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15.9 5c-.2 0-.3 0-.4.2v.2L10.1 17a2 2 0 0 0-.2 1 2 2 0 0 0 4 .4l2.4-12.9c0-.3-.2-.5-.5-.5zM1 9l2 2c2.9-2.9 6.8-4 10.5-3.6l1.2-2.7C10 3.8 4.7 5.3 1 9zm20 2 2-2a15.4 15.4 0 0 0-5.6-3.6L17 8.2c1.5.7 2.9 1.6 4.1 2.8zm-4 4 2-2a9.9 9.9 0 0 0-2.7-1.9l-.5 3 1.2.9zM5 13l2 2a7.1 7.1 0 0 1 4-2l1.3-2.9C9.7 10.1 7 11 5 13z"/></svg>\');\n}\n.lh-report-icon--samples-one::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www\
+.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="7" cy="14" r="3"/><path d="M7 18a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm4-2a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm5.6 17.6a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>\');\n}\n.lh-report-icon--samples-many::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 18a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm4-2a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm5.6 17.6a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/><circle cx="7" cy="14" r="3"/><circle cx="11" cy="6" r="3"/></svg>\');\n}\n.lh-report-icon--chrome::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -50 562 562"><path d="M256 25.6v25.6a204 \
+204 0 0 1 144.8 60 204 204 0 0 1 60 144.8 204 204 0 0 1-60 144.8 204 204 0 0 1-144.8 60 204 204 0 0 1-144.8-60 204 204 0 0 1-60-144.8 204 204 0 0 1 60-144.8 204 204 0 0 1 144.8-60V0a256 256 0 1 0 0 512 256 256 0 0 0 0-512v25.6z"/><path d="M256 179.2v25.6a51.3 51.3 0 0 1 0 102.4 51.3 51.3 0 0 1 0-102.4v-51.2a102.3 102.3 0 1 0-.1 204.7 102.3 102.3 0 0 0 .1-204.7v25.6z"/><path d="M256 204.8h217.6a25.6 25.6 0 0 0 0-51.2H256a25.6 25.6 0 0 0 0 51.2m44.3 76.8L191.5 470.1a25.6 25.6 0 1 0 44.4 25.6l108.8-188.5a25.6 25.6 0 1 0-44.4-25.6m-88.6 0L102.9 93.2a25.7 25.7 0 0 0-35-9.4 25.7 25.7 0 0 0-9.4 35l108.8 188.5a25.7 25.7 0 0 0 35 9.4 25.9 25.9 0 0 0 9.4-35.1"/></svg>\');\n}\n.lh-report-icon--external::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg"><path d="M3.15 11.9a1.01 1.01 0 0 1-.743-.307 1.01 1.01 0 0 1-.306-.743v-7.7c0-.292.102-.54.306-.744a1.01 1.01 0 0 1 .744-.306H7v1.05H3.15v7.7h7.7V7h1.05v3.85c0 .291-.103.54-.307.743a1.01 1.01 0 0 1-.743\
+.307h-7.7Zm2.494-2.8-.743-.744 5.206-5.206H8.401V2.1h3.5v3.5h-1.05V3.893L5.644 9.1Z"/></svg>\');\n}\n.lh-report-icon--experiment::before {\n  background-image: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none"><path d="M4.50002 17C3.86136 17 3.40302 16.7187 3.12502 16.156C2.84702 15.5933 2.90936 15.069 3.31202 14.583L7.50002 9.5V4.5H6.75002C6.54202 4.5 6.36502 4.427 6.21902 4.281C6.07302 4.135 6.00002 3.958 6.00002 3.75C6.00002 3.542 6.07302 3.365 6.21902 3.219C6.36502 3.073 6.54202 3 6.75002 3H13.25C13.458 3 13.635 3.073 13.781 3.219C13.927 3.365 14 3.542 14 3.75C14 3.958 13.927 4.135 13.781 4.281C13.635 4.427 13.458 4.5 13.25 4.5H12.5V9.5L16.688 14.583C17.0767 15.069 17.132 15.5933 16.854 16.156C16.5767 16.7187 16.1254 17 15.5 17H4.50002ZM4.50002 15.5H15.5L11 10V4.5H9.00002V10L4.50002 15.5Z" fill="black"/></svg>\');\n}\n\n/** These are still icons, but w/o the auto-color invert / opacity / etc. that come with .lh-report-icon */\n\n.lh-report-p\
+lain-icon {\n  display: flex;\n  align-items: center;\n}\n.lh-report-plain-icon::before {\n  content: "";\n  background-repeat: no-repeat;\n  width: var(--report-icon-size);\n  height: var(--report-icon-size);\n  display: inline-block;\n  margin-right: 5px;\n}\n\n.lh-report-plain-icon--checklist-pass::before {\n  --icon-url: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M8.938 13L13.896 8.062L12.833 7L8.938 10.875L7.167 9.125L6.104 10.188L8.938 13ZM10 18C8.90267 18 7.868 17.7917 6.896 17.375C5.924 16.9583 5.07333 16.3853 4.344 15.656C3.61467 14.9267 3.04167 14.076 2.625 13.104C2.20833 12.132 2 11.0973 2 10C2 8.88867 2.20833 7.85033 2.625 6.885C3.04167 5.92033 3.61467 5.07333 4.344 4.344C5.07333 3.61467 5.924 3.04167 6.896 2.625C7.868 2.20833 8.90267 2 10 2C11.1113 2 12.1497 2.20833 13.115 2.625C14.0797 3.04167 14.9267 3.61467 15.656 4.344C16.3853 5.07333 16.9583 5.92033 17.375 6.885C17.7917 7.85033 18 8.88867 18 10C18 11.0973 17.7917 12.132 17.375 \
+13.104C16.9583 14.076 16.3853 14.9267 15.656 15.656C14.9267 16.3853 14.0797 16.9583 13.115 17.375C12.1497 17.7917 11.1113 18 10 18ZM10 16.5C11.8053 16.5 13.34 15.868 14.604 14.604C15.868 13.34 16.5 11.8053 16.5 10C16.5 8.19467 15.868 6.66 14.604 5.396C13.34 4.132 11.8053 3.5 10 3.5C8.19467 3.5 6.66 4.132 5.396 5.396C4.132 6.66 3.5 8.19467 3.5 10C3.5 11.8053 4.132 13.34 5.396 14.604C6.66 15.868 8.19467 16.5 10 16.5Z" fill="black"/></svg>\');\n  background-color: var(--color-pass);\n  mask: var(--icon-url) center / contain no-repeat;\n}\n.lh-report-plain-icon--checklist-fail::before {\n  --icon-url: url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path fill-rule="evenodd" clip-rule="evenodd" d="M17.5 10C17.5 14.1421 14.1421 17.5 10 17.5C5.85786 17.5 2.5 14.1421 2.5 10C2.5 5.85786 5.85786 2.5 10 2.5C14.1421 2.5 17.5 5.85786 17.5 10ZM16 10C16 13.3137 13.3137 16 10 16C8.6135 16 7.33683 15.5297 6.32083 14.7399L14.7399 6.32083C15.5297 7.33683 16 8.6135 16 10\
+ZM5.26016 13.6793L13.6793 5.26016C12.6633 4.47033 11.3866 4 10 4C6.68629 4 4 6.68629 4 10C4 11.3866 4.47033 12.6633 5.26016 13.6793Z" fill="black"/></svg>\');\n  background-color: var(--color-fail);\n  mask: var(--icon-url) center / contain no-repeat;\n}\n\n.lh-buttons {\n  display: flex;\n  flex-wrap: wrap;\n  margin: var(--default-padding) 0;\n}\n.lh-button {\n  height: 32px;\n  border: 1px solid var(--report-border-color-secondary);\n  border-radius: 3px;\n  color: var(--link-color);\n  background-color: var(--report-background-color);\n  margin: 5px;\n}\n\n.lh-button:first-of-type {\n  margin-left: 0;\n}\n\n/* Node */\n.lh-node {\n  display: flow-root;\n}\n\n.lh-node__snippet {\n  font-family: var(--report-font-family-monospace);\n  color: var(--snippet-color);\n  font-size: var(--report-monospace-font-size);\n  line-height: 20px;\n}\n\n.lh-checklist {\n  list-style: none;\n  padding: 0;\n}\n\n.lh-checklist-item {\n  margin: 10px 0 10px 0;\n}\n\n/* Baseline Status */\n.lh-baseline-status {\n  display: flex;\n  align-items: cente\
+r;\n}\n.lh-baseline-status::before {\n  content: "";\n  display: inline-block;\n  width: 18px;\n  height: 10px;\n  margin-right: 6px;\n  background-repeat: no-repeat;\n  background-size: contain;\n}\n.lh-baseline-status--high::before {\n  background-image: var(--baseline-high-icon-url);\n}\n.lh-baseline-status--low::before {\n  background-image: var(--baseline-low-icon-url);\n}\n.lh-baseline-status--limited::before {\n  background-image: var(--baseline-limited-icon-url);\n}\n\n/* Score */\n\n.lh-audit__score-icon {\n  width: var(--score-icon-size);\n  height: var(--score-icon-size);\n  margin: var(--score-icon-margin);\n}\n\n.lh-audit--pass .lh-audit__display-text {\n  color: var(--color-pass-secondary);\n}\n.lh-audit--pass .lh-audit__score-icon,\n.lh-scorescale-range--pass::before {\n  border-radius: 100%;\n  background: var(--color-pass);\n}\n\n.lh-audit--average .lh-audit__display-text {\n  color: var(--color-average-secondary);\n}\n.lh-audit--average .lh-audit__score-icon,\n.lh-scorescale-range--average::before {\n  backgro\
+und: var(--color-average);\n  width: var(--icon-square-size);\n  height: var(--icon-square-size);\n}\n\n.lh-audit--fail .lh-audit__display-text {\n  color: var(--color-fail-secondary);\n}\n.lh-audit--fail .lh-audit__score-icon,\n.lh-audit--error .lh-audit__score-icon,\n.lh-scorescale-range--fail::before {\n  border-left: calc(var(--score-icon-size) / 2) solid transparent;\n  border-right: calc(var(--score-icon-size) / 2) solid transparent;\n  border-bottom: var(--score-icon-size) solid var(--color-fail);\n}\n\n.lh-audit--error .lh-audit__score-icon,\n.lh-metric--error .lh-metric__icon {\n  background-image: var(--error-icon-url);\n  background-repeat: no-repeat;\n  background-position: center;\n  border: none;\n}\n\n.lh-gauge__wrapper--fail .lh-gauge--error {\n  background-image: var(--error-icon-url);\n  background-repeat: no-repeat;\n  background-position: center;\n  transform: scale(0.5);\n  top: var(--score-container-padding);\n}\n\n.lh-audit--manual .lh-audit__display-text,\n.lh-audit--notapplicable .lh-audit__di\
+splay-text {\n  color: var(--color-gray-600);\n}\n.lh-audit--manual .lh-audit__score-icon,\n.lh-audit--notapplicable .lh-audit__score-icon {\n  border: calc(0.2 * var(--score-icon-size)) solid var(--color-gray-400);\n  border-radius: 100%;\n  background: none;\n}\n\n.lh-audit--informative .lh-audit__display-text {\n  color: var(--color-gray-600);\n}\n\n.lh-audit--informative .lh-audit__score-icon {\n  border: calc(0.2 * var(--score-icon-size)) solid var(--color-gray-400);\n  border-radius: 100%;\n}\n\n.lh-audit__description,\n.lh-audit__stackpack {\n  color: var(--report-text-color-secondary);\n}\n.lh-audit__adorn {\n  border: 1px solid var(--color-gray-500);\n  border-radius: 3px;\n  margin: 0 3px;\n  padding: 0 2px;\n  line-height: 1.1;\n  display: inline-block;\n  font-size: 90%;\n  color: var(--report-text-color-secondary);\n}\n\n.lh-category-header__description  {\n  text-align: center;\n  color: var(--color-gray-700);\n  margin: 0px auto;\n  max-width: 400px;\n}\n\n\n.lh-audit__display-text,\n.lh-chevron-container {\n  mar\
+gin: 0 var(--audit-margin-horizontal);\n}\n.lh-chevron-container {\n  margin-right: 0;\n}\n\n.lh-audit__title-and-text {\n  flex: 1;\n}\n\n.lh-audit__title-and-text code {\n  color: var(--snippet-color);\n  font-size: var(--report-monospace-font-size);\n}\n\n/* Prepend display text with em dash separator. */\n.lh-audit__display-text:not(:empty):before {\n  content: \'\\u2014\';\n  margin-right: var(--audit-margin-horizontal);\n}\n\n/* Expandable Details (Audit Groups, Audits) */\n.lh-audit__header {\n  display: flex;\n  align-items: center;\n  padding: var(--default-padding);\n}\n\n\n.lh-metricfilter {\n  display: grid;\n  justify-content: end;\n  align-items: center;\n  grid-auto-flow: column;\n  gap: 4px;\n  color: var(--color-gray-700);\n}\n\n.lh-metricfilter__radio {\n  /*\n   * Instead of hiding, position offscreen so it\'s still accessible to screen readers\n   * https://bugs.chromium.org/p/chromium/issues/detail?id=1439785\n   */\n  position: fixed;\n  left: -9999px;\n}\n.lh-metricfilter input[type=\'radio\']:focus-visible + labe\
+l {\n  outline: -webkit-focus-ring-color auto 1px;\n}\n\n.lh-metricfilter__label {\n  display: inline-flex;\n  padding: 0 4px;\n  height: 16px;\n  text-decoration: underline;\n  align-items: center;\n  cursor: pointer;\n  font-size: 90%;\n}\n\n.lh-metricfilter__label--active {\n  background: var(--color-blue-primary);\n  color: var(--color-white);\n  border-radius: 3px;\n  text-decoration: none;\n}\n/* Give the \'All\' choice a more muted display */\n.lh-metricfilter__label--active[for="metric-All"] {\n  background-color: var(--color-blue-200) !important;\n  color: black !important;\n}\n\n.lh-metricfilter__text {\n  margin-right: 8px;\n}\n\n/* If audits are filtered, hide the itemcount for Passed Audits\\u2026 */\n.lh-category--filtered .lh-audit-group .lh-audit-group__itemcount {\n  display: none;\n}\n\n\n.lh-audit__header:hover {\n  background-color: var(--color-hover);\n}\n\n/* We want to hide the browser\'s default arrow marker on summary elements. Admittedly, it\'s complicated. */\n.lh-root details > summary {\n  /* Blink 89+ \
+and Firefox will hide the arrow when display is changed from (new) default of \\`list-item\\` to block.  https://chromestatus.com/feature/6730096436051968*/\n  display: block;\n}\n/* Safari and Blink <=88 require using the -webkit-details-marker selector */\n.lh-root details > summary::-webkit-details-marker {\n  display: none;\n}\n\n/* Perf Metric */\n\n.lh-metrics-container {\n  display: grid;\n  grid-auto-rows: 1fr;\n  grid-template-columns: 1fr 1fr;\n  grid-column-gap: var(--report-line-height);\n  margin-bottom: var(--default-padding);\n}\n\n.lh-metric {\n  border-top: 1px solid var(--report-border-color-secondary);\n}\n\n.lh-category:not(.lh--hoisted-meta) .lh-metric:nth-last-child(-n+2) {\n  border-bottom: 1px solid var(--report-border-color-secondary);\n}\n\n.lh-metric__innerwrap {\n  display: grid;\n  /**\n   * Icon -- Metric Name\n   *      -- Metric Value\n   */\n  grid-template-columns: calc(var(--score-icon-size) + var(--score-icon-margin-left) + var(--score-icon-margin-right)) 1fr;\n  align-items: center;\n\
+  padding: var(--default-padding);\n}\n\n.lh-metric__details {\n  order: -1;\n}\n\n.lh-metric__title {\n  flex: 1;\n}\n\n.lh-calclink {\n  padding-left: calc(1ex / 3);\n}\n\n.lh-metric__description {\n  display: none;\n  grid-column-start: 2;\n  grid-column-end: 4;\n  color: var(--report-text-color-secondary);\n}\n\n.lh-metric__value {\n  font-size: var(--metric-value-font-size);\n  margin: calc(var(--default-padding) / 2) 0;\n  white-space: nowrap; /* No wrapping between metric value and the icon */\n  grid-column-start: 2;\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 535px) {\n  .lh-metrics-container {\n    display: block;\n  }\n\n  .lh-metric {\n    border-bottom: none !important;\n  }\n  .lh-category:not(.lh--hoisted-meta) .lh-metric:nth-last-child(1) {\n    border-bottom: 1px s\
+olid var(--report-border-color-secondary) !important;\n  }\n\n  /* Change the grid to 3 columns for narrow viewport. */\n  .lh-metric__innerwrap {\n  /**\n   * Icon -- Metric Name -- Metric Value\n   */\n    grid-template-columns: calc(var(--score-icon-size) + var(--score-icon-margin-left) + var(--score-icon-margin-right)) 2fr 1fr;\n  }\n  .lh-metric__value {\n    justify-self: end;\n    grid-column-start: unset;\n  }\n}\n\n@container lh-container (max-width: 535px) {\n  .lh-metrics-container {\n    display: block;\n  }\n\n  .lh-metric {\n    border-bottom: none !important;\n  }\n  .lh-category:not(.lh--hoisted-meta) .lh-metric:nth-last-child(1) {\n    border-bottom: 1px solid var(--report-border-color-secondary) !important;\n  }\n\n  /* Change the grid to 3 columns for narrow viewport. */\n  .lh-metric__innerwrap {\n  /**\n   * Icon -- Metric Name -- Metric Value\n   */\n    grid-template-columns: calc(var(--score-icon-size) + var(--score-icon-margin-left) + var(--score-icon-margin-right)) 2fr 1fr;\n  }\n  .lh-metric__\
+value {\n    justify-self: end;\n    grid-column-start: unset;\n  }\n}\n\n/* No-JS toggle switch */\n/* Keep this selector sync\'d w/ \\`magicSelector\\` in report-ui-features-test.js */\n .lh-metrics-toggle__input:checked ~ .lh-metrics-container .lh-metric__description {\n  display: block;\n}\n\n/* TODO get rid of the SVGS and clean up these some more */\n.lh-metrics-toggle__input {\n  opacity: 0;\n  position: absolute;\n  right: 0;\n  top: 0px;\n}\n\n.lh-metrics-toggle__input + div > label > .lh-metrics-toggle__labeltext--hide,\n.lh-metrics-toggle__input:checked + div > label > .lh-metrics-toggle__labeltext--show {\n  display: none;\n}\n.lh-metrics-toggle__input:checked + div > label > .lh-metrics-toggle__labeltext--hide {\n  display: inline;\n}\n.lh-metrics-toggle__input:focus + div > label {\n  outline: -webkit-focus-ring-color auto 3px;\n}\n\n.lh-metrics-toggle__label {\n  cursor: pointer;\n  font-size: var(--report-font-size-secondary);\n  line-height: var(--report-line-height-secondary);\n  color: var(--color-gray-7\
+00);\n}\n\n/* Pushes the metric description toggle button to the right. */\n.lh-audit-group--metrics .lh-audit-group__header {\n  display: flex;\n  justify-content: space-between;\n}\n\n.lh-metric__icon,\n.lh-scorescale-range::before {\n  content: \'\';\n  width: var(--score-icon-size);\n  height: var(--score-icon-size);\n  display: inline-block;\n  margin: var(--score-icon-margin);\n}\n\n.lh-metric--pass .lh-metric__value {\n  color: var(--color-pass-secondary);\n}\n.lh-metric--pass .lh-metric__icon {\n  border-radius: 100%;\n  background: var(--color-pass);\n}\n\n.lh-metric--average .lh-metric__value {\n  color: var(--color-average-secondary);\n}\n.lh-metric--average .lh-metric__icon {\n  background: var(--color-average);\n  width: var(--icon-square-size);\n  height: var(--icon-square-size);\n}\n\n.lh-metric--fail .lh-metric__value {\n  color: var(--color-fail-secondary);\n}\n.lh-metric--fail .lh-metric__icon {\n  border-left: calc(var(--score-icon-size) / 2) solid transparent;\n  border-right: calc(var(--score-icon-size) / \
+2) solid transparent;\n  border-bottom: var(--score-icon-size) solid var(--color-fail);\n}\n\n.lh-metric--error .lh-metric__value,\n.lh-metric--error .lh-metric__description {\n  color: var(--color-fail-secondary);\n}\n\n/* Filmstrip */\n\n.lh-filmstrip-container {\n  /* smaller gap between metrics and filmstrip */\n  margin: -8px auto 0 auto;\n}\n\n.lh-filmstrip {\n  display: flex;\n  justify-content: space-between;\n  justify-items: center;\n  margin-bottom: var(--default-padding);\n  width: 100%;\n}\n\n.lh-filmstrip__frame {\n  overflow: hidden;\n  line-height: 0;\n}\n\n.lh-filmstrip__thumbnail {\n  border: 1px solid var(--report-border-color-secondary);\n  max-height: 150px;\n  max-width: 120px;\n}\n\n.lh-dark .lh-perf-toggle-text {\n  color: rgba(30, 164, 70, 1);\n}\n\n.lh-perf-toggle-text a {\n  color: var(--link-color);\n}\n\n/* Audit */\n\n.lh-audit {\n  border-bottom: 1px solid var(--report-border-color-secondary);\n}\n\n/* Apply border-top to just the first audit. */\n.lh-audit {\n  border-top: 1px solid var(--report-border-c\
+olor-secondary);\n}\n.lh-audit ~ .lh-audit {\n  border-top: none;\n}\n\n\n.lh-audit--error .lh-audit__display-text {\n  color: var(--color-fail-secondary);\n}\n\n/* Audit Group */\n\n.lh-audit-group {\n  margin-bottom: var(--audit-group-margin-bottom);\n  position: relative;\n}\n.lh-audit-group--metrics {\n  margin-bottom: calc(var(--audit-group-margin-bottom) / 2);\n}\n\n.lh-audit-group--metrics .lh-audit-group__summary {\n  margin-top: 0;\n  margin-bottom: 0;\n}\n\n.lh-audit-group__summary {\n  display: flex;\n  justify-content: space-between;\n  align-items: center;\n}\n\n.lh-audit-group__header .lh-chevron {\n  margin-top: calc((var(--report-line-height) - 5px) / 2);\n}\n\n.lh-audit-group__header {\n  letter-spacing: 0.8px;\n  padding: var(--default-padding);\n  padding-left: 0;\n}\n\n.lh-audit-group__header, .lh-audit-group__summary {\n  font-size: var(--report-font-size-secondary);\n  line-height: var(--report-line-height-secondary);\n  color: var(--color-gray-700);\n}\n\n.lh-audit-group__title {\n  text-transform: uppercase;\n \
+ font-weight: 500;\n}\n\n.lh-audit-group__itemcount {\n  color: var(--color-gray-600);\n}\n\n.lh-audit-group__footer {\n  color: var(--color-gray-600);\n  display: block;\n  margin-top: var(--default-padding);\n}\n\n.lh-details,\n.lh-category-header__description,\n.lh-audit-group__footer {\n  font-size: var(--report-font-size-secondary);\n  line-height: var(--report-line-height-secondary);\n}\n\n.lh-audit-explanation {\n  margin: var(--audit-padding-vertical) 0 calc(var(--audit-padding-vertical) / 2) var(--audit-margin-horizontal);\n  line-height: var(--audit-explanation-line-height);\n  display: inline-block;\n}\n\n.lh-audit--fail .lh-audit-explanation {\n  color: var(--color-fail-secondary);\n}\n\n/* Report */\n.lh-list {\n  margin-right: calc(var(--default-padding) * 2);\n}\n.lh-list > :not(:last-child) {\n  margin-bottom: calc(var(--default-padding) * 2);\n  border-bottom: 1px solid #A8C7FA;\n}\n.lh-list-section {\n  padding: calc(var(--default-padding) * 2) 0;\n}\n.lh-list-section__title {\n  text-decoration: underline;\n}\
+\n\n.lh-header-container {\n  display: block;\n  margin: 0 auto;\n  position: relative;\n  word-wrap: break-word;\n}\n\n.lh-header-container .lh-scores-wrapper {\n  border-bottom: 1px solid var(--color-gray-200);\n}\n\n\n.lh-report {\n  min-width: var(--report-content-min-width);\n}\n\n.lh-exception {\n  font-size: large;\n}\n\n.lh-code {\n  white-space: normal;\n  margin-top: 0;\n  font-size: var(--report-monospace-font-size);\n}\n\n.lh-warnings {\n  --item-margin: calc(var(--report-line-height) / 6);\n  color: var(--color-average-secondary);\n  margin: var(--audit-padding-vertical) 0;\n  padding: var(--default-padding)\n    var(--default-padding)\n    var(--default-padding)\n    calc(var(--audit-description-padding-left));\n  background-color: var(--toplevel-warning-background-color);\n}\n.lh-warnings span {\n  font-weight: bold;\n}\n\n.lh-warnings--toplevel {\n  --item-margin: calc(var(--header-line-height) / 4);\n  color: var(--toplevel-warning-text-color);\n  margin-left: auto;\n  margin-right: auto;\n  max-width: var(--report\
+-content-max-width-minus-edge-gap);\n  padding: var(--toplevel-warning-padding);\n  border-radius: 8px;\n}\n\n.lh-warnings__msg {\n  color: var(--toplevel-warning-message-text-color);\n  margin: 0;\n}\n\n.lh-warnings ul {\n  margin: 0;\n}\n.lh-warnings li {\n  margin: var(--item-margin) 0;\n}\n.lh-warnings li:last-of-type {\n  margin-bottom: 0;\n}\n\n.lh-scores-header {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: center;\n}\n.lh-scores-header__solo {\n  padding: 0;\n  border: 0;\n}\n\n/* Gauge */\n\n.lh-gauge__wrapper--pass {\n  color: var(--color-pass-secondary);\n  fill: var(--color-pass);\n  stroke: var(--color-pass);\n}\n\n.lh-gauge__wrapper--average {\n  color: var(--color-average-secondary);\n  fill: var(--color-average);\n  stroke: var(--color-average);\n}\n\n.lh-gauge__wrapper--fail {\n  color: var(--color-fail-secondary);\n  fill: var(--color-fail);\n  stroke: var(--color-fail);\n}\n\n.lh-gauge__wrapper--not-applicable {\n  color: var(--color-not-applicable);\n  fill: var(--color-not-applicable);\n  stroke: var(--c\
+olor-not-applicable);\n}\n\n.lh-fraction__wrapper .lh-fraction__content::before {\n  content: \'\';\n  height: var(--score-icon-size);\n  width: var(--score-icon-size);\n  margin: var(--score-icon-margin);\n  display: inline-block;\n}\n.lh-fraction__wrapper--pass .lh-fraction__content {\n  color: var(--color-pass-secondary);\n}\n.lh-fraction__wrapper--pass .lh-fraction__background {\n  background-color: var(--color-pass);\n}\n.lh-fraction__wrapper--pass .lh-fraction__content::before {\n  background-color: var(--color-pass);\n  border-radius: 50%;\n}\n.lh-fraction__wrapper--average .lh-fraction__content {\n  color: var(--color-average-secondary);\n}\n.lh-fraction__wrapper--average .lh-fraction__background,\n.lh-fraction__wrapper--average .lh-fraction__content::before {\n  background-color: var(--color-average);\n}\n.lh-fraction__wrapper--fail .lh-fraction__content {\n  color: var(--color-fail);\n}\n.lh-fraction__wrapper--fail .lh-fraction__background {\n  background-color: var(--color-fail);\n}\n.lh-fraction__wrapper--fa\
+il .lh-fraction__content::before {\n  border-left: calc(var(--score-icon-size) / 2) solid transparent;\n  border-right: calc(var(--score-icon-size) / 2) solid transparent;\n  border-bottom: var(--score-icon-size) solid var(--color-fail);\n}\n.lh-fraction__wrapper--null .lh-fraction__content {\n  color: var(--color-gray-700);\n}\n.lh-fraction__wrapper--null .lh-fraction__background {\n  background-color: var(--color-gray-700);\n}\n.lh-fraction__wrapper--null .lh-fraction__content::before {\n  border-radius: 50%;\n  border: calc(0.2 * var(--score-icon-size)) solid var(--color-gray-700);\n}\n\n.lh-fraction__background {\n  position: absolute;\n  height: 100%;\n  width: 100%;\n  border-radius: calc(var(--gauge-circle-size) / 2);\n  opacity: 0.1;\n  z-index: -1;\n}\n\n.lh-fraction__content-wrapper {\n  height: var(--gauge-circle-size);\n  display: flex;\n  align-items: center;\n}\n\n.lh-fraction__content {\n  display: flex;\n  position: relative;\n  align-items: center;\n  justify-content: center;\n  font-size: calc(0.3 * var\
+(--gauge-circle-size));\n  line-height: calc(0.4 * var(--gauge-circle-size));\n  width: max-content;\n  min-width: calc(1.5 * var(--gauge-circle-size));\n  padding: calc(0.1 * var(--gauge-circle-size)) calc(0.2 * var(--gauge-circle-size));\n  --score-icon-size: calc(0.21 * var(--gauge-circle-size));\n  --score-icon-margin: 0 calc(0.15 * var(--gauge-circle-size)) 0 0;\n}\n\n.lh-gauge {\n  stroke-linecap: round;\n  width: var(--gauge-circle-size);\n  height: var(--gauge-circle-size);\n}\n\n.lh-category .lh-gauge {\n  --gauge-circle-size: var(--gauge-circle-size-big);\n}\n\n.lh-gauge-base {\n  opacity: 0.1;\n}\n\n.lh-gauge-arc {\n  fill: none;\n  transform-origin: 50% 50%;\n  animation: load-gauge var(--transition-length) ease both;\n  animation-delay: 250ms;\n}\n\n.lh-gauge__svg-wrapper {\n  position: relative;\n  height: var(--gauge-circle-size);\n}\n.lh-category .lh-gauge__svg-wrapper,\n.lh-category .lh-fraction__wrapper {\n  --gauge-circle-size: var(--gauge-circle-size-big);\n}\n\n/* The plugin badge overlay */\n.lh-gauge__\
+wrapper--plugin .lh-gauge__svg-wrapper::before {\n  width: var(--plugin-badge-size);\n  height: var(--plugin-badge-size);\n  background-color: var(--plugin-badge-background-color);\n  background-image: var(--plugin-icon-url);\n  background-repeat: no-repeat;\n  background-size: var(--plugin-icon-size);\n  background-position: 58% 50%;\n  content: "";\n  position: absolute;\n  right: -6px;\n  bottom: 0px;\n  display: block;\n  z-index: 100;\n  box-shadow: 0 0 4px rgba(0,0,0,.2);\n  border-radius: 25%;\n}\n.lh-category .lh-gauge__wrapper--plugin .lh-gauge__svg-wrapper::before {\n  width: var(--plugin-badge-size-big);\n  height: var(--plugin-badge-size-big);\n}\n\n@keyframes load-gauge {\n  from { stroke-dasharray: 0 352; }\n}\n\n.lh-gauge__percentage {\n  width: 100%;\n  height: var(--gauge-circle-size);\n  line-height: var(--gauge-circle-size);\n  position: absolute;\n  font-family: var(--report-font-family-monospace);\n  font-size: calc(var(--gauge-circle-size) * 0.34 + 1.3px);\n  text-align: center;\n  top: var(--scor\
+e-container-padding);\n}\n\n.lh-category .lh-gauge__percentage {\n  --gauge-circle-size: var(--gauge-circle-size-big);\n  --gauge-percentage-font-size: var(--gauge-percentage-font-size-big);\n}\n\n.lh-gauge__wrapper,\n.lh-fraction__wrapper {\n  position: relative;\n  display: flex;\n  align-items: center;\n  flex-direction: column;\n  text-decoration: none;\n  padding: var(--score-container-padding);\n\n  --transition-length: 1s;\n\n  /* Contain the layout style paint & layers during animation*/\n  contain: content;\n  will-change: opacity; /* Only using for layer promotion */\n}\n\n.lh-gauge__label,\n.lh-fraction__label {\n  font-size: var(--gauge-label-font-size);\n  font-weight: 500;\n  line-height: var(--gauge-label-line-height);\n  margin-top: 10px;\n  text-align: center;\n  color: var(--report-text-color);\n  word-break: keep-all;\n}\n\n/* TODO(#8185) use more BEM (.lh-gauge__label--big) instead of relying on descendant selector */\n.lh-category .lh-gauge__label,\n.lh-category .lh-fraction__label {\n  --gauge-label-f\
+ont-size: var(--gauge-label-font-size-big);\n  --gauge-label-line-height: var(--gauge-label-line-height-big);\n  margin-top: 14px;\n}\n\n.lh-scores-header .lh-gauge__wrapper,\n.lh-scores-header .lh-fraction__wrapper,\n.lh-sticky-header .lh-gauge__wrapper,\n.lh-sticky-header .lh-fraction__wrapper {\n  width: var(--gauge-wrapper-width);\n}\n\n.lh-scorescale {\n  display: inline-flex;\n\n  gap: calc(var(--default-padding) * 4);\n  margin: 16px auto 0 auto;\n  font-size: var(--report-font-size-secondary);\n  color: var(--color-gray-700);\n\n}\n\n.lh-scorescale-range {\n  display: flex;\n  align-items: center;\n  font-family: var(--report-font-family-monospace);\n  white-space: nowrap;\n}\n\n.lh-category-header__finalscreenshot .lh-scorescale {\n  border: 0;\n  display: flex;\n  justify-content: center;\n}\n\n.lh-category-header__finalscreenshot .lh-scorescale-range {\n  font-family: unset;\n  font-size: 12px;\n}\n\n.lh-scorescale-wrap {\n  display: contents;\n}\n\n/* Hide category score gauages if it\'s a single category report */\n.l\
+h-header--solo-category .lh-scores-wrapper {\n  display: none;\n}\n\n\n.lh-categories {\n  width: 100%;\n}\n\n.lh-category {\n  padding: var(--category-padding);\n  max-width: var(--report-content-max-width);\n  margin: 0 auto;\n\n  scroll-margin-top: calc(var(--sticky-header-buffer) - 1em);\n}\n\n.lh-category-wrapper {\n  border-bottom: 1px solid var(--color-gray-200);\n}\n.lh-category-wrapper:last-of-type {\n  border-bottom: 0;\n}\n\n.lh-category-header {\n  margin-bottom: var(--section-padding-vertical);\n}\n\n.lh-category-header .lh-score__gauge {\n  max-width: 400px;\n  width: auto;\n  margin: 0px auto;\n}\n\n.lh-category-header__finalscreenshot {\n  display: grid;\n  grid-template: none / 1fr 1px 1fr;\n  justify-items: center;\n  align-items: center;\n  gap: var(--report-line-height);\n  min-height: 288px;\n  margin-bottom: var(--default-padding);\n}\n\n.lh-final-ss-image {\n  /* constrain the size of the image to not be too large */\n  max-height: calc(var(--gauge-circle-size-big) * 2.8);\n  max-width: calc(var(--gauge-circl\
+e-size-big) * 3.5);\n  border: 1px solid var(--color-gray-200);\n  padding: 4px;\n  border-radius: 3px;\n  display: block;\n}\n\n.lh-category-headercol--separator {\n  background: var(--color-gray-200);\n  width: 1px;\n  height: var(--gauge-circle-size-big);\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 780px) {\n  .lh-category-header__finalscreenshot {\n    grid-template: 1fr 1fr / none\n  }\n  .lh-category-headercol--separator {\n    display: none;\n  }\n}\n\n@container lh-container (max-width: 780px) {\n  .lh-category-header__finalscreenshot {\n    grid-template: 1fr 1fr / none\n  }\n  .lh-category-headercol--separator {\n    display: none;\n  }\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this me\
+dia query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 964px) {\n  .lh-report {\n    margin-left: 0;\n    width: 100%;\n  }\n}\n\n/* 964 fits the min-width of the filmstrip */\n@container lh-container (max-width: 964px) {\n  .lh-report {\n    margin-left: 0;\n    width: 100%;\n  }\n}\n\n@media print {\n  body {\n    -webkit-print-color-adjust: exact; /* print background colors */\n  }\n  .lh-container {\n    display: block;\n  }\n  .lh-report {\n    margin-left: 0;\n    padding-top: 0;\n  }\n  .lh-categories {\n    margin-top: 0;\n  }\n  .lh-buttons, .lh-highlighter {\n    /* hide stickyheader marker when printing. crbug.com/41486992 */\n    display: none;\n  }\n}\n\n.lh-table {\n  position: relative;\n  border-collapse: separate;\n  border-spacing: 0;\n  /* Can\'t assign padding to table, so shorten the width instead. */\n  width: calc(100% - var(--audit-description-padding-left) - var(--stackpack-padding-horizontal));\n  \
+border: 1px solid var(--report-border-color-secondary);\n}\n\n.lh-table thead th {\n  position: sticky;\n  top: var(--sticky-header-buffer);\n  z-index: 1;\n  background-color: var(--report-background-color);\n  border-bottom: 1px solid var(--report-border-color-secondary);\n  font-weight: normal;\n  color: var(--color-gray-600);\n  /* See text-wrapping comment on .lh-container. */\n  word-break: normal;\n}\n\n.lh-row--group {\n  background-color: var(--table-group-header-background-color);\n}\n\n.lh-row--group td {\n  font-weight: bold;\n  font-size: 1.05em;\n  color: var(--table-group-header-text-color);\n}\n\n.lh-row--group td:first-child {\n  display: block;\n  min-width: max-content;\n  font-weight: normal;\n}\n\n.lh-row--group .lh-text {\n  color: inherit;\n  text-decoration: none;\n  display: inline-block;\n}\n\n.lh-row--group a.lh-link:hover {\n  text-decoration: underline;\n}\n\n.lh-row--group .lh-audit__adorn {\n  text-transform: capitalize;\n  font-weight: normal;\n  padding: 2px 3px 1px 3px;\n}\n\n.lh-row--group .lh-aud\
+it__adorn1p {\n  color: var(--link-color);\n  border-color: var(--link-color);\n}\n\n.lh-row--group .lh-report-icon--external::before {\n  content: "";\n  background-repeat: no-repeat;\n  width: 14px;\n  height: 16px;\n  opacity: 0.7;\n  display: inline-block;\n  vertical-align: middle;\n}\n\n.lh-row--group .lh-report-icon--external {\n  visibility: hidden;\n}\n\n.lh-row--group:hover .lh-report-icon--external {\n  visibility: visible;\n}\n\n.lh-dark .lh-report-icon--external::before {\n  filter: invert(1);\n}\n\n/** Manages indentation of two-level and three-level nested adjacent rows */\n\n.lh-row--group ~ [data-entity]:not(.lh-row--group) td:first-child {\n  padding-left: 20px;\n}\n\n.lh-row--group ~ [data-entity]:not(.lh-row--group) ~ .lh-sub-item-row td:first-child {\n  margin-left: 20px;\n  padding-left: 10px;\n  border-left: 1px solid #A8C7FA;\n  display: block;\n}\n\n.lh-row--even {\n  background-color: var(--table-group-header-background-color);\n}\n.lh-row--hidden {\n  display: none;\n}\n\n.lh-table th,\n.lh-table td {\n  pa\
+dding: var(--default-padding);\n}\n\n.lh-table tr {\n  vertical-align: middle;\n}\n\n.lh-table tr:hover {\n  background-color: var(--table-higlight-background-color);\n}\n\n/* Looks unnecessary, but mostly for keeping the <th>s left-aligned */\n.lh-table-column--text,\n.lh-table-column--source-location,\n.lh-table-column--url,\n/* .lh-table-column--thumbnail, */\n/* .lh-table-column--empty,*/\n.lh-table-column--code,\n.lh-table-column--node {\n  text-align: left;\n}\n\n.lh-table-column--code {\n  min-width: 100px;\n}\n\n.lh-table-column--bytes,\n.lh-table-column--timespanMs,\n.lh-table-column--ms,\n.lh-table-column--numeric {\n  text-align: right;\n  word-break: normal;\n}\n\n\n\n.lh-table .lh-table-column--thumbnail {\n  width: var(--image-preview-size);\n}\n\n.lh-table-column--url {\n  min-width: 250px;\n}\n\n.lh-table-column--text {\n  min-width: 80px;\n}\n\n/* Keep columns narrow if they follow the URL column */\n/* 12% was determined to be a decent narrow width, but wide enough for column headings */\n.lh-table-column--url + th.l\
+h-table-column--bytes,\n.lh-table-column--url + .lh-table-column--bytes + th.lh-table-column--bytes,\n.lh-table-column--url + .lh-table-column--ms,\n.lh-table-column--url + .lh-table-column--ms + th.lh-table-column--bytes,\n.lh-table-column--url + .lh-table-column--bytes + th.lh-table-column--timespanMs {\n  width: 12%;\n}\n\n/** Tweak styling for tables in insight audits. */\n.lh-audit[id$="-insight"] .lh-table {\n  border: none;\n}\n\n.lh-audit[id$="-insight"] .lh-table thead th {\n  font-weight: bold;\n  color: unset;\n}\n\n.lh-audit[id$="-insight"] .lh-table th,\n.lh-audit[id$="-insight"] .lh-table td {\n  padding: calc(var(--default-padding) / 2);\n}\n\n.lh-audit[id$="-insight"] .lh-table .lh-row--even,\n.lh-audit[id$="-insight"] .lh-table tr:not(.lh-row--group):hover {\n  background-color: unset;\n}\n\n.lh-text__url-host {\n  display: inline;\n}\n\n.lh-text__url-host {\n  margin-left: calc(var(--report-font-size) / 2);\n  opacity: 0.6;\n  font-size: 90%\n}\n\n.lh-thumbnail {\n  object-fit: cover;\n  width: var(--image-\
+preview-size);\n  height: var(--image-preview-size);\n  display: block;\n}\n\n.lh-unknown pre {\n  overflow: scroll;\n  border: solid 1px var(--color-gray-200);\n}\n\n.lh-text__url > a {\n  color: inherit;\n  text-decoration: none;\n}\n\n.lh-text__url > a:hover {\n  text-decoration: underline dotted #999;\n}\n\n.lh-sub-item-row {\n  margin-left: 20px;\n  margin-bottom: 0;\n  color: var(--color-gray-700);\n}\n\n.lh-sub-item-row td {\n  padding-top: 4px;\n  padding-bottom: 4px;\n  padding-left: 20px;\n}\n\n.lh-sub-item-row .lh-element-screenshot {\n  zoom: 0.6;\n}\n\n/* Chevron\n   https://codepen.io/paulirish/pen/LmzEmK\n */\n.lh-chevron {\n  --chevron-angle: 42deg;\n  /* Edge doesn\'t support transform: rotate(calc(...)), so we define it here */\n  --chevron-angle-right: -42deg;\n  width: var(--chevron-size);\n  height: var(--chevron-size);\n  margin-top: calc((var(--report-line-height) - 12px) / 2);\n}\n\n.lh-chevron__lines {\n  transition: transform 0.4s;\n  transform: translateY(var(--report-line-height));\n}\n.lh-chevron__line {\n st\
+roke: var(--chevron-line-stroke);\n stroke-width: var(--chevron-size);\n stroke-linecap: square;\n transform-origin: 50%;\n transform: rotate(var(--chevron-angle));\n transition: transform 300ms, stroke 300ms;\n}\n\n.lh-expandable-details .lh-chevron__line-right,\n.lh-expandable-details[open] .lh-chevron__line-left {\n transform: rotate(var(--chevron-angle-right));\n}\n\n.lh-expandable-details[open] .lh-chevron__line-right {\n  transform: rotate(var(--chevron-angle));\n}\n\n\n.lh-expandable-details[open]  .lh-chevron__lines {\n transform: translateY(calc(var(--chevron-size) * -1));\n}\n\n.lh-expandable-details[open] {\n  animation: 300ms openDetails forwards;\n  padding-bottom: var(--default-padding);\n}\n\n@keyframes openDetails {\n  from {\n    outline: 1px solid var(--report-background-color);\n  }\n  to {\n   outline: 1px solid;\n   box-shadow: 0 2px 4px rgba(0, 0, 0, .24);\n  }\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query w\
+hen \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 780px) {\n  /* no black outline if we\'re not confident the entire table can be displayed within bounds */\n  .lh-expandable-details[open] {\n    animation: none;\n  }\n}\n\n@container lh-container (max-width: 780px) {\n  /* no black outline if we\'re not confident the entire table can be displayed within bounds */\n  .lh-expandable-details[open] {\n    animation: none;\n  }\n}\n\n.lh-expandable-details[open] summary, details.lh-clump > summary {\n  border-bottom: 1px solid var(--report-border-color-secondary);\n}\ndetails.lh-clump[open] > summary {\n  border-bottom-width: 0;\n}\n\n\n\ndetails .lh-clump-toggletext--hide,\ndetails[open] .lh-clump-toggletext--show { display: none; }\ndetails[open] .lh-clump-toggletext--hide { display: block;}\n\n\n/* Tooltip */\n.lh-tooltip-boundary {\n  position: relative;\n}\n\n.lh-tooltip {\n  position: absolute;\n  display: none; /* Don\'t r\
+etain these layers when not needed */\n  opacity: 0;\n  background: #ffffff;\n  white-space: pre-line; /* Render newlines in the text */\n  min-width: 246px;\n  max-width: 275px;\n  padding: 15px;\n  border-radius: 5px;\n  text-align: initial;\n  line-height: 1.4;\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 535px) {\n  .lh-tooltip {\n    min-width: 45cqi;\n    padding: 3cqi;\n  }\n}\n\n/* shrink tooltips to not be cutoff on left edge of narrow container\n   45vw is chosen to be ~= width of the left column of metrics\n*/\n@container lh-container (max-width: 535px) {\n  .lh-tooltip {\n    min-width: 45cqi;\n    padding: 3cqi;\n  }\n}\n\n.lh-tooltip-boundary:hover .lh-tooltip {\n  display: block;\n  animation: fadeInTooltip 250ms;\n  animation-fill-mode: forwards;\n  animation-de\
+lay: 850ms;\n  bottom: 100%;\n  z-index: 1;\n  will-change: opacity;\n  right: 0;\n  pointer-events: none;\n}\n\n.lh-tooltip::before {\n  content: "";\n  border: solid transparent;\n  border-bottom-color: #fff;\n  border-width: 10px;\n  position: absolute;\n  bottom: -20px;\n  right: 6px;\n  transform: rotate(180deg);\n  pointer-events: none;\n}\n\n@keyframes fadeInTooltip {\n  0% { opacity: 0; }\n  75% { opacity: 1; }\n  100% { opacity: 1;  filter: drop-shadow(1px 0px 1px #aaa) drop-shadow(0px 2px 4px hsla(206, 6%, 25%, 0.15)); pointer-events: auto; }\n}\n\n/* Element screenshot */\n.lh-element-screenshot {\n  float: left;\n  margin-right: 20px;\n}\n.lh-element-screenshot__content {\n  overflow: hidden;\n  min-width: 110px;\n  display: flex;\n  justify-content: center;\n  background-color: var(--report-background-color);\n}\n.lh-element-screenshot__image {\n  position: relative;\n  /* Set by ElementScreenshotRenderer.installFullPageScreenshotCssVariable */\n  background-image: var(--element-screenshot-url);\n  outline: 2px so\
+lid #777;\n  background-color: white;\n  background-repeat: no-repeat;\n}\n.lh-element-screenshot__mask {\n  position: absolute;\n  background: #555;\n  opacity: 0.8;\n}\n.lh-element-screenshot__element-marker {\n  position: absolute;\n  outline: 2px solid var(--color-lime-400);\n}\n.lh-element-screenshot__overlay {\n  position: fixed;\n  top: 0;\n  left: 0;\n  right: 0;\n  bottom: 0;\n  z-index: 2000; /* .lh-topbar is 1000 */\n  background: var(--screenshot-overlay-background);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  cursor: zoom-out;\n}\n\n.lh-element-screenshot__overlay .lh-element-screenshot {\n  margin-right: 0; /* clearing margin used in thumbnail case */\n  outline: 1px solid var(--color-gray-700);\n}\n\n.lh-screenshot-overlay--enabled .lh-element-screenshot {\n  cursor: zoom-out;\n}\n.lh-screenshot-overlay--enabled .lh-node .lh-element-screenshot {\n  cursor: zoom-in;\n}\n\n\n.lh-meta__items {\n  --meta-icon-size: calc(var(--report-icon-size) * 0.667);\n  padding: var(--default-padding)\
+;\n  display: grid;\n  grid-template-columns: 1fr 1fr 1fr;\n  background-color: var(--env-item-background-color);\n  border-radius: 3px;\n  margin: 0 0 var(--default-padding) 0;\n  font-size: 12px;\n  column-gap: var(--default-padding);\n  color: var(--color-gray-700);\n}\n\n.lh-meta__item {\n  display: block;\n  list-style-type: none;\n  position: relative;\n  padding: 0 0 0 calc(var(--meta-icon-size) + var(--default-padding) * 2);\n  cursor: unset; /* disable pointer cursor from report-icon */\n}\n\n.lh-meta__item.lh-tooltip-boundary {\n  text-decoration: dotted underline var(--color-gray-500);\n  cursor: help;\n}\n\n.lh-meta__item.lh-report-icon::before {\n  position: absolute;\n  left: var(--default-padding);\n  width: var(--meta-icon-size);\n  height: var(--meta-icon-size);\n}\n\n.lh-meta__item.lh-report-icon:hover::before {\n  opacity: 0.7;\n}\n\n.lh-meta__item .lh-tooltip {\n  color: var(--color-gray-800);\n}\n\n.lh-meta__item .lh-tooltip::before {\n  right: auto; /* Set the tooltip arrow to the leftside */\n  left: 6p\
+x;\n}\n\n.lh-meta__item:hover .lh-tooltip {\n  right: auto;\n  left: 6px;\n}\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 640px) {\n  .lh-meta__items {\n    grid-template-columns: 1fr 1fr;\n  }\n}\n\n/* Change the grid for narrow container */\n@container lh-container (max-width: 640px) {\n  .lh-meta__items {\n    grid-template-columns: 1fr 1fr;\n  }\n}\n\n/**\n* This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n* TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n* See https://github.com/GoogleChrome/lighthouse/pull/16332\n*/\n@media screen and (max-width: 535px) {\n  .lh-meta__items {\n    display: block;\n  }\n}\n\n@container lh-container (max-width: 535px) {\n  .lh-meta__items {\n    display: bloc\
+k;\n  }\n}\n\n/* Explodey gauge */\n\n.lh-exp-gauge-component {\n  margin-bottom: 10px;\n}\n\n.lh-exp-gauge-component circle {\n  stroke: currentcolor;\n  r: var(--radius);\n}\n\n.lh-exp-gauge-component text {\n  font-size: calc(var(--radius) * 0.2);\n}\n\n.lh-exp-gauge-component .lh-exp-gauge {\n  margin: 0 auto;\n  width: 225px;\n  stroke-width: var(--stroke-width);\n  stroke-linecap: round;\n\n  /* for better rendering perf */\n  contain: strict;\n  height: 225px;\n  will-change: transform;\n}\n.lh-exp-gauge-component .lh-exp-gauge--faded {\n  opacity: 0.1;\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper {\n  font-family: var(--report-font-family-monospace);\n  text-align: center;\n  text-decoration: none;\n  transition: .3s;\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--pass {\n  color: var(--color-pass);\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--average {\n  color: var(--color-average);\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--fail {\n  color: var(--color-fail);\n}\n.lh-exp-gauge-component .state--\
+expanded {\n  transition: color .3s;\n}\n.lh-exp-gauge-component .state--highlight {\n  color: var(--color-highlight);\n}\n.lh-exp-gauge-component .lh-exp-gauge__svg-wrapper {\n  display: flex;\n  flex-direction: column-reverse;\n}\n\n.lh-exp-gauge-component .lh-exp-gauge__label {\n  fill: var(--report-text-color);\n  font-family: var(--report-font-family);\n  font-size: 12px;\n}\n\n.lh-exp-gauge-component .lh-exp-gauge__cutout {\n  opacity: .999;\n  transition: opacity .3s;\n}\n.lh-exp-gauge-component .state--highlight .lh-exp-gauge__cutout {\n  opacity: 0;\n}\n\n.lh-exp-gauge-component .lh-exp-gauge__inner {\n  color: inherit;\n}\n.lh-exp-gauge-component .lh-exp-gauge__base {\n  fill: currentcolor;\n}\n\n\n.lh-exp-gauge-component .lh-exp-gauge__arc {\n  fill: none;\n  transition: opacity .3s;\n}\n.lh-exp-gauge-component .lh-exp-gauge__arc--metric {\n  color: var(--metric-color);\n  stroke-dashoffset: var(--metric-offset);\n  opacity: 0.3;\n}\n.lh-exp-gauge-component .lh-exp-gauge-hovertarget {\n  color: currentcolor;\n  opacit\
+y: 0.001;\n  stroke-linecap: butt;\n  stroke-width: 24;\n  /* hack. move the hover target out of the center. ideally i tweak the r instead but that rquires considerably more math. */\n  transform: scale(1.15);\n}\n.lh-exp-gauge-component .lh-exp-gauge__arc--metric.lh-exp-gauge--miniarc {\n  opacity: 0;\n  stroke-dasharray: 0 calc(var(--circle-meas) * var(--radius));\n  transition: 0s .005s;\n}\n.lh-exp-gauge-component .state--expanded .lh-exp-gauge__arc--metric.lh-exp-gauge--miniarc {\n  opacity: .999;\n  stroke-dasharray: var(--metric-array);\n  transition: 0.3s; /*  calc(.005s + var(--i)*.05s); entrace animation */\n}\n.lh-exp-gauge-component .state--expanded .lh-exp-gauge__inner .lh-exp-gauge__arc {\n  opacity: 0;\n}\n\n\n.lh-exp-gauge-component .lh-exp-gauge__percentage {\n  text-anchor: middle;\n  dominant-baseline: middle;\n  opacity: .999;\n  font-size: calc(var(--radius) * 0.625);\n  transition: opacity .3s ease-in;\n}\n.lh-exp-gauge-component .state--highlight .lh-exp-gauge__percentage {\n  opacity: 0;\n}\n\
+\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--fail .lh-exp-gauge__percentage {\n  fill: var(--color-fail);\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--average .lh-exp-gauge__percentage {\n  fill: var(--color-average);\n}\n.lh-exp-gauge-component .lh-exp-gauge__wrapper--pass .lh-exp-gauge__percentage {\n  fill: var(--color-pass);\n}\n\n.lh-exp-gauge-component .lh-cover {\n  fill: none;\n  opacity: .001;\n  pointer-events: none;\n}\n.lh-exp-gauge-component .state--expanded .lh-cover {\n  pointer-events: auto;\n}\n\n.lh-exp-gauge-component .metric {\n  transform: scale(var(--scale-initial));\n  opacity: 0;\n  transition: transform .1s .2s ease-out,  opacity .3s ease-out;\n  pointer-events: none;\n}\n.lh-exp-gauge-component .metric text {\n  pointer-events: none;\n}\n.lh-exp-gauge-component .metric__value {\n  fill: currentcolor;\n  opacity: 0;\n  transition: opacity 0.2s;\n}\n.lh-exp-gauge-component .state--expanded .metric {\n  transform: scale(1);\n  opacity: .999;\n  transition: transform .3s ease-out,  opacit\
+y .3s ease-in,  stroke-width .1s ease-out;\n  transition-delay: calc(var(--i)*.05s);\n  pointer-events: auto;\n}\n.lh-exp-gauge-component .state--highlight .metric {\n  opacity: .3;\n}\n.lh-exp-gauge-component .state--highlight .metric--highlight {\n  opacity: .999;\n  stroke-width: calc(1.5*var(--stroke-width));\n}\n.lh-exp-gauge-component .state--highlight .metric--highlight .metric__value {\n  opacity: 0.999;\n}\n\n\n/*\n the initial first load peek\n*/\n.lh-exp-gauge-component .lh-exp-gauge__bg {  /* needed for the use zindex stacking w/ transparency */\n  fill: var(--report-background-color);\n  stroke: var(--report-background-color);\n}\n.lh-exp-gauge-component .state--peek .metric {\n  transition-delay: 0ms;\n  animation: peek var(--peek-dur) cubic-bezier(0.46, 0.03, 0.52, 0.96);\n  animation-fill-mode: forwards;\n}\n.lh-exp-gauge-component .state--peek .lh-exp-gauge__inner .lh-exp-gauge__arc {\n  opacity: 1;\n}\n.lh-exp-gauge-component .state--peek .lh-exp-gauge__arc.lh-exp-gauge--faded {\n  opacity: 0.3; /* \
+just a tad stronger cuz its fighting with a big solid arg */\n}\n/* do i need to set expanded and override this? */\n.lh-exp-gauge-component .state--peek .lh-exp-gauge__arc--metric.lh-exp-gauge--miniarc {\n  transition: opacity 0.3s;\n}\n.lh-exp-gauge-component .state--peek {\n  color: unset;\n}\n.lh-exp-gauge-component .state--peek .metric__label {\n  display: none;\n}\n\n.lh-exp-gauge-component .metric__label {\n  fill: var(--report-text-color);\n}\n\n@keyframes peek {\n  /* biggest it should go is 0.92. smallest is 0.8 */\n  0% {\n    transform: scale(0.8);\n    opacity: 0.8;\n  }\n\n  50% {\n    transform: scale(0.92);\n    opacity: 1;\n  }\n\n  100% {\n    transform: scale(0.8);\n    opacity: 0.8;\n  }\n}\n\n.lh-exp-gauge-component .wrapper {\n  width: 620px;\n}\n\n/*# sourceURL=report-styles.css */\n`),e.append(t),e}function dt(o){let e=o.createFragment(),t=o.createElement("style");t.append(`\n    .lh-topbar {\n      position: sticky;\n      top: 0;\n      left: 0;\n      right: 0;\n      z-index: 1000;\n      display: flex;\n\
+      align-items: center;\n      height: var(--topbar-height);\n      padding: var(--topbar-padding);\n      font-size: var(--report-font-size-secondary);\n      background-color: var(--topbar-background-color);\n      border-bottom: 1px solid var(--color-gray-200);\n    }\n\n    .lh-topbar__logo {\n      width: var(--topbar-logo-size);\n      height: var(--topbar-logo-size);\n      user-select: none;\n      flex: none;\n    }\n\n    .lh-topbar__url {\n      margin: var(--topbar-padding);\n      text-decoration: none;\n      color: var(--report-text-color);\n      text-overflow: ellipsis;\n      overflow: hidden;\n      white-space: nowrap;\n    }\n\n    .lh-tools {\n      display: flex;\n      align-items: center;\n      margin-left: auto;\n      will-change: transform;\n      min-width: var(--report-icon-size);\n    }\n    .lh-tools__button {\n      width: var(--report-icon-size);\n      min-width: 24px;\n      height: var(--report-icon-size);\n      cursor: pointer;\n      margin-right: 5px;\n      /* This is actually\
+ a button element, but we want to style it like a transparent div. */\n      display: flex;\n      background: none;\n      color: inherit;\n      border: none;\n      padding: 0;\n      font: inherit;\n    }\n    .lh-tools__button svg {\n      fill: var(--tools-icon-color);\n    }\n    .lh-dark .lh-tools__button svg {\n      filter: invert(1);\n    }\n    .lh-tools__button.lh-active + .lh-tools__dropdown {\n      opacity: 1;\n      clip: rect(-1px, 194px, 270px, -3px);\n      visibility: visible;\n    }\n    .lh-tools__dropdown {\n      position: absolute;\n      background-color: var(--report-background-color);\n      border: 1px solid var(--report-border-color);\n      border-radius: 3px;\n      padding: calc(var(--default-padding) / 2) 0;\n      cursor: pointer;\n      top: 36px;\n      right: 0;\n      box-shadow: 1px 1px 3px #ccc;\n      min-width: 125px;\n      clip: rect(0, 164px, 0, 0);\n      visibility: hidden;\n      opacity: 0;\n      transition: all 200ms cubic-bezier(0,0,0.2,1);\n    }\n    .lh-tools__dro\
+pdown a {\n      color: currentColor;\n      text-decoration: none;\n      white-space: nowrap;\n      padding: 0 6px;\n      line-height: 2;\n    }\n    .lh-tools__dropdown a:hover,\n    .lh-tools__dropdown a:focus {\n      background-color: var(--color-gray-200);\n      outline: none;\n    }\n    /* save-gist option hidden in report. */\n    .lh-tools__dropdown a[data-action=\'save-gist\'] {\n      display: none;\n    }\n\n    .lh-locale-selector {\n      width: 100%;\n      color: var(--report-text-color);\n      background-color: var(--locale-selector-background-color);\n      padding: 2px;\n    }\n    .lh-tools-locale {\n      display: flex;\n      align-items: center;\n      flex-direction: row-reverse;\n    }\n    .lh-tools-locale__selector-wrapper {\n      transition: opacity 0.15s;\n      opacity: 0;\n      max-width: 200px;\n    }\n    .lh-button.lh-tool-locale__button {\n      height: var(--topbar-height);\n      color: var(--tools-icon-color);\n      padding: calc(var(--default-padding) / 2);\n    }\n    .lh-tool\
+-locale__button.lh-active + .lh-tools-locale__selector-wrapper {\n      opacity: 1;\n      clip: rect(-1px, 255px, 242px, -3px);\n      visibility: visible;\n      margin: 0 4px;\n    }\n\n    /**\n    * This media query is a temporary fallback for browsers that do not support \\`@container query\\`.\n    * TODO: remove this media query when \\`@container query\\` is fully supported by browsers\n    * See https://github.com/GoogleChrome/lighthouse/pull/16332\n    */\n    @media screen and (max-width: 964px) {\n      .lh-tools__dropdown {\n        right: 0;\n        left: initial;\n      }\n    }\n\n    @container lh-container (max-width: 964px) {\n      .lh-tools__dropdown {\n        right: 0;\n        left: initial;\n      }\n    }\n\n    @media print {\n      .lh-topbar {\n        position: static;\n        margin-left: 0;\n      }\n\n      .lh-tools__dropdown {\n        display: none;\n      }\n    }\n  `),e.append(t);let n=o.createElement("div","lh-topbar"),r=o.createElementNS("http://www.w3.org/2000/svg","svg","lh-topba\
+r__logo");r.setAttribute("role","img"),r.setAttribute("title","Lighthouse logo"),r.setAttribute("fill","none"),r.setAttribute("xmlns","http://www.w3.org/2000/svg"),r.setAttribute("viewBox","0 0 48 48");let i=o.createElementNS("http://www.w3.org/2000/svg","path");i.setAttribute("d","m14 7 10-7 10 7v10h5v7h-5l5 24H9l5-24H9v-7h5V7Z"),i.setAttribute("fill","#F63");let a=o.createElementNS("http://www.w3.org/2000/svg","path");a.setAttribute("d","M31.561 24H14l-1.689 8.105L31.561 24ZM18.983 48H9l1.022-4.907L35.723 32.27l1.663 7.98L18.983 48Z"),a.setAttribute("fill","#FFA385");let l=o.createElementNS("http://www.w3.org/2000/svg","path");l.setAttribute("fill","#FF3"),l.setAttribute("d","M20.5 10h7v7h-7z"),r.append(" ",i," ",a," ",l," ");let s=o.createElement("a","lh-topbar__url");s.setAttribute("href",""),s.setAttribute("target","_blank"),s.setAttribute("rel","noopener");let c=o.createElement("div","lh-tools"),d=o.createElement("div","lh-tools-locale lh-hidden"),h=o.createElement("button","lh-b\
+utton lh-tool-locale__button");h.setAttribute("id","lh-button__swap-locales"),h.setAttribute("title","Show Language Picker"),h.setAttribute("aria-label","Toggle language picker"),h.setAttribute("aria-haspopup","menu"),h.setAttribute("aria-expanded","false"),h.setAttribute("aria-controls","lh-tools-locale__selector-wrapper");let p=o.createElementNS("http://www.w3.org/2000/svg","svg");p.setAttribute("width","20px"),p.setAttribute("height","20px"),p.setAttribute("viewBox","0 0 24 24"),p.setAttribute("fill","currentColor");let g=o.createElementNS("http://www.w3.org/2000/svg","path");g.setAttribute("d","M0 0h24v24H0V0z"),g.setAttribute("fill","none");let b=o.createElementNS("http://www.w3.org/2000/svg","path");b.setAttribute("d","M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2\
+.62 7l1.62-4.33L19.12 17h-3.24z"),p.append(g,b),h.append(" ",p," ");let w=o.createElement("div","lh-tools-locale__selector-wrapper");w.setAttribute("id","lh-tools-locale__selector-wrapper"),w.setAttribute("role","menu"),w.setAttribute("aria-labelledby","lh-button__swap-locales"),w.setAttribute("aria-hidden","true"),w.append(" "," "),d.append(" ",h," ",w," ");let f=o.createElement("button","lh-tools__button");f.setAttribute("id","lh-tools-button"),f.setAttribute("title","Tools menu"),f.setAttribute("aria-label","Toggle report tools menu"),f.setAttribute("aria-haspopup","menu"),f.setAttribute("aria-expanded","false"),f.setAttribute("aria-controls","lh-tools-dropdown");let u=o.createElementNS("http://www.w3.org/2000/svg","svg");u.setAttribute("width","100%"),u.setAttribute("height","100%"),u.setAttribute("viewBox","0 0 24 24");let v=o.createElementNS("http://www.w3.org/2000/svg","path");v.setAttribute("d","M0 0h24v24H0z"),v.setAttribute("fill","none");let _=o.createElementNS("http://www.w\
+3.org/2000/svg","path");_.setAttribute("d","M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"),u.append(" ",v," ",_," "),f.append(" ",u," ");let x=o.createElement("div","lh-tools__dropdown");x.setAttribute("id","lh-tools-dropdown"),x.setAttribute("role","menu"),x.setAttribute("aria-labelledby","lh-tools-button");let L=o.createElement("a","lh-report-icon lh-report-icon--print");L.setAttribute("role","menuitem"),L.setAttribute("tabindex","-1"),L.setAttribute("href","#"),L.setAttribute("data-i18n","dropdownPrintSummary"),L.setAttribute("data-action","print-summary");let C=o.createElement("a","lh-report-icon lh-report-icon--print");C.setAttribute("role","menuitem"),C.setAttribute("tabindex","-1"),C.setAttribute("href","#"),C.setAttribute("data-i18n","dropdownPrintExpanded"),C.setAttribute("data-action","print-expanded");let z=o.createElement("a","lh-report-icon lh-report-icon--copy");z.setAttri\
+bute("role","menuitem"),z.setAttribute("tabindex","-1"),z.setAttribute("href","#"),z.setAttribute("data-i18n","dropdownCopyJSON"),z.setAttribute("data-action","copy");let M=o.createElement("a","lh-report-icon lh-report-icon--download lh-hidden");M.setAttribute("role","menuitem"),M.setAttribute("tabindex","-1"),M.setAttribute("href","#"),M.setAttribute("data-i18n","dropdownSaveHTML"),M.setAttribute("data-action","save-html");let $=o.createElement("a","lh-report-icon lh-report-icon--download");$.setAttribute("role","menuitem"),$.setAttribute("tabindex","-1"),$.setAttribute("href","#"),$.setAttribute("data-i18n","dropdownSaveJSON"),$.setAttribute("data-action","save-json");let R=o.createElement("a","lh-report-icon lh-report-icon--open");R.setAttribute("role","menuitem"),R.setAttribute("tabindex","-1"),R.setAttribute("href","#"),R.setAttribute("data-i18n","dropdownViewer"),R.setAttribute("data-action","open-viewer");let N=o.createElement("a","lh-report-icon lh-report-icon--open");N.setAttr\
+ibute("role","menuitem"),N.setAttribute("tabindex","-1"),N.setAttribute("href","#"),N.setAttribute("data-i18n","dropdownSaveGist"),N.setAttribute("data-action","save-gist");let D=o.createElement("a","lh-report-icon lh-report-icon--open lh-hidden");D.setAttribute("role","menuitem"),D.setAttribute("tabindex","-1"),D.setAttribute("href","#"),D.setAttribute("data-i18n","dropdownViewUnthrottledTrace"),D.setAttribute("data-action","view-unthrottled-trace");let I=o.createElement("a","lh-report-icon lh-report-icon--dark");return I.setAttribute("role","menuitem"),I.setAttribute("tabindex","-1"),I.setAttribute("href","#"),I.setAttribute("data-i18n","dropdownDarkTheme"),I.setAttribute("data-action","toggle-dark"),x.append(" ",L," ",C," ",z," "," ",M," ",$," ",R," ",N," "," ",D," ",I," "),c.append(" ",d," ",f," ",x," "),n.append(" "," ",r," ",s," ",c," "),e.append(n),e}function ht(o){let e=o.createFragment(),t=o.createElement("div","lh-warnings lh-warnings--toplevel"),n=o.createElement("p","lh-war\
+nings__msg"),r=o.createElement("ul");return t.append(" ",n," ",r," "),e.append(t),e}function be(o,e){switch(e){case"3pFilter":return Ge(o);case"audit":return Be(o);case"categoryHeader":return qe(o);case"chevron":return je(o);case"clump":return We(o);case"crc":return Ke(o);case"crcChain":return Ze(o);case"elementScreenshot":return Je(o);case"explodeyGauge":return Qe(o);case"footer":return Ye(o);case"fraction":return Xe(o);case"gauge":return et(o);case"heading":return tt(o);case"metric":return nt(o);case"scorescale":return rt(o);case"scoresWrapper":return ot(o);case"snippet":return it(o);case"snippetContent":return at(o);case"snippetHeader":return lt(o);case"snippetLine":return st(o);case"styles":return ct(o);case"topbar":return dt(o);case"warningsToplevel":return ht(o)}throw new Error("unexpected component: "+e)}var ee=class{constructor(e,t){this._document=e,this._lighthouseChannel="unknown",this._componentCache=new Map,this.rootEl=t}createElement(e,t){let n=this._document.createElement\
+(e);if(t)for(let r of t.split(/\\s+/))r&&n.classList.add(r);return n}createElementNS(e,t,n){let r=this._document.createElementNS(e,t);if(n)for(let i of n.split(/\\s+/))i&&r.classList.add(i);return r}createSVGElement(e,t){return this._document.createElementNS("http://www.w3.org/2000/svg",e,t)}createFragment(){return this._document.createDocumentFragment()}createTextNode(e){return this._document.createTextNode(e)}createChildOf(e,t,n){let r=this.createElement(t,n);return e.append(r),r}createComponent(e){let t=this._componentCache.get(e);if(t){let r=t.cloneNode(!0);return this.findAll("style",r).forEach(i=>i.remove()),r}return t=be(this,e),this._componentCache.set(e,t),t.cloneNode(!0)}clearComponentCache(){this._componentCache.clear()}convertMarkdownLinkSnippets(e,t={}){let n=this.createElement("span");for(let r of E.splitMarkdownLink(e)){let i=r.text.includes("`")?this.convertMarkdownCodeSnippets(r.text):r.text;if(!r.isLink){n.append(i);continue}let a=new URL(r.linkHref);(["https://develope\
+rs.google.com","https://web.dev","https://developer.chrome.com"].includes(a.origin)||t.alwaysAppendUtmSource)&&(a.searchParams.set("utm_source","lighthouse"),a.searchParams.set("utm_medium",this._lighthouseChannel));let s=this.createElement("a");s.rel="noopener",s.target="_blank",s.append(i),this.safelySetHref(s,a.href),n.append(s)}return n}safelySetHref(e,t){if(t=t||"",t.startsWith("#")){e.href=t;return}let n=["https:","http:"],r;try{r=new URL(t)}catch{}r&&n.includes(r.protocol)&&(e.href=r.href)}safelySetBlobHref(e,t){if(t.type!=="text/html"&&t.type!=="application/json")throw new Error("Unsupported blob type");let n=URL.createObjectURL(t);e.href=n}convertMarkdownCodeSnippets(e){let t=this.createElement("span");for(let n of E.splitMarkdownCodeSpans(e))if(n.isCode){let r=this.createElement("code");r.textContent=n.text,t.append(r)}else t.append(this._document.createTextNode(n.text));return t}setLighthouseChannel(e){this._lighthouseChannel=e}document(){return this._document}isDevTools(){r\
+eturn!!this._document.querySelector(".lh-devtools")}find(e,t=this.rootEl??this._document){let n=this.maybeFind(e,t);if(n===null)throw new Error(`query ${e} not found`);return n}maybeFind(e,t=this.rootEl??this._document){return t.querySelector(e)}findAll(e,t){return Array.from(t.querySelectorAll(e))}fireEventOn(e,t=this._document,n){let r=new CustomEvent(e,n?{detail:n}:void 0);t.dispatchEvent(r)}saveFile(e,t){let n=this.createElement("a");n.download=t,this.safelySetBlobHref(n,e),this._document.body.append(n),n.click(),this._document.body.removeChild(n),setTimeout(()=>URL.revokeObjectURL(n.href),500)}};var _e=0,m=class o{static i18n=null;static strings={};static reportJson=null;static apply(e){o.strings={...we,...e.providedStrings},o.i18n=e.i18n,o.reportJson=e.reportJson}static getUniqueSuffix(){return _e++}static resetUniqueSuffix(){_e=0}};var ye="data:image/jpeg;base64,";function xe(o){o.configSettings.locale||(o.configSettings.locale="en"),o.configSettings.formFactor||(o.configSetting\
+s.formFactor=o.configSettings.emulatedFormFactor),o.finalDisplayedUrl=E.getFinalDisplayedUrl(o),o.mainDocumentUrl=E.getMainDocumentUrl(o);for(let n of Object.values(o.audits))if((n.scoreDisplayMode==="not_applicable"||n.scoreDisplayMode==="not-applicable")&&(n.scoreDisplayMode="notApplicable"),n.scoreDisplayMode==="informative"&&(n.score=1),n.details){if((n.details.type===void 0||n.details.type==="diagnostic")&&(n.details.type="debugdata"),n.details.type==="filmstrip")for(let r of n.details.items)r.data.startsWith(ye)||(r.data=ye+r.data);if(n.details.type==="table")for(let r of n.details.headings){let{itemType:i,text:a}=r;i!==void 0&&(r.valueType=i,delete r.itemType),a!==void 0&&(r.label=a,delete r.text);let l=r.subItemsHeading?.itemType;r.subItemsHeading&&l!==void 0&&(r.subItemsHeading.valueType=l,delete r.subItemsHeading.itemType)}if(n.id==="third-party-summary"&&(n.details.type==="opportunity"||n.details.type==="table")){let{headings:r,items:i}=n.details;if(r[0].valueType==="link"){\
+r[0].valueType="text";for(let a of i)typeof a.entity=="object"&&a.entity.type==="link"&&(a.entity=a.entity.text);n.details.isEntityGrouped=!0}}}let[e]=o.lighthouseVersion.split(".").map(Number),t=o.categories.performance;if(t){if(e<9){o.categoryGroups||(o.categoryGroups={}),o.categoryGroups.hidden={title:""};for(let n of t.auditRefs)n.group?n.group==="load-opportunities"&&(n.group="diagnostics"):n.group="hidden"}else if(e<12)for(let n of t.auditRefs)n.group||(n.group="diagnostics")}if(e<12&&t){let n=new Map;for(let r of t.auditRefs){let i=r.relevantAudits;if(!(!i||!r.acronym))for(let a of i){let l=n.get(a)||[];l.push(r.acronym),n.set(a,l)}}for(let[r,i]of n){if(!i.length)continue;let a=o.audits[r];if(a&&!a.metricSavings){a.metricSavings={};for(let l of i)a.metricSavings[l]=0}}}if(o.environment||(o.environment={benchmarkIndex:0,networkUserAgent:o.userAgent,hostUserAgent:o.userAgent}),o.configSettings.screenEmulation||(o.configSettings.screenEmulation={width:-1,height:-1,deviceScaleFactor\
+:-1,mobile:/mobile/i.test(o.environment.hostUserAgent),disabled:!1}),o.i18n||(o.i18n={}),o.audits["full-page-screenshot"]){let n=o.audits["full-page-screenshot"].details;n?o.fullPageScreenshot={screenshot:n.screenshot,nodes:n.nodes}:o.fullPageScreenshot=null,delete o.audits["full-page-screenshot"]}}var O=E.RATINGS,k=class o{static prepareReportResult(e){let t=JSON.parse(JSON.stringify(e));xe(t);for(let r of Object.values(t.audits))r.details&&(r.details.type==="opportunity"||r.details.type==="table")&&!r.details.isEntityGrouped&&t.entities&&o.classifyEntities(t.entities,r.details);if(typeof t.categories!="object")throw new Error("No categories provided.");let n=new Map;for(let r of Object.values(t.categories))r.auditRefs.forEach(i=>{i.acronym&&n.set(i.acronym,i)}),r.auditRefs.forEach(i=>{let a=t.audits[i.id];i.result=a;let l=Object.keys(i.result.metricSavings||{});if(l.length){i.relevantMetrics=[];for(let s of l){let c=n.get(s);c&&i.relevantMetrics.push(c)}}if(t.stackPacks){let s=[i.id,\
+...i.result.replacesAudits??[]];t.stackPacks.forEach(c=>{let d=s.find(h=>c.descriptions[h]);d&&c.descriptions[d]&&(i.stackPacks=i.stackPacks||[],i.stackPacks.push({title:c.title,iconDataURL:c.iconDataURL,description:c.descriptions[d]}))})}});return t}static getUrlLocatorFn(e){let t=e.find(r=>r.valueType==="url")?.key;if(t&&typeof t=="string")return r=>{let i=r[t];if(typeof i=="string")return i};let n=e.find(r=>r.valueType==="source-location")?.key;if(n)return r=>{let i=r[n];if(typeof i=="object"&&i.type==="source-location")return i.url}}static classifyEntities(e,t){let{items:n,headings:r}=t;if(!n.length||n.some(a=>a.entity))return;let i=o.getUrlLocatorFn(r);if(i)for(let a of n){let l=i(a);if(!l)continue;let s="";try{s=E.parseURL(l).origin}catch{}if(!s)continue;let c=e.find(d=>d.origins.includes(s));c&&(a.entity=c.name)}}static getTableItemSortComparator(e){return(t,n)=>{for(let r of e){let i=t[r],a=n[r];if((typeof i!=typeof a||!["number","string"].includes(typeof i))&&console.warn(`War\
+ning: Attempting to sort unsupported value type: ${r}.`),typeof i=="number"&&typeof a=="number"&&i!==a)return a-i;if(typeof i=="string"&&typeof a=="string"&&i!==a)return i.localeCompare(a)}return 0}}static getEmulationDescriptions(e){let t,n,r,i=e.throttling,a=m.i18n,l=m.strings;switch(e.throttlingMethod){case"provided":r=n=t=l.throttlingProvided;break;case"devtools":{let{cpuSlowdownMultiplier:p,requestLatencyMs:g}=i;t=`${a.formatNumber(p)}x slowdown (DevTools)`,n=`${a.formatMilliseconds(g)} HTTP RTT, ${a.formatKbps(i.downloadThroughputKbps)} down, ${a.formatKbps(i.uploadThroughputKbps)} up (DevTools)`,r=g===150*3.75&&i.downloadThroughputKbps===1.6*1024*.9&&i.uploadThroughputKbps===750*.9?l.runtimeSlow4g:l.runtimeCustom;break}case"simulate":{let{cpuSlowdownMultiplier:p,rttMs:g,throughputKbps:b}=i;t=`${a.formatNumber(p)}x slowdown (Simulated)`,n=`${a.formatMilliseconds(g)} TCP RTT, ${a.formatKbps(b)} throughput (Simulated)`,r=g===150&&b===1.6*1024?l.runtimeSlow4g:l.runtimeCustom;break}d\
+efault:r=t=n=l.runtimeUnknown}let s=e.channel==="devtools"?!1:e.screenEmulation.disabled,c=e.channel==="devtools"?e.formFactor==="mobile":e.screenEmulation.mobile,d=l.runtimeMobileEmulation;s?d=l.runtimeNoEmulation:c||(d=l.runtimeDesktopEmulation);let h=s?void 0:`${e.screenEmulation.width}x${e.screenEmulation.height}, DPR ${e.screenEmulation.deviceScaleFactor}`;return{deviceEmulation:d,screenEmulation:h,cpuThrottling:t,networkThrottling:n,summary:r}}static showAsPassed(e){switch(e.scoreDisplayMode){case"manual":case"notApplicable":return!0;case"error":case"informative":return!1;case"numeric":case"binary":default:return Number(e.score)>=O.PASS.minScore}}static calculateRating(e,t){if(t==="manual"||t==="notApplicable")return O.PASS.label;if(t==="error")return O.ERROR.label;if(e===null)return O.FAIL.label;let n=O.FAIL.label;return e>=O.PASS.minScore?n=O.PASS.label:e>=O.AVERAGE.minScore&&(n=O.AVERAGE.label),n}static calculateCategoryFraction(e){let t=0,n=0,r=0,i=0;for(let a of e.auditRefs)\
+{let l=o.showAsPassed(a.result);if(!(a.group==="hidden"||a.result.scoreDisplayMode==="manual"||a.result.scoreDisplayMode==="notApplicable")){if(a.result.scoreDisplayMode==="informative"){l||++r;continue}++t,i+=a.weight,l&&n++}}return{numPassed:n,numPassableAudits:t,numInformative:r,totalWeight:i}}static isPluginCategory(e){return e.startsWith("lighthouse-plugin-")}static shouldDisplayAsFraction(e,t){return e==="timespan"||e==="snapshot"||t?.categoryScoreDisplayMode==="fraction"}},we={varianceDisclaimer:"Values are estimated and may vary. The [performance score is calculated](https://developer.chrome.com/docs/lighthouse/performance/performance-scoring/) directly from these metrics.",calculatorLink:"See calculator.",showRelevantAudits:"Show audits relevant to:",opportunityResourceColumnLabel:"Opportunity",opportunitySavingsColumnLabel:"Estimated Savings",errorMissingAuditInfo:"Report error: no audit information",errorLabel:"Error!",warningHeader:"Warnings: ",warningAuditsGroupTitle:"Pass\
+ed audits but with warnings",passedAuditsGroupTitle:"Passed audits",notApplicableAuditsGroupTitle:"Not applicable",manualAuditsGroupTitle:"Additional items to manually check",toplevelWarningsMessage:"There were issues affecting this run of Lighthouse:",crcInitialNavigation:"Initial Navigation",crcLongestDurationLabel:"Maximum critical path latency:",snippetExpandButtonLabel:"Expand snippet",snippetCollapseButtonLabel:"Collapse snippet",lsPerformanceCategoryDescription:"[Lighthouse](https://developers.google.com/web/tools/lighthouse/) analysis of the current page on an emulated mobile network. Values are estimated and may vary.",labDataTitle:"Lab Data",thirdPartyResourcesLabel:"Show 3rd-party resources",viewTreemapLabel:"View Treemap",viewTraceLabel:"View Trace",dropdownPrintSummary:"Print Summary",dropdownPrintExpanded:"Print Expanded",dropdownCopyJSON:"Copy JSON",dropdownSaveHTML:"Save as HTML",dropdownSaveJSON:"Save as JSON",dropdownViewer:"Open in Viewer",dropdownSaveGist:"Save as G\
+ist",dropdownDarkTheme:"Toggle Dark Theme",dropdownViewUnthrottledTrace:"View Unthrottled Trace",runtimeSettingsDevice:"Device",runtimeSettingsNetworkThrottling:"Network throttling",runtimeSettingsCPUThrottling:"CPU throttling",runtimeSettingsUANetwork:"User agent (network)",runtimeSettingsBenchmark:"Unthrottled CPU/Memory Power",runtimeSettingsAxeVersion:"Axe version",runtimeSettingsScreenEmulation:"Screen emulation",footerIssue:"File an issue",runtimeNoEmulation:"No emulation",runtimeMobileEmulation:"Emulated Moto G Power",runtimeDesktopEmulation:"Emulated Desktop",runtimeUnknown:"Unknown",runtimeSingleLoad:"Single page session",runtimeAnalysisWindow:"Initial page load",runtimeAnalysisWindowTimespan:"User interactions timespan",runtimeAnalysisWindowSnapshot:"Point-in-time snapshot",runtimeSingleLoadTooltip:"This data is taken from a single page session, as opposed to field data summarizing many sessions.",throttlingProvided:"Provided by environment",show:"Show",hide:"Hide",expandView\
+:"Expand view",collapseView:"Collapse view",runtimeSlow4g:"Slow 4G throttling",runtimeCustom:"Custom throttling",firstPartyChipLabel:"1st party",openInANewTabTooltip:"Open in a new tab",unattributable:"Unattributable",unscoredLabel:"Unscored",unscoredTitle:"This audit does not contribute to the overall category score."};var G=class{constructor(e,t){this.dom=e,this.detailsRenderer=t}get _clumpTitles(){return{warning:m.strings.warningAuditsGroupTitle,manual:m.strings.manualAuditsGroupTitle,passed:m.strings.passedAuditsGroupTitle,notApplicable:m.strings.notApplicableAuditsGroupTitle}}renderAudit(e){let t=m.strings,n=this.dom.createComponent("audit"),r=this.dom.find("div.lh-audit",n);r.id=e.result.id;let i=e.result.scoreDisplayMode;e.result.displayValue&&(this.dom.find(".lh-audit__display-text",r).textContent=e.result.displayValue);let a=this.dom.find(".lh-audit__title",r);a.append(this.dom.convertMarkdownCodeSnippets(e.result.title));let l=this.dom.find(".lh-audit__description",r);l.appen\
+d(this.dom.convertMarkdownLinkSnippets(e.result.description));for(let p of e.relevantMetrics||[]){let g=this.dom.createChildOf(l,"span","lh-audit__adorn");g.title=`Relevant to ${p.result.title}`,g.textContent=p.acronym||p.id}if(e.weight===0){let p=this.dom.createChildOf(l,"span","lh-audit__adorn");p.title=m.strings.unscoredTitle,p.textContent=m.strings.unscoredLabel}e.stackPacks&&e.stackPacks.forEach(p=>{let g=this.dom.createElement("img","lh-audit__stackpack__img");g.src=p.iconDataURL,g.alt=p.title;let b=this.dom.convertMarkdownLinkSnippets(p.description,{alwaysAppendUtmSource:!0}),w=this.dom.createElement("div","lh-audit__stackpack");w.append(g,b),this.dom.find(".lh-audit__stackpacks",r).append(w)});let s=this.dom.find("details",r);if(e.result.details){let p=this.detailsRenderer.render(e.result.details);p&&(p.classList.add("lh-details"),s.append(p))}if(this.dom.find(".lh-chevron-container",r).append(this._createChevron()),this._setRatingClass(r,e.result.score,i),e.result.scoreDisplay\
+Mode==="error"){r.classList.add("lh-audit--error");let p=this.dom.find(".lh-audit__display-text",r);p.textContent=t.errorLabel,p.classList.add("lh-tooltip-boundary");let g=this.dom.createChildOf(p,"div","lh-tooltip lh-tooltip--error");g.textContent=e.result.errorMessage||t.errorMissingAuditInfo}else if(e.result.explanation){let p=this.dom.createChildOf(a,"div","lh-audit-explanation");p.textContent=e.result.explanation}let c=e.result.warnings;if(!c||c.length===0)return r;let d=this.dom.find("summary",s),h=this.dom.createChildOf(d,"div","lh-warnings");if(this.dom.createChildOf(h,"span").textContent=t.warningHeader,c.length===1)h.append(this.dom.createTextNode(c.join("")));else{let p=this.dom.createChildOf(h,"ul");for(let g of c){let b=this.dom.createChildOf(p,"li");b.textContent=g}}return r}injectFinalScreenshot(e,t,n){let r=t["final-screenshot"];if(!r||r.scoreDisplayMode==="error"||!r.details||r.details.type!=="screenshot")return null;let i=this.dom.createElement("img","lh-final-ss-imag\
+e"),a=r.details.data;i.src=a,i.alt=r.title;let l=this.dom.find(".lh-category .lh-category-header",e),s=this.dom.createElement("div","lh-category-headercol"),c=this.dom.createElement("div","lh-category-headercol lh-category-headercol--separator"),d=this.dom.createElement("div","lh-category-headercol");s.append(...l.childNodes),s.append(n),d.append(i),l.append(s,c,d),l.classList.add("lh-category-header__finalscreenshot")}_createChevron(){let e=this.dom.createComponent("chevron");return this.dom.find("svg.lh-chevron",e)}_setRatingClass(e,t,n){let r=k.calculateRating(t,n);return e.classList.add(`lh-audit--${n.toLowerCase()}`),n!=="informative"&&e.classList.add(`lh-audit--${r}`),e}renderCategoryHeader(e,t,n){let r=this.dom.createComponent("categoryHeader"),i=this.dom.find(".lh-score__gauge",r),a=this.renderCategoryScore(e,t,n);if(i.append(a),e.description){let l=this.dom.convertMarkdownLinkSnippets(e.description);this.dom.find(".lh-category-header__description",r).append(l)}return r}renderA\
+uditGroup(e){let t=this.dom.createElement("div","lh-audit-group"),n=this.dom.createElement("div","lh-audit-group__header");this.dom.createChildOf(n,"span","lh-audit-group__title").textContent=e.title,t.append(n);let r=null;return e.description&&(r=this.dom.convertMarkdownLinkSnippets(e.description),r.classList.add("lh-audit-group__description","lh-audit-group__footer"),t.append(r)),[t,r]}_renderGroupedAudits(e,t){let n=new Map,r="NotAGroup";n.set(r,[]);for(let a of e){let l=a.group||r,s=n.get(l)||[];s.push(a),n.set(l,s)}let i=[];for(let[a,l]of n){if(a===r){for(let h of l)i.push(this.renderAudit(h));continue}let s=t[a],[c,d]=this.renderAuditGroup(s);for(let h of l)c.insertBefore(this.renderAudit(h),d);c.classList.add(`lh-audit-group--${a}`),i.push(c)}return i}renderUnexpandableClump(e,t){let n=this.dom.createElement("div");return this._renderGroupedAudits(e,t).forEach(i=>n.append(i)),n}renderClump(e,{auditRefsOrEls:t,description:n,openByDefault:r}){let i=this.dom.createComponent("clump"\
+),a=this.dom.find(".lh-clump",i);r&&a.setAttribute("open","");let l=this.dom.find(".lh-audit-group__header",a),s=this._clumpTitles[e];this.dom.find(".lh-audit-group__title",l).textContent=s;let c=this.dom.find(".lh-audit-group__itemcount",a);c.textContent=`(${t.length})`;let d=t.map(p=>p instanceof HTMLElement?p:this.renderAudit(p));a.append(...d);let h=this.dom.find(".lh-audit-group",i);if(n){let p=this.dom.convertMarkdownLinkSnippets(n);p.classList.add("lh-audit-group__description","lh-audit-group__footer"),h.append(p)}return this.dom.find(".lh-clump-toggletext--show",h).textContent=m.strings.show,this.dom.find(".lh-clump-toggletext--hide",h).textContent=m.strings.hide,a.classList.add(`lh-clump--${e.toLowerCase()}`),h}renderCategoryScore(e,t,n){let r;if(n&&k.shouldDisplayAsFraction(n.gatherMode,e)?r=this.renderCategoryFraction(e):r=this.renderScoreGauge(e,t),n?.omitLabel&&this.dom.find(".lh-gauge__label,.lh-fraction__label",r).remove(),n?.onPageAnchorRendered){let i=this.dom.find("a"\
+,r);n.onPageAnchorRendered(i)}return r}renderScoreGauge(e,t){let n=this.dom.createComponent("gauge"),r=this.dom.find("a.lh-gauge__wrapper",n);k.isPluginCategory(e.id)&&r.classList.add("lh-gauge__wrapper--plugin");let i=Number(e.score),a=this.dom.find(".lh-gauge",n),l=this.dom.find("circle.lh-gauge-arc",a);l&&this._setGaugeArc(l,i);let s=Math.round(i*100),c=this.dom.find("div.lh-gauge__percentage",n);return c.textContent=s.toString(),e.score===null&&(c.classList.add("lh-gauge--error"),c.textContent="",c.title=m.strings.errorLabel),e.auditRefs.length===0||this.hasApplicableAudits(e)?r.classList.add(`lh-gauge__wrapper--${k.calculateRating(e.score)}`):(r.classList.add("lh-gauge__wrapper--not-applicable"),c.textContent="-",c.title=m.strings.notApplicableAuditsGroupTitle),this.dom.find(".lh-gauge__label",n).textContent=e.title,n}renderCategoryFraction(e){let t=this.dom.createComponent("fraction"),n=this.dom.find("a.lh-fraction__wrapper",t),{numPassed:r,numPassableAudits:i,totalWeight:a}=k.ca\
+lculateCategoryFraction(e),l=r/i,s=this.dom.find(".lh-fraction__content",t),c=this.dom.createElement("span");c.textContent=`${r}/${i}`,s.append(c);let d=k.calculateRating(l);return a===0&&(d="null"),n.classList.add(`lh-fraction__wrapper--${d}`),this.dom.find(".lh-fraction__label",t).textContent=e.title,t}hasApplicableAudits(e){return e.auditRefs.some(t=>t.result.scoreDisplayMode!=="notApplicable")}_setGaugeArc(e,t){let n=2*Math.PI*Number(e.getAttribute("r")),r=Number(e.getAttribute("stroke-width")),i=.25*r/n;e.style.transform=`rotate(${-90+i*360}deg)`;let a=t*n-r/2;t===0&&(e.style.opacity="0"),t===1&&(a=n),e.style.strokeDasharray=`${Math.max(a,0)} ${n}`}_auditHasWarning(e){return!!e.result.warnings?.length}_getClumpIdForAuditRef(e){let t=e.result.scoreDisplayMode;return t==="manual"||t==="notApplicable"?t:k.showAsPassed(e.result)?this._auditHasWarning(e)?"warning":"passed":"failed"}render(e,t={},n){let r=this.dom.createElement("div","lh-category");r.id=e.id,r.append(this.renderCategory\
+Header(e,t,n));let i=new Map;i.set("failed",[]),i.set("warning",[]),i.set("manual",[]),i.set("passed",[]),i.set("notApplicable",[]);for(let l of e.auditRefs){if(l.group==="hidden")continue;let s=this._getClumpIdForAuditRef(l),c=i.get(s);c.push(l),i.set(s,c)}for(let l of i.values())l.sort((s,c)=>c.weight-s.weight);let a=i.get("failed")?.length;for(let[l,s]of i){if(s.length===0)continue;if(l==="failed"){let p=this.renderUnexpandableClump(s,t);p.classList.add("lh-clump--failed"),r.append(p);continue}let c=l==="manual"?e.manualDescription:void 0,d=l==="warning"||l==="manual"&&a===0,h=this.renderClump(l,{auditRefsOrEls:s,description:c,openByDefault:d});r.append(h)}return r}};var Y=class{static createSegment(e,t,n,r){let i=e[t],a=Object.keys(e),l=a.indexOf(t)===a.length-1,s=!!i.children&&Object.keys(i.children).length>0,c=Array.isArray(n)?n.slice(0):[];return typeof r<"u"&&c.push(!r),{node:i,isLastChild:l,hasChildren:s,treeMarkers:c}}static createChainNode(e,t,n){let r=e.createComponent("crc\
+Chain"),i,a,l,s,c;"request"in t.node?(a=t.node.request.transferSize,l=t.node.request.url,i=(t.node.request.endTime-t.node.request.startTime)*1e3,s=!1):(a=t.node.transferSize,l=t.node.url,i=t.node.navStartToEndTime,s=!0,c=t.node.isLongest);let d=e.find(".lh-crc-node",r);d.setAttribute("title",l),c&&d.classList.add("lh-crc-node__longest");let h=e.find(".lh-crc-node__tree-marker",r);t.treeMarkers.forEach(f=>{let u=f?"lh-tree-marker lh-vert":"lh-tree-marker";h.append(e.createElement("span",u),e.createElement("span","lh-tree-marker"))});let p=t.isLastChild?"lh-tree-marker lh-up-right":"lh-tree-marker lh-vert-right",g=t.hasChildren?"lh-tree-marker lh-horiz-down":"lh-tree-marker lh-right";h.append(e.createElement("span",p),e.createElement("span","lh-tree-marker lh-right"),e.createElement("span",g));let b=n.renderTextURL(l),w=e.find(".lh-crc-node__tree-value",r);if(w.append(b),!t.hasChildren||s){let f=e.createElement("span","lh-crc-node__chain-duration");f.textContent=" - "+m.i18n.formatMillis\
+econds(i)+", ";let u=e.createElement("span","lh-crc-node__chain-size");u.textContent=m.i18n.formatBytesToKiB(a,.01),w.append(f,u)}return r}static buildTree(e,t,n,r){if(n.append(Q.createChainNode(e,t,r)),t.node.children)for(let i of Object.keys(t.node.children)){let a=Q.createSegment(t.node.children,i,t.treeMarkers,t.isLastChild);Q.buildTree(e,a,n,r)}}static render(e,t,n){let r=e.createComponent("crc"),i=e.find(".lh-crc",r);e.find(".lh-crc-initial-nav",r).textContent=m.strings.crcInitialNavigation,e.find(".lh-crc__longest_duration_label",r).textContent=m.strings.crcLongestDurationLabel,e.find(".lh-crc__longest_duration",r).textContent=m.i18n.formatMilliseconds(t.longestChain.duration);let a=t.chains;for(let l of Object.keys(a)){let s=Q.createSegment(a,l);Q.buildTree(e,s,i,n)}return e.find(".lh-crc-container",r)}},Q=Y;function pt(o,e){return e.left<=o.width&&0<=e.right&&e.top<=o.height&&0<=e.bottom}function ke(o,e,t){return o<e?e:o>t?t:o}function ut(o){return{x:o.left+o.width/2,y:o.top+o\
+.height/2}}var V=class o{static getScreenshotPositions(e,t,n){let r=ut(e),i=ke(r.x-t.width/2,0,n.width-t.width),a=ke(r.y-t.height/2,0,n.height-t.height);return{screenshot:{left:i,top:a},clip:{left:e.left-i,top:e.top-a}}}static renderClipPathInScreenshot(e,t,n,r,i){let a=e.find("clipPath",t),l=`clip-${m.getUniqueSuffix()}`;a.id=l,t.style.clipPath=`url(#${l})`;let s=n.top/i.height,c=s+r.height/i.height,d=n.left/i.width,h=d+r.width/i.width,p=[`0,0             1,0            1,${s}          0,${s}`,`0,${c}     1,${c}    1,1               0,1`,`0,${s}        ${d},${s} ${d},${c} 0,${c}`,`${h},${s} 1,${s}       1,${c}       ${h},${c}`];for(let g of p){let b=e.createElementNS("http://www.w3.org/2000/svg","polygon");b.setAttribute("points",g),a.append(b)}}static installFullPageScreenshot(e,t){e.style.setProperty("--element-screenshot-url",`url(\'${t.data}\')`)}static installOverlayFeature(e){let{dom:t,rootEl:n,overlayContainerEl:r,fullPageScreenshot:i}=e,a="lh-screenshot-overlay--enabled";n.class\
+List.contains(a)||(n.classList.add(a),n.addEventListener("click",l=>{let s=l.target;if(!s)return;let c=s.closest(".lh-node > .lh-element-screenshot");if(!c)return;let d=t.createElement("div","lh-element-screenshot__overlay");r.append(d);let h={width:d.clientWidth*.95,height:d.clientHeight*.8},p={width:Number(c.dataset.rectWidth),height:Number(c.dataset.rectHeight),left:Number(c.dataset.rectLeft),right:Number(c.dataset.rectLeft)+Number(c.dataset.rectWidth),top:Number(c.dataset.rectTop),bottom:Number(c.dataset.rectTop)+Number(c.dataset.rectHeight)},g=o.render(t,i.screenshot,p,h);if(!g){d.remove();return}d.append(g),d.addEventListener("click",()=>d.remove())}))}static _computeZoomFactor(e,t){let r={x:t.width/e.width,y:t.height/e.height},i=.75*Math.min(r.x,r.y);return Math.min(1,i)}static render(e,t,n,r){if(!pt(t,n))return null;let i=e.createComponent("elementScreenshot"),a=e.find("div.lh-element-screenshot",i);a.dataset.rectWidth=n.width.toString(),a.dataset.rectHeight=n.height.toString()\
+,a.dataset.rectLeft=n.left.toString(),a.dataset.rectTop=n.top.toString();let l=this._computeZoomFactor(n,r),s={width:r.width/l,height:r.height/l};s.width=Math.min(t.width,s.width),s.height=Math.min(t.height,s.height);let c={width:s.width*l,height:s.height*l},d=o.getScreenshotPositions(n,s,{width:t.width,height:t.height}),h=e.find("div.lh-element-screenshot__image",a);h.style.width=c.width+"px",h.style.height=c.height+"px",h.style.backgroundPositionY=-(d.screenshot.top*l)+"px",h.style.backgroundPositionX=-(d.screenshot.left*l)+"px",h.style.backgroundSize=`${t.width*l}px ${t.height*l}px`;let p=e.find("div.lh-element-screenshot__element-marker",a);p.style.width=n.width*l+"px",p.style.height=n.height*l+"px",p.style.left=d.clip.left*l+"px",p.style.top=d.clip.top*l+"px";let g=e.find("div.lh-element-screenshot__mask",a);return g.style.width=c.width+"px",g.style.height=c.height+"px",o.renderClipPathInScreenshot(e,g,d.clip,n,s),a}};var gt=["http://","https://","data:"],mt=["bytes","numeric","ms\
+","timespanMs"],X=class{constructor(e,t={}){this._dom=e,this._fullPageScreenshot=t.fullPageScreenshot,this._entities=t.entities}render(e){switch(e.type){case"filmstrip":return this._renderFilmstrip(e);case"list":return this._renderList(e);case"checklist":return this._renderChecklist(e);case"table":case"opportunity":return this._renderTable(e);case"network-tree":case"criticalrequestchain":return Y.render(this._dom,e,this);case"screenshot":case"debugdata":case"treemap-data":return null;default:return this._renderUnknown(e.type,e)}}_renderBytes(e){let t=m.i18n.formatBytesToKiB(e.value,e.granularity||.1),n=this._renderText(t);return n.title=m.i18n.formatBytes(e.value),n}_renderMilliseconds(e){let t;return e.displayUnit==="duration"?t=m.i18n.formatDuration(e.value):t=m.i18n.formatMilliseconds(e.value,e.granularity||10),this._renderText(t)}renderTextURL(e){let t=e,n,r,i;try{let l=E.parseURL(t);n=l.file==="/"?l.origin:l.file,r=l.file==="/"||l.hostname===""?"":`(${l.hostname})`,i=t}catch{n=t}l\
+et a=this._dom.createElement("div","lh-text__url");if(a.append(this._renderLink({text:n,url:t})),r){let l=this._renderText(r);l.classList.add("lh-text__url-host"),a.append(l)}return i&&(a.title=t,a.dataset.url=t),a}_renderLink(e){let t=this._dom.createElement("a");if(this._dom.safelySetHref(t,e.url),!t.href){let n=this._renderText(e.text);return n.classList.add("lh-link"),n}return t.rel="noopener",t.target="_blank",t.textContent=e.text,t.classList.add("lh-link"),t}_renderText(e){let t=this._dom.createElement("div","lh-text");return t.textContent=e,t}_renderBaselineStatus(e){let t=this._dom.createElement("div","lh-baseline-status"),n=e.status;return t.classList.add(`lh-baseline-status--${n}`),t.textContent=String(e.displayString),t}_renderNumeric(e){let t=m.i18n.formatNumber(e.value,e.granularity||.1),n=this._dom.createElement("div","lh-numeric");return n.textContent=t,n}_renderThumbnail(e){let t=this._dom.createElement("img","lh-thumbnail"),n=e;return t.src=n,t.title=n,t.alt="",t}_rend\
+erUnknown(e,t){console.error(`Unknown details type: ${e}`,t);let n=this._dom.createElement("details","lh-unknown");return this._dom.createChildOf(n,"summary").textContent=`We don\'t know how to render audit details of type \\`${e}\\`. The Lighthouse version that collected this data is likely newer than the Lighthouse version of the report renderer. Expand for the raw JSON.`,this._dom.createChildOf(n,"pre").textContent=JSON.stringify(t,null,2),n}_renderTableValue(e,t){if(e==null)return null;if(typeof e=="object")switch(e.type){case"code":return this._renderCode(e.value);case"link":return this._renderLink(e);case"node":return this.renderNode(e);case"numeric":return this._renderNumeric(e);case"text":return this._renderText(e.value);case"source-location":return this.renderSourceLocation(e);case"url":return this.renderTextURL(e.value);case"baseline-status":return this._renderBaselineStatus(e);default:return this._renderUnknown(e.type,e)}switch(t.valueType){case"bytes":{let n=Number(e);return t\
+his._renderBytes({value:n,granularity:t.granularity})}case"code":{let n=String(e);return this._renderCode(n)}case"ms":{let n={value:Number(e),granularity:t.granularity,displayUnit:t.displayUnit};return this._renderMilliseconds(n)}case"numeric":{let n=Number(e);return this._renderNumeric({value:n,granularity:t.granularity})}case"text":{let n=String(e);return this._renderText(n)}case"thumbnail":{let n=String(e);return this._renderThumbnail(n)}case"timespanMs":{let n=Number(e);return this._renderMilliseconds({value:n})}case"url":{let n=String(e);return gt.some(r=>n.startsWith(r))?this.renderTextURL(n):this._renderCode(n)}default:return this._renderUnknown(t.valueType,e)}}_getDerivedSubItemsHeading(e){return e.subItemsHeading?{key:e.subItemsHeading.key||"",valueType:e.subItemsHeading.valueType||e.valueType,granularity:e.subItemsHeading.granularity||e.granularity,displayUnit:e.subItemsHeading.displayUnit||e.displayUnit,label:""}:null}_renderTableRow(e,t){let n=this._dom.createElement("tr");\
+for(let r of t){if(!r||!r.key){this._dom.createChildOf(n,"td","lh-table-column--empty");continue}let i=e[r.key],a;if(i!=null&&(a=this._renderTableValue(i,r)),a){let l=`lh-table-column--${r.valueType}`;this._dom.createChildOf(n,"td",l).append(a)}else this._dom.createChildOf(n,"td","lh-table-column--empty")}return n}_renderTableRowsFromItem(e,t){let n=this._dom.createFragment();if(n.append(this._renderTableRow(e,t)),!e.subItems)return n;let r=t.map(this._getDerivedSubItemsHeading);if(!r.some(Boolean))return n;for(let i of e.subItems.items){let a=this._renderTableRow(i,r);a.classList.add("lh-sub-item-row"),n.append(a)}return n}_adornEntityGroupRow(e){let t=e.dataset.entity;if(!t)return;let n=this._entities?.find(i=>i.name===t);if(!n)return;let r=this._dom.find("td",e);if(n.category){let i=this._dom.createElement("span");i.classList.add("lh-audit__adorn"),i.textContent=n.category,r.append(" ",i)}if(n.isFirstParty){let i=this._dom.createElement("span");i.classList.add("lh-audit__adorn","lh-\
+audit__adorn1p"),i.textContent=m.strings.firstPartyChipLabel,r.append(" ",i)}if(n.homepage){let i=this._dom.createElement("a");i.href=n.homepage,i.target="_blank",i.title=m.strings.openInANewTabTooltip,i.classList.add("lh-report-icon--external"),r.append(" ",i)}}_renderEntityGroupRow(e,t){let n={...t[0]};n.valueType="text";let r=[n,...t.slice(1)],i=this._dom.createFragment();return i.append(this._renderTableRow(e,r)),this._dom.find("tr",i).classList.add("lh-row--group"),i}_getEntityGroupItems(e){let{items:t,headings:n,sortedBy:r}=e;if(!t.length||e.isEntityGrouped||!t.some(d=>d.entity))return[];let i=new Set(e.skipSumming||[]),a=[];for(let d of n)!d.key||i.has(d.key)||mt.includes(d.valueType)&&a.push(d.key);let l=n[0].key;if(!l)return[];let s=new Map;for(let d of t){let h=typeof d.entity=="string"?d.entity:void 0,p=s.get(h)||{[l]:h||m.strings.unattributable,entity:h};for(let g of a)p[g]=Number(p[g]||0)+Number(d[g]||0);s.set(h,p)}let c=[...s.values()];return r&&c.sort(k.getTableItemSortC\
+omparator(r)),c}_renderTable(e){if(!e.items.length)return this._dom.createElement("span");let t=this._dom.createElement("table","lh-table"),n=this._dom.createChildOf(t,"thead"),r=this._dom.createChildOf(n,"tr");for(let l of e.headings){let c=`lh-table-column--${l.valueType||"text"}`,d=this._dom.createElement("div","lh-text");d.textContent=l.label,this._dom.createChildOf(r,"th",c).append(d)}let i=this._getEntityGroupItems(e),a=this._dom.createChildOf(t,"tbody");if(i.length)for(let l of i){let s=typeof l.entity=="string"?l.entity:void 0,c=this._renderEntityGroupRow(l,e.headings);for(let h of e.items.filter(p=>p.entity===s))c.append(this._renderTableRowsFromItem(h,e.headings));let d=this._dom.findAll("tr",c);s&&d.length&&(d.forEach(h=>h.dataset.entity=s),this._adornEntityGroupRow(d[0])),a.append(c)}else{let l=!0;for(let s of e.items){let c=this._renderTableRowsFromItem(s,e.headings),d=this._dom.findAll("tr",c),h=d[0];if(typeof s.entity=="string"&&(h.dataset.entity=s.entity),e.isEntityGrou\
+ped&&s.entity)h.classList.add("lh-row--group"),this._adornEntityGroupRow(h);else for(let p of d)p.classList.add(l?"lh-row--even":"lh-row--odd");l=!l,a.append(c)}}return t}_renderListValue(e){return e.type==="node"?this.renderNode(e):e.type==="text"?this._renderText(e.value):this.render(e)}_renderList(e){let t=this._dom.createElement("div","lh-list");return e.items.forEach(n=>{if(n.type==="list-section"){let i=this._dom.createElement("div","lh-list-section");n.title&&this._dom.createChildOf(i,"div","lh-list-section__title").append(this._dom.convertMarkdownLinkSnippets(n.title)),n.description&&this._dom.createChildOf(i,"div","lh-list-section__description").append(this._dom.convertMarkdownLinkSnippets(n.description));let a=this._renderListValue(n.value);a&&i.append(a),t.append(i);return}let r=this._renderListValue(n);r&&t.append(r)}),t}_renderChecklist(e){let t=this._dom.createElement("ul","lh-checklist");return Object.values(e.items).forEach(n=>{let r=this._dom.createChildOf(t,"li","lh-c\
+hecklist-item"),i=n.value?"lh-report-plain-icon--checklist-pass":"lh-report-plain-icon--checklist-fail";this._dom.createChildOf(r,"span",`lh-report-plain-icon ${i}`).textContent=n.label}),t}renderNode(e){let t=this._dom.createElement("span","lh-node");if(e.nodeLabel){let a=this._dom.createElement("div");a.textContent=e.nodeLabel,t.append(a)}if(e.snippet){let a=this._dom.createElement("div");a.classList.add("lh-node__snippet"),a.textContent=e.snippet,t.append(a)}if(e.selector&&(t.title=e.selector),e.path&&t.setAttribute("data-path",e.path),e.selector&&t.setAttribute("data-selector",e.selector),e.snippet&&t.setAttribute("data-snippet",e.snippet),!this._fullPageScreenshot)return t;let n=e.lhId&&this._fullPageScreenshot.nodes[e.lhId];if(!n||n.width===0||n.height===0)return t;let r={width:147,height:100},i=V.render(this._dom,this._fullPageScreenshot.screenshot,n,r);return i&&t.prepend(i),t}renderSourceLocation(e){if(!e.url)return null;let t=`${e.url}:${e.line+1}:${e.column}`,n;e.original&&(\
+n=`${e.original.file||"<unmapped>"}:${e.original.line+1}:${e.original.column}`);let r;if(e.urlProvider==="network"&&n)r=this._renderLink({url:e.url,text:n}),r.title=`maps to generated location ${t}`;else if(e.urlProvider==="network"&&!n)r=this.renderTextURL(e.url),this._dom.find(".lh-link",r).textContent+=`:${e.line+1}:${e.column}`;else if(e.urlProvider==="comment"&&n)r=this._renderText(`${n} (from source map)`),r.title=`${t} (from sourceURL)`;else if(e.urlProvider==="comment"&&!n)r=this._renderText(`${t} (from sourceURL)`);else return null;return r.classList.add("lh-source-location"),r.setAttribute("data-source-url",e.url),r.setAttribute("data-source-line",String(e.line)),r.setAttribute("data-source-column",String(e.column)),r}_renderFilmstrip(e){let t=this._dom.createElement("div","lh-filmstrip");for(let n of e.items){let r=this._dom.createChildOf(t,"div","lh-filmstrip__frame"),i=this._dom.createChildOf(r,"img","lh-filmstrip__thumbnail");i.src=n.data,i.alt="Screenshot"}return t}_rend\
+erCode(e){let t=this._dom.createElement("pre","lh-code");return t.textContent=e,t}};var te=class{constructor(e){e==="en-XA"&&(e="de"),this._locale=e,this._cachedNumberFormatters=new Map}_formatNumberWithGranularity(e,t,n={}){if(t!==void 0){let a=-Math.log10(t);Number.isInteger(a)||(console.warn(`granularity of ${t} is invalid. Using 1 instead`),t=1),t<1&&(n={...n},n.minimumFractionDigits=n.maximumFractionDigits=Math.ceil(a)),e=Math.round(e/t)*t,Object.is(e,-0)&&(e=0)}else Math.abs(e)<5e-4&&(e=0);let r,i=[n.minimumFractionDigits,n.maximumFractionDigits,n.style,n.unit,n.unitDisplay,this._locale].join("");return r=this._cachedNumberFormatters.get(i),r||(r=new Intl.NumberFormat(this._locale,n),this._cachedNumberFormatters.set(i,r)),r.format(e).replace(" ","\\xA0")}formatNumber(e,t){return this._formatNumberWithGranularity(e,t)}formatInteger(e){return this._formatNumberWithGranularity(e,1)}formatPercent(e){return new Intl.NumberFormat(this._locale,{style:"percent"}).format(e)}formatBytesToKi\
+B(e,t=void 0){return this._formatNumberWithGranularity(e/1024,t)+"\\xA0KiB"}formatBytesToMiB(e,t=void 0){return this._formatNumberWithGranularity(e/1048576,t)+"\\xA0MiB"}formatBytes(e,t=1){return this._formatNumberWithGranularity(e,t,{style:"unit",unit:"byte",unitDisplay:"long"})}formatBytesWithBestUnit(e,t=.1){return e>=1048576?this.formatBytesToMiB(e,t):e>=1024?this.formatBytesToKiB(e,t):this._formatNumberWithGranularity(e,t,{style:"unit",unit:"byte",unitDisplay:"narrow"})}formatKbps(e,t=void 0){return this._formatNumberWithGranularity(e,t,{style:"unit",unit:"kilobit-per-second",unitDisplay:"short"})}formatMilliseconds(e,t=void 0){return this._formatNumberWithGranularity(e,t,{style:"unit",unit:"millisecond",unitDisplay:"short"})}formatSeconds(e,t=void 0){return this._formatNumberWithGranularity(e/1e3,t,{style:"unit",unit:"second",unitDisplay:"narrow"})}formatDateTime(e){let t={month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"numeric",timeZoneName:"short"},n;try{n=new I\
+ntl.DateTimeFormat(this._locale,t)}catch{t.timeZone="UTC",n=new Intl.DateTimeFormat(this._locale,t)}return n.format(new Date(e))}formatDuration(e){let t=e/1e3;if(Math.round(t)===0)return"None";let n=[],r={day:3600*24,hour:3600,minute:60,second:1};return Object.keys(r).forEach(i=>{let a=r[i],l=Math.floor(t/a);if(l>0){t-=l*a;let s=this._formatNumberWithGranularity(l,1,{style:"unit",unit:i,unitDisplay:"narrow"});n.push(s)}}),n.join(" ")}};function Ee(o){let e=o.createComponent("explodeyGauge");return o.find(".lh-exp-gauge-component",e)}function Le(o,e,t){let n=o.find("div.lh-exp-gauge__wrapper",e);n.className="",n.classList.add("lh-exp-gauge__wrapper",`lh-exp-gauge__wrapper--${k.calculateRating(t.score)}`),vt(o,n,t)}function ft(o,e,t){t=t||o/32;let n=o/t,r=.5*t,i=n+r+t,a=2*Math.PI*n,l=Math.acos(1-.5*Math.pow(.5*t/n,2))*n,s=2*Math.PI*i,c=Math.acos(1-.5*Math.pow(.5*t/i,2))*i;return{radiusInner:n,radiusOuter:i,circumferenceInner:a,circumferenceOuter:s,getArcLength:()=>Math.max(0,Number(e*a))\
+,getMetricArcLength:(d,h=!1)=>{let p=h?0:2*c;return Math.max(0,Number(d*s-r-p))},endDiffInner:l,endDiffOuter:c,strokeWidth:t,strokeGap:r}}function vt(o,e,t){let i=Number(t.score),{radiusInner:a,radiusOuter:l,circumferenceInner:s,circumferenceOuter:c,getArcLength:d,getMetricArcLength:h,endDiffInner:p,endDiffOuter:g,strokeWidth:b,strokeGap:w}=ft(128,i),f=o.find("svg.lh-exp-gauge",e);o.find(".lh-exp-gauge__label",f).textContent=t.title,f.setAttribute("viewBox",[-64,-64/2,128,128/2].join(" ")),f.style.setProperty("--stroke-width",`${b}px`),f.style.setProperty("--circle-meas",(2*Math.PI).toFixed(4));let u=o.find("g.lh-exp-gauge__outer",e),v=o.find("g.lh-exp-gauge__inner",e),_=o.find("circle.lh-cover",u),x=o.find("circle.lh-exp-gauge__arc",v),L=o.find("text.lh-exp-gauge__percentage",v);u.style.setProperty("--scale-initial",String(a/l)),u.style.setProperty("--radius",`${l}px`),_.style.setProperty("--radius",`${.5*(a+l)}px`),_.setAttribute("stroke-width",String(w)),f.style.setProperty("--radiu\
+s",`${a}px`),x.setAttribute("stroke-dasharray",`${d()} ${(s-d()).toFixed(4)}`),x.setAttribute("stroke-dashoffset",String(.25*s-p)),L.textContent=Math.round(i*100).toString();let C=l+b,z=l-b,M=t.auditRefs.filter(y=>y.group==="metrics"&&y.weight),$=M.reduce((y,S)=>y+=S.weight,0),R=.25*c-g-.5*w,N=-.5*Math.PI;u.querySelectorAll(".metric").forEach(y=>{M.map(F=>`metric--${F.id}`).find(F=>y.classList.contains(F))||y.remove()}),M.forEach((y,S)=>{let A=y.acronym??y.id,F=!u.querySelector(`.metric--${A}`),T=o.maybeFind(`g.metric--${A}`,u)||o.createSVGElement("g"),B=o.maybeFind(`.metric--${A} circle.lh-exp-gauge--faded`,u)||o.createSVGElement("circle"),K=o.maybeFind(`.metric--${A} circle.lh-exp-gauge--miniarc`,u)||o.createSVGElement("circle"),q=o.maybeFind(`.metric--${A} circle.lh-exp-gauge-hovertarget`,u)||o.createSVGElement("circle"),P=o.maybeFind(`.metric--${A} text.metric__label`,u)||o.createSVGElement("text"),H=o.maybeFind(`.metric--${A} text.metric__value`,u)||o.createSVGElement("text");T.cl\
+assList.add("metric",`metric--${A}`),B.classList.add("lh-exp-gauge__arc","lh-exp-gauge__arc--metric","lh-exp-gauge--faded"),K.classList.add("lh-exp-gauge__arc","lh-exp-gauge__arc--metric","lh-exp-gauge--miniarc"),q.classList.add("lh-exp-gauge__arc","lh-exp-gauge__arc--metric","lh-exp-gauge-hovertarget");let j=y.weight/$,de=h(j),he=y.result.score?y.result.score*j:0,pe=h(he),Pe=j*c,ue=h(j,!0),ge=k.calculateRating(y.result.score,y.result.scoreDisplayMode);T.style.setProperty("--metric-rating",ge),T.style.setProperty("--metric-color",`var(--color-${ge})`),T.style.setProperty("--metric-offset",`${R}`),T.style.setProperty("--i",S.toString()),B.setAttribute("stroke-dasharray",`${de} ${c-de}`),K.style.setProperty("--metric-array",`${pe} ${c-pe}`),q.setAttribute("stroke-dasharray",`${ue} ${c-ue-g}`),P.classList.add("metric__label"),H.classList.add("metric__value"),P.textContent=A,H.textContent=`+${Math.round(he*100)}`;let me=N+j*Math.PI,Z=Math.cos(me),J=Math.sin(me);switch(!0){case Z>0:H.setAtt\
+ribute("text-anchor","end");break;case Z<0:P.setAttribute("text-anchor","end");break;case Z===0:P.setAttribute("text-anchor","middle"),H.setAttribute("text-anchor","middle");break}switch(!0){case J>0:P.setAttribute("dominant-baseline","hanging");break;case J<0:H.setAttribute("dominant-baseline","hanging");break;case J===0:P.setAttribute("dominant-baseline","middle"),H.setAttribute("dominant-baseline","middle");break}P.setAttribute("x",(C*Z).toFixed(2)),P.setAttribute("y",(C*J).toFixed(2)),H.setAttribute("x",(z*Z).toFixed(2)),H.setAttribute("y",(z*J).toFixed(2)),F&&(T.appendChild(B),T.appendChild(K),T.appendChild(q),T.appendChild(P),T.appendChild(H),u.appendChild(T)),R-=Pe,N+=j*2*Math.PI});let D=u.querySelector(".lh-exp-gauge-underhovertarget")||o.createSVGElement("circle");D.classList.add("lh-exp-gauge__arc","lh-exp-gauge__arc--metric","lh-exp-gauge-hovertarget","lh-exp-gauge-underhovertarget");let I=h(1,!0);if(D.setAttribute("stroke-dasharray",`${I} ${c-I-g}`),D.isConnected||u.prepend\
+(D),f.dataset.listenersSetup)return;f.dataset.listenersSetup=!0,De(f),f.addEventListener("pointerover",y=>{if(y.target===f&&f.classList.contains("state--expanded")){f.classList.remove("state--expanded"),f.classList.contains("state--highlight")&&(f.classList.remove("state--highlight"),o.find(".metric--highlight",f).classList.remove("metric--highlight"));return}if(!(y.target instanceof Element))return;let S=y.target.parentNode;if(S instanceof SVGElement){if(S&&S===v){f.classList.contains("state--expanded")?f.classList.contains("state--highlight")&&(f.classList.remove("state--highlight"),o.find(".metric--highlight",f).classList.remove("metric--highlight")):f.classList.add("state--expanded");return}if(S&&S.classList&&S.classList.contains("metric")){let A=S.style.getPropertyValue("--metric-rating");if(e.style.setProperty("--color-highlight",`var(--color-${A}-secondary)`),!f.classList.contains("state--highlight"))f.classList.add("state--highlight"),S.classList.add("metric--highlight");else{l\
+et F=o.find(".metric--highlight",f);S!==F&&(F.classList.remove("metric--highlight"),S.classList.add("metric--highlight"))}}}}),f.addEventListener("mouseleave",()=>{f.classList.remove("state--highlight"),f.querySelector(".metric--highlight")?.classList.remove("metric--highlight")});async function De(y){if(await new Promise(P=>setTimeout(P,1e3)),y.classList.contains("state--expanded"))return;let S=o.find(".lh-exp-gauge__inner",y),A=`uniq-${Math.random()}`;S.setAttribute("id",A);let F=o.createSVGElement("use");F.setAttribute("href",`#${A}`),y.appendChild(F);let T=2.5;y.style.setProperty("--peek-dur",`${T}s`),y.classList.add("state--peek","state--expanded");let B=()=>{y.classList.remove("state--peek","state--expanded"),F.remove()},K=setTimeout(()=>{y.removeEventListener("mouseenter",q),B()},T*1e3*1.5);function q(){clearTimeout(K),B()}y.addEventListener("mouseenter",q,{once:!0})}}var ne=class extends G{_renderMetric(e){let t=this.dom.createComponent("metric"),n=this.dom.find(".lh-metric",t)\
+;n.id=e.result.id;let r=k.calculateRating(e.result.score,e.result.scoreDisplayMode);n.classList.add(`lh-metric--${r}`);let i=this.dom.find(".lh-metric__title",t);i.textContent=e.result.title;let a=this.dom.find(".lh-metric__value",t);a.textContent=e.result.displayValue||"";let l=this.dom.find(".lh-metric__description",t);if(l.append(this.dom.convertMarkdownLinkSnippets(e.result.description)),e.result.scoreDisplayMode==="error"){l.textContent="",a.textContent="Error!";let s=this.dom.createChildOf(l,"span");s.textContent=e.result.errorMessage||"Report error: no metric information"}else e.result.scoreDisplayMode==="notApplicable"&&(a.textContent="--");return n}_getScoringCalculatorHref(e){let t=e.filter(h=>h.group==="metrics"),n=e.find(h=>h.id==="interactive"),r=e.find(h=>h.id==="first-cpu-idle"),i=e.find(h=>h.id==="first-meaningful-paint");n&&t.push(n),r&&t.push(r),i&&typeof i.result.score=="number"&&t.push(i);let a=h=>Math.round(h*100)/100,s=[...t.map(h=>{let p;return typeof h.result.nu\
+mericValue=="number"?(p=h.id==="cumulative-layout-shift"?a(h.result.numericValue):Math.round(h.result.numericValue),p=p.toString()):p="null",[h.acronym||h.id,p]})];m.reportJson&&(s.push(["device",m.reportJson.configSettings.formFactor]),s.push(["version",m.reportJson.lighthouseVersion]));let c=new URLSearchParams(s),d=new URL("https://googlechrome.github.io/lighthouse/scorecalc/");return d.hash=c.toString(),d.href}overallImpact(e,t){if(!e.result.metricSavings)return{overallImpact:0,overallLinearImpact:0};let n=0,r=0;for(let[i,a]of Object.entries(e.result.metricSavings)){if(a===void 0)continue;let l=t.find(g=>g.acronym===i);if(!l||l.result.score===null)continue;let s=l.result.numericValue;if(!s)continue;let c=a/s*l.weight;r+=c;let d=l.result.scoringOptions;if(!d)continue;let p=(E.computeLogNormalScore(d,s-a)-l.result.score)*l.weight;n+=p}return{overallImpact:n,overallLinearImpact:r}}render(e,t,n){let r=m.strings,i=this.dom.createElement("div","lh-category");i.id=e.id,i.append(this.rende\
+rCategoryHeader(e,t,n));let a=e.auditRefs.filter(p=>p.group==="metrics");if(a.length){let[p,g]=this.renderAuditGroup(t.metrics),b=this.dom.createElement("input","lh-metrics-toggle__input"),w=`lh-metrics-toggle${m.getUniqueSuffix()}`;b.setAttribute("aria-label","Toggle the display of metric descriptions"),b.type="checkbox",b.id=w,p.prepend(b);let f=this.dom.find(".lh-audit-group__header",p),u=this.dom.createChildOf(f,"label","lh-metrics-toggle__label");u.htmlFor=w;let v=this.dom.createChildOf(u,"span","lh-metrics-toggle__labeltext--show"),_=this.dom.createChildOf(u,"span","lh-metrics-toggle__labeltext--hide");v.textContent=m.strings.expandView,_.textContent=m.strings.collapseView;let x=this.dom.createElement("div","lh-metrics-container");if(p.insertBefore(x,g),a.forEach(L=>{x.append(this._renderMetric(L))}),i.querySelector(".lh-gauge__wrapper")){let L=this.dom.find(".lh-category-header__description",i),C=this.dom.createChildOf(L,"div","lh-metrics__disclaimer"),z=this.dom.convertMarkdown\
+LinkSnippets(r.varianceDisclaimer);C.append(z);let M=this.dom.createChildOf(C,"a","lh-calclink");M.target="_blank",M.textContent=r.calculatorLink,this.dom.safelySetHref(M,this._getScoringCalculatorHref(e.auditRefs))}p.classList.add("lh-audit-group--metrics"),i.append(p)}let l=this.dom.createChildOf(i,"div","lh-filmstrip-container"),c=e.auditRefs.find(p=>p.id==="screenshot-thumbnails")?.result;if(c?.details){l.id=c.id;let p=this.detailsRenderer.render(c.details);p&&l.append(p)}let d=this.renderFilterableSection(e,t,["insights","diagnostics"],a);if(d&&(d.classList.add("lh-perf-audits"),i.append(d)),(!n||n?.gatherMode==="navigation")&&e.score!==null){let p=Ee(this.dom);Le(this.dom,p,e),this.dom.find(".lh-score__gauge",i).replaceWith(p)}return i}renderFilterableSection(e,t,n,r){if(n.some(u=>!t[u]))return null;let i=this.dom.createElement("div"),a=u=>u.group??"",s=e.auditRefs.filter(u=>n.includes(a(u))).map(u=>{let{overallImpact:v,overallLinearImpact:_}=this.overallImpact(u,r),x=u.result.gu\
+idanceLevel||1,L=this.renderAudit(u);return{auditRef:u,auditEl:L,overallImpact:v,overallLinearImpact:_,guidanceLevel:x}}),c=s.filter(u=>!k.showAsPassed(u.auditRef.result)),d=s.filter(u=>k.showAsPassed(u.auditRef.result)),h={};for(let u of n){let v=this.renderAuditGroup(t[u]);v[0].classList.add(`lh-audit-group--${u}`),h[u]=v}function p(u){for(let v of s)if(u==="All")v.auditEl.hidden=!1;else{let _=v.auditRef.result.metricSavings?.[u]===void 0;v.auditEl.hidden=_}c.sort((v,_)=>{let x=v.auditRef.result.score||0,L=_.auditRef.result.score||0;if(x!==L)return x-L;if(u!=="All"){let C=v.auditRef.result.metricSavings?.[u]??-1,z=_.auditRef.result.metricSavings?.[u]??-1;if(C!==z)return z-C}return v.overallImpact!==_.overallImpact?_.overallImpact*_.guidanceLevel-v.overallImpact*v.guidanceLevel:v.overallImpact===0&&_.overallImpact===0&&v.overallLinearImpact!==_.overallLinearImpact?_.overallLinearImpact*_.guidanceLevel-v.overallLinearImpact*v.guidanceLevel:_.guidanceLevel-v.guidanceLevel});for(let v of\
+ c){if(!v.auditRef.group)continue;let _=h[a(v.auditRef)];if(!_)continue;let[x,L]=_;x.insertBefore(v.auditEl,L)}}let g=new Set;for(let u of c){let v=u.auditRef.result.metricSavings||{};for(let[_,x]of Object.entries(v))typeof x=="number"&&g.add(_)}let b=r.filter(u=>u.acronym&&g.has(u.acronym));b.length&&this.renderMetricAuditFilter(b,i,p),p("All");for(let u of n)if(c.some(v=>a(v.auditRef)===u)){let v=h[u];if(!v)continue;i.append(v[0])}if(!d.length)return i;let w={auditRefsOrEls:d.map(u=>u.auditEl),groupDefinitions:t},f=this.renderClump("passed",w);return i.append(f),i}renderMetricAuditFilter(e,t,n){let r=this.dom.createElement("div","lh-metricfilter"),i=this.dom.createChildOf(r,"span","lh-metricfilter__text");i.textContent=m.strings.showRelevantAudits;let a=[{acronym:"All",id:"All"},...e],l=m.getUniqueSuffix();for(let s of a){let c=`metric-${s.acronym}-${l}`,d=this.dom.createChildOf(r,"input","lh-metricfilter__radio");d.type="radio",d.name=`metricsfilter-${l}`,d.id=c;let h=this.dom.creat\
+eChildOf(r,"label","lh-metricfilter__label");h.htmlFor=c,h.title="result"in s?s.result.title:"",h.textContent=s.acronym||s.id,s.acronym==="All"&&(d.checked=!0,h.classList.add("lh-metricfilter__label--active")),t.append(r),d.addEventListener("input",p=>{for(let b of t.querySelectorAll("label.lh-metricfilter__label"))b.classList.toggle("lh-metricfilter__label--active",b.htmlFor===c);t.classList.toggle("lh-category--filtered",s.acronym!=="All"),n(s.acronym||"All");let g=t.querySelectorAll("div.lh-audit-group, details.lh-audit-group");for(let b of g){b.hidden=!1;let w=Array.from(b.querySelectorAll("div.lh-audit")),f=!!w.length&&w.every(u=>u.hidden);b.hidden=f}})}}};var re=class{constructor(e){this._dom=e,this._opts={}}renderReport(e,t,n){if(!this._dom.rootEl&&t){console.warn("Please adopt the new report API in renderer/api.js.");let i=t.closest(".lh-root");i?this._dom.rootEl=i:(t.classList.add("lh-root","lh-vars"),this._dom.rootEl=t)}else this._dom.rootEl&&t&&(this._dom.rootEl=t);n&&(this.\
+_opts=n),this._dom.setLighthouseChannel(e.configSettings.channel||"unknown");let r=k.prepareReportResult(e);return this._dom.rootEl.textContent="",this._dom.rootEl.append(this._renderReport(r)),this._opts.occupyEntireViewport&&this._dom.rootEl.classList.add("lh-max-viewport"),this._dom.rootEl}_renderReportTopbar(e){let t=this._dom.createComponent("topbar"),n=this._dom.find("a.lh-topbar__url",t);return n.textContent=e.finalDisplayedUrl,n.title=e.finalDisplayedUrl,this._dom.safelySetHref(n,e.finalDisplayedUrl),t}_renderReportHeader(){let e=this._dom.createComponent("heading"),t=this._dom.createComponent("scoresWrapper");return this._dom.find(".lh-scores-wrapper-placeholder",e).replaceWith(t),e}_renderReportFooter(e){let t=this._dom.createComponent("footer");return this._renderMetaBlock(e,t),this._dom.find(".lh-footer__version_issue",t).textContent=m.strings.footerIssue,this._dom.find(".lh-footer__version",t).textContent=e.lighthouseVersion,t}_renderMetaBlock(e,t){let n=k.getEmulationDesc\
+riptions(e.configSettings||{}),r=e.userAgent.match(/(\\w*Chrome\\/[\\d.]+)/),i=Array.isArray(r)?r[1].replace("/"," ").replace("Chrome","Chromium"):"Chromium",a=e.configSettings.channel,l=e.environment.benchmarkIndex.toFixed(0),s=e.environment.credits?.["axe-core"],c=[`${m.strings.runtimeSettingsBenchmark}: ${l}`,`${m.strings.runtimeSettingsCPUThrottling}: ${n.cpuThrottling}`];n.screenEmulation&&c.push(`${m.strings.runtimeSettingsScreenEmulation}: ${n.screenEmulation}`),s&&c.push(`${m.strings.runtimeSettingsAxeVersion}: ${s}`);let d=m.strings.runtimeAnalysisWindow;e.gatherMode==="timespan"?d=m.strings.runtimeAnalysisWindowTimespan:e.gatherMode==="snapshot"&&(d=m.strings.runtimeAnalysisWindowSnapshot);let h=[["date",`Captured at ${m.i18n.formatDateTime(e.fetchTime)}`],["devices",`${n.deviceEmulation} with Lighthouse ${e.lighthouseVersion}`,c.join(`\n`)],["samples-one",m.strings.runtimeSingleLoad,m.strings.runtimeSingleLoadTooltip],["stopwatch",d],["networkspeed",`${n.summary}`,`${m.strings.r\
+untimeSettingsNetworkThrottling}: ${n.networkThrottling}`],["chrome",`Using ${i}`+(a?` with ${a}`:""),`${m.strings.runtimeSettingsUANetwork}: "${e.environment.networkUserAgent}"`]],p=this._dom.find(".lh-meta__items",t);for(let[g,b,w]of h){let f=this._dom.createChildOf(p,"li","lh-meta__item");if(f.textContent=b,w){f.classList.add("lh-tooltip-boundary");let u=this._dom.createChildOf(f,"div","lh-tooltip");u.textContent=w}f.classList.add("lh-report-icon",`lh-report-icon--${g}`)}}_renderReportWarnings(e){if(!e.runWarnings||e.runWarnings.length===0)return this._dom.createElement("div");let t=this._dom.createComponent("warningsToplevel"),n=this._dom.find(".lh-warnings__msg",t);n.textContent=m.strings.toplevelWarningsMessage;let r=[];for(let i of e.runWarnings){let a=this._dom.createElement("li");a.append(this._dom.convertMarkdownLinkSnippets(i)),r.push(a)}return this._dom.find("ul",t).append(...r),t}_renderScoreGauges(e,t,n){let r=[],i=[];for(let a of Object.values(e.categories)){let s=(n[a.i\
+d]||t).renderCategoryScore(a,e.categoryGroups||{},{gatherMode:e.gatherMode}),c=this._dom.find("a.lh-gauge__wrapper, a.lh-fraction__wrapper",s);c&&(this._dom.safelySetHref(c,`#${a.id}`),c.addEventListener("click",d=>{if(!c.matches(\'[href^="#"]\'))return;let h=c.getAttribute("href"),p=this._dom.rootEl;if(!h||!p)return;let g=this._dom.find(h,p);d.preventDefault(),g.scrollIntoView()}),this._opts.onPageAnchorRendered?.(c)),k.isPluginCategory(a.id)?i.push(s):r.push(s)}return[...r,...i]}_renderReport(e){m.apply({providedStrings:e.i18n.rendererFormattedStrings,i18n:new te(e.configSettings.locale),reportJson:e});let t=new X(this._dom,{fullPageScreenshot:e.fullPageScreenshot??void 0,entities:e.entities}),n=new G(this._dom,t),r={performance:new ne(this._dom,t)},i=this._dom.createElement("div");i.append(this._renderReportHeader());let a=this._dom.createElement("div","lh-container"),l=this._dom.createElement("div","lh-report");l.append(this._renderReportWarnings(e));let s;Object.keys(e.categories).l\
+ength===1?i.classList.add("lh-header--solo-category"):s=this._dom.createElement("div","lh-scores-header");let d=this._dom.createElement("div");if(d.classList.add("lh-scorescale-wrap"),d.append(this._dom.createComponent("scorescale")),s){let b=this._dom.find(".lh-scores-container",i);s.append(...this._renderScoreGauges(e,n,r)),b.append(s,d);let w=this._dom.createElement("div","lh-sticky-header");w.append(...this._renderScoreGauges(e,n,r)),a.append(w)}let h=this._dom.createElement("div","lh-categories");l.append(h);let p={gatherMode:e.gatherMode};for(let b of Object.values(e.categories)){let w=r[b.id]||n;w.dom.createChildOf(h,"div","lh-category-wrapper").append(w.render(b,e.categoryGroups,p))}n.injectFinalScreenshot(h,e.audits,d);let g=this._dom.createFragment();return this._opts.omitGlobalStyles||g.append(this._dom.createComponent("styles")),this._opts.omitTopbar||g.append(this._renderReportTopbar(e)),g.append(a),l.append(this._renderReportFooter(e)),a.append(i,l),e.fullPageScreenshot&&\
+V.installFullPageScreenshot(this._dom.rootEl,e.fullPageScreenshot.screenshot),g}};function W(o,e){let t=o.rootEl;typeof e>"u"?t.classList.toggle("lh-dark"):t.classList.toggle("lh-dark",e)}var bt=typeof btoa<"u"?btoa:o=>Buffer.from(o).toString("base64"),_t=typeof atob<"u"?atob:o=>Buffer.from(o,"base64").toString();async function wt(o,e){let t=new TextEncoder().encode(o);if(e.gzip)if(typeof CompressionStream<"u"){let i=new CompressionStream("gzip"),a=i.writable.getWriter();a.write(t),a.close();let l=await new Response(i.readable).arrayBuffer();t=new Uint8Array(l)}else t=window.pako.gzip(o);let n="",r=5e3;for(let i=0;i<t.length;i+=r)n+=String.fromCharCode(...t.subarray(i,i+r));return bt(n)}function yt(o,e){let t=_t(o),n=Uint8Array.from(t,r=>r.charCodeAt(0));return e.gzip?window.pako.ungzip(n,{to:"string"}):new TextDecoder().decode(n)}var Se={toBase64:wt,fromBase64:yt};function se(){let o=window.location.host.endsWith(".vercel.app"),e=new URLSearchParams(window.location.search).has("dev");\
+return o?`https://${window.location.host}/gh-pages`:e?"http://localhost:7333":"https://googlechrome.github.io/lighthouse"}function ce(o){let e=o.generatedTime,t=o.fetchTime||e;return`${o.lighthouseVersion}-${o.finalDisplayedUrl}-${t}`}function xt(o,e,t){let n=new URL(e).origin;window.addEventListener("message",function i(a){a.origin===n&&r&&a.data.opened&&(r.postMessage(o,n),window.removeEventListener("message",i))});let r=window.open(e,t)}async function Ce(o,e,t){let n=new URL(e),r=!!window.CompressionStream;n.hash=await Se.toBase64(JSON.stringify(o),{gzip:r}),r&&n.searchParams.set("gzip","1"),window.open(n.toString(),t)}async function Ae(o){let e="viewer-"+ce(o),t=se()+"/viewer/";await Ce({lhr:o},t,e)}async function ze(o){let e="viewer-"+ce(o),t=se()+"/viewer/";xt({lhr:o},t,e)}function Me(o){if(!o.audits["script-treemap-data"].details)throw new Error("no script treemap data found");let t={lhr:{mainDocumentUrl:o.mainDocumentUrl,finalUrl:o.finalUrl,finalDisplayedUrl:o.finalDisplayedUrl\
+,audits:{"script-treemap-data":o.audits["script-treemap-data"]},configSettings:{locale:o.configSettings.locale}}},n=se()+"/treemap/",r="treemap-"+ce(o);Ce(t,n,r)}var oe=class{constructor(e){this._dom=e,this._toggleEl,this._menuEl,this.onDocumentKeyDown=this.onDocumentKeyDown.bind(this),this.onToggleClick=this.onToggleClick.bind(this),this.onToggleKeydown=this.onToggleKeydown.bind(this),this.onMenuFocusOut=this.onMenuFocusOut.bind(this),this.onMenuKeydown=this.onMenuKeydown.bind(this),this._getNextMenuItem=this._getNextMenuItem.bind(this),this._getNextSelectableNode=this._getNextSelectableNode.bind(this),this._getPreviousMenuItem=this._getPreviousMenuItem.bind(this)}setup(e){this._toggleEl=this._dom.find(".lh-topbar button.lh-tools__button",this._dom.rootEl),this._toggleEl.addEventListener("click",this.onToggleClick),this._toggleEl.addEventListener("keydown",this.onToggleKeydown),this._menuEl=this._dom.find(".lh-topbar div.lh-tools__dropdown",this._dom.rootEl),this._menuEl.addEventListe\
+ner("keydown",this.onMenuKeydown),this._menuEl.addEventListener("click",e)}close(){this._toggleEl.classList.remove("lh-active"),this._toggleEl.setAttribute("aria-expanded","false"),this._menuEl.contains(this._dom.document().activeElement)&&this._toggleEl.focus(),this._menuEl.removeEventListener("focusout",this.onMenuFocusOut),this._dom.document().removeEventListener("keydown",this.onDocumentKeyDown)}open(e){this._toggleEl.classList.contains("lh-active")?e.focus():this._menuEl.addEventListener("transitionend",()=>{e.focus()},{once:!0}),this._toggleEl.classList.add("lh-active"),this._toggleEl.setAttribute("aria-expanded","true"),this._menuEl.addEventListener("focusout",this.onMenuFocusOut),this._dom.document().addEventListener("keydown",this.onDocumentKeyDown)}onToggleClick(e){e.preventDefault(),e.stopImmediatePropagation(),this._toggleEl.classList.contains("lh-active")?this.close():this.open(this._getNextMenuItem())}onToggleKeydown(e){switch(e.code){case"ArrowUp":e.preventDefault(),this\
+.open(this._getPreviousMenuItem());break;case"ArrowDown":case"Enter":case" ":e.preventDefault(),this.open(this._getNextMenuItem());break;default:}}onMenuKeydown(e){let t=e.target;switch(e.code){case"ArrowUp":e.preventDefault(),this._getPreviousMenuItem(t).focus();break;case"ArrowDown":e.preventDefault(),this._getNextMenuItem(t).focus();break;case"Home":e.preventDefault(),this._getNextMenuItem().focus();break;case"End":e.preventDefault(),this._getPreviousMenuItem().focus();break;default:}}onDocumentKeyDown(e){e.keyCode===27&&this.close()}onMenuFocusOut(e){let t=e.relatedTarget;this._menuEl.contains(t)||this.close()}_getNextSelectableNode(e,t){let n=e.filter(i=>i instanceof HTMLElement).filter(i=>!(i.hasAttribute("disabled")||window.getComputedStyle(i).display==="none")),r=t?n.indexOf(t)+1:0;return r>=n.length&&(r=0),n[r]}_getNextMenuItem(e){let t=Array.from(this._menuEl.childNodes);return this._getNextSelectableNode(t,e)}_getPreviousMenuItem(e){let t=Array.from(this._menuEl.childNodes).\
+reverse();return this._getNextSelectableNode(t,e)}};var ie=class{constructor(e,t){this.lhr,this._reportUIFeatures=e,this._dom=t,this._dropDownMenu=new oe(this._dom),this._copyAttempt=!1,this.topbarEl,this.categoriesEl,this.stickyHeaderEl,this.highlightEl,this.onDropDownMenuClick=this.onDropDownMenuClick.bind(this),this.onKeyUp=this.onKeyUp.bind(this),this.onCopy=this.onCopy.bind(this),this.collapseAllDetails=this.collapseAllDetails.bind(this)}enable(e){this.lhr=e,this._dom.rootEl.addEventListener("keyup",this.onKeyUp),this._dom.document().addEventListener("copy",this.onCopy),this._dropDownMenu.setup(this.onDropDownMenuClick),this._setUpCollapseDetailsAfterPrinting(),this._dom.find(".lh-topbar__logo",this._dom.rootEl).addEventListener("click",()=>W(this._dom)),this._setupStickyHeader()}onDropDownMenuClick(e){e.preventDefault();let t=e.target;if(!(!t||!t.hasAttribute("data-action"))){switch(t.getAttribute("data-action")){case"copy":this.onCopyButtonClick();break;case"print-summary":this.\
+collapseAllDetails(),this._print();break;case"print-expanded":this.expandAllDetails(),this._print();break;case"save-json":{let n=JSON.stringify(this.lhr,null,2);this._reportUIFeatures._saveFile(new Blob([n],{type:"application/json"}));break}case"save-html":{let n=this._reportUIFeatures.getReportHtml();try{this._reportUIFeatures._saveFile(new Blob([n],{type:"text/html"}))}catch(r){this._dom.fireEventOn("lh-log",this._dom.document(),{cmd:"error",msg:"Could not export as HTML. "+r.message})}break}case"open-viewer":{this._dom.isDevTools()?Ae(this.lhr):ze(this.lhr);break}case"save-gist":{this._reportUIFeatures.saveAsGist();break}case"toggle-dark":{W(this._dom);break}case"view-unthrottled-trace":this._reportUIFeatures._opts.onViewTrace?.()}this._dropDownMenu.close()}}onCopy(e){this._copyAttempt&&e.clipboardData&&(e.preventDefault(),e.clipboardData.setData("text/plain",JSON.stringify(this.lhr,null,2)),this._dom.fireEventOn("lh-log",this._dom.document(),{cmd:"log",msg:"Report JSON copied to cl\
+ipboard"})),this._copyAttempt=!1}onCopyButtonClick(){this._dom.fireEventOn("lh-analytics",this._dom.document(),{name:"copy"});try{this._dom.document().queryCommandSupported("copy")&&(this._copyAttempt=!0,this._dom.document().execCommand("copy")||(this._copyAttempt=!1,this._dom.fireEventOn("lh-log",this._dom.document(),{cmd:"warn",msg:"Your browser does not support copy to clipboard."})))}catch(e){this._copyAttempt=!1,this._dom.fireEventOn("lh-log",this._dom.document(),{cmd:"log",msg:e.message})}}onKeyUp(e){(e.ctrlKey||e.metaKey)&&e.keyCode===80&&this._dropDownMenu.close()}expandAllDetails(){this._dom.findAll(".lh-categories details",this._dom.rootEl).map(t=>t.open=!0)}collapseAllDetails(){this._dom.findAll(".lh-categories details",this._dom.rootEl).map(t=>t.open=!1)}_print(){this._reportUIFeatures._opts.onPrintOverride?this._reportUIFeatures._opts.onPrintOverride(this._dom.rootEl):self.print()}resetUIState(){this._dropDownMenu.close()}_getScrollParent(e){let{overflowY:t}=window.getComp\
+utedStyle(e);return t!=="visible"&&t!=="hidden"?e:e.parentElement?this._getScrollParent(e.parentElement):document}_setUpCollapseDetailsAfterPrinting(){"onbeforeprint"in self?self.addEventListener("afterprint",this.collapseAllDetails):self.matchMedia("print").addListener(t=>{t.matches?this.expandAllDetails():this.collapseAllDetails()})}_setupStickyHeader(){this.topbarEl=this._dom.find("div.lh-topbar",this._dom.rootEl),this.categoriesEl=this._dom.find("div.lh-categories",this._dom.rootEl),requestAnimationFrame(()=>requestAnimationFrame(()=>{try{this.stickyHeaderEl=this._dom.find("div.lh-sticky-header",this._dom.rootEl)}catch{return}this.highlightEl=this._dom.createChildOf(this.stickyHeaderEl,"div","lh-highlighter");let e=this._getScrollParent(this._dom.find(".lh-container",this._dom.rootEl));e.addEventListener("scroll",()=>this._updateStickyHeader());let t=e instanceof window.Document?document.documentElement:e;new window.ResizeObserver(()=>this._updateStickyHeader()).observe(t)}))}_upda\
+teStickyHeader(){if(!this.stickyHeaderEl)return;let e=this.topbarEl.getBoundingClientRect().bottom,t=this.categoriesEl.getBoundingClientRect().top,n=e>=t,i=Array.from(this._dom.rootEl.querySelectorAll(".lh-category")).filter(h=>h.getBoundingClientRect().top-window.innerHeight/2<0),a=i.length>0?i.length-1:0,l=this.stickyHeaderEl.querySelectorAll(".lh-gauge__wrapper, .lh-fraction__wrapper"),s=l[a],c=l[0].getBoundingClientRect().left,d=s.getBoundingClientRect().left-c;this.highlightEl.style.transform=`translate(${d}px)`,this.stickyHeaderEl.classList.toggle("lh-sticky-header--visible",n)}};function kt(o,e){let t=e?new Date(e):new Date,n=t.toLocaleTimeString("en-US",{hour12:!1}),r=t.toLocaleDateString("en-US",{year:"numeric",month:"2-digit",day:"2-digit"}).split("/");r.unshift(r.pop());let i=r.join("-");return`${o}_${i}_${n}`.replace(/[/?<>\\\\:*|"]/g,"-")}function Te(o){let e=new URL(o.finalDisplayedUrl).hostname;return kt(e,o.fetchTime)}function Et(o){return Array.from(o.tBodies[0].rows)}va\
+r ae=class{constructor(e,t={}){this.json,this._dom=e,this._opts=t,this._topbar=t.omitTopbar?null:new ie(this,e),this.onMediaQueryChange=this.onMediaQueryChange.bind(this)}initFeatures(e){this.json=e,this._fullPageScreenshot=E.getFullPageScreenshot(e),this._topbar&&(this._topbar.enable(e),this._topbar.resetUIState()),this._setupMediaQueryListeners(),this._setupThirdPartyFilter(),this._setupElementScreenshotOverlay(this._dom.rootEl);let t=this._dom.isDevTools()||this._opts.disableDarkMode||this._opts.disableAutoDarkModeAndFireworks;!t&&window.matchMedia("(prefers-color-scheme: dark)").matches&&W(this._dom,!0);let r=["performance","accessibility","best-practices","seo"].every(s=>{let c=e.categories[s];return c&&c.score===1}),i=this._opts.disableFireworks||this._opts.disableAutoDarkModeAndFireworks;if(r&&!i&&(this._enableFireworks(),t||W(this._dom,!0)),e.categories.performance&&e.categories.performance.auditRefs.some(s=>!!(s.group==="metrics"&&e.audits[s.id].errorMessage))){let s=this._dom\
+.find("input.lh-metrics-toggle__input",this._dom.rootEl);s.checked=!0}this.json.audits["script-treemap-data"]&&this.json.audits["script-treemap-data"].details&&this.addButton({text:m.strings.viewTreemapLabel,icon:"treemap",onClick:()=>Me(this.json)}),this._opts.onViewTrace&&(e.configSettings.throttlingMethod==="simulate"?this._dom.find(\'a[data-action="view-unthrottled-trace"]\',this._dom.rootEl).classList.remove("lh-hidden"):this.addButton({text:m.strings.viewTraceLabel,onClick:()=>this._opts.onViewTrace?.()})),this._opts.getStandaloneReportHTML&&this._dom.find(\'a[data-action="save-html"]\',this._dom.rootEl).classList.remove("lh-hidden");for(let s of this._dom.findAll("[data-i18n]",this._dom.rootEl)){let d=s.getAttribute("data-i18n");s.textContent=m.strings[d]}}addButton(e){let t=this._dom.rootEl.querySelector(".lh-audit-group--metrics");if(!t)return;let n=t.querySelector(".lh-buttons");n||(n=this._dom.createChildOf(t,"div","lh-buttons"));let r=["lh-button"];e.icon&&(r.push("lh-report-ic\
+on"),r.push(`lh-report-icon--${e.icon}`));let i=this._dom.createChildOf(n,"button",r.join(" "));return i.textContent=e.text,i.addEventListener("click",e.onClick),i}resetUIState(){this._topbar&&this._topbar.resetUIState()}getReportHtml(){if(!this._opts.getStandaloneReportHTML)throw new Error("`getStandaloneReportHTML` is not set");return this.resetUIState(),this._opts.getStandaloneReportHTML()}saveAsGist(){throw new Error("Cannot save as gist from base report")}_enableFireworks(){this._dom.find(".lh-scores-container",this._dom.rootEl).classList.add("lh-score100")}_setupMediaQueryListeners(){let e=self.matchMedia("(max-width: 500px)");e.addListener(this.onMediaQueryChange),this.onMediaQueryChange(e)}_resetUIState(){this._topbar&&this._topbar.resetUIState()}onMediaQueryChange(e){this._dom.rootEl.classList.toggle("lh-narrow",e.matches)}_setupThirdPartyFilter(){let e=["uses-rel-preconnect","third-party-facades","network-dependency-tree-insight"],t=["legacy-javascript","legacy-javascript-ins\
+ight"];Array.from(this._dom.rootEl.querySelectorAll("table.lh-table")).filter(i=>i.querySelector("td.lh-table-column--url, td.lh-table-column--source-location")).filter(i=>{let a=i.closest(".lh-audit");if(!a)throw new Error(".lh-table not within audit");return!e.includes(a.id)}).forEach(i=>{let a=Et(i),l=a.filter(f=>!f.classList.contains("lh-sub-item-row")),s=this._getThirdPartyRows(l,E.getFinalDisplayedUrl(this.json)),c=a.some(f=>f.classList.contains("lh-row--even")),d=this._dom.createComponent("3pFilter"),h=this._dom.find("input",d);h.addEventListener("change",f=>{let u=f.target instanceof HTMLInputElement&&!f.target.checked,v=!0,_=l[0];for(;_;){let x=u&&s.includes(_);do _.classList.toggle("lh-row--hidden",x),c&&(_.classList.toggle("lh-row--even",!x&&v),_.classList.toggle("lh-row--odd",!x&&!v)),_=_.nextElementSibling;while(_&&_.classList.contains("lh-sub-item-row"));x||(v=!v)}});let p=s.filter(f=>!f.classList.contains("lh-row--group")).length;this._dom.find(".lh-3p-filter-count",d).t\
+extContent=`${p}`,this._dom.find(".lh-3p-ui-string",d).textContent=m.strings.thirdPartyResourcesLabel;let g=s.length===l.length,b=!s.length;if((g||b)&&(this._dom.find("div.lh-3p-filter",d).hidden=!0),!i.parentNode)return;i.parentNode.insertBefore(d,i);let w=i.closest(".lh-audit");if(!w)throw new Error(".lh-table not within audit");t.includes(w.id)&&!g&&h.click()})}_setupElementScreenshotOverlay(e){this._fullPageScreenshot&&V.installOverlayFeature({dom:this._dom,rootEl:e,overlayContainerEl:e,fullPageScreenshot:this._fullPageScreenshot})}_getThirdPartyRows(e,t){let n=E.getEntityFromUrl(t,this.json.entities),r=this.json.entities?.find(a=>a.isFirstParty===!0)?.name,i=[];for(let a of e){if(r){if(!a.dataset.entity||a.dataset.entity===r)continue}else{let l=a.querySelector("div.lh-text__url");if(!l)continue;let s=l.dataset.url;if(!s||!(E.getEntityFromUrl(s,this.json.entities)!==n))continue}i.push(a)}return i}_saveFile(e){let t=e.type.match("json")?".json":".html",n=Te({finalDisplayedUrl:E.getF\
+inalDisplayedUrl(this.json),fetchTime:this.json.fetchTime})+t;this._opts.onSaveFileOverride?this._opts.onSaveFileOverride(e,n):this._dom.saveFile(e,n)}};function Fe(o,e={}){let t=document.createElement("article");t.classList.add("lh-root","lh-vars");let n=new ee(t.ownerDocument,t);return new re(n).renderReport(o,t,e),new ae(n,e).initFeatures(o),t}var le=class{constructor(e){this.el=e;let t=document.createElement("style");if(t.textContent=`\n      #lh-log {\n        position: fixed;\n        background-color: #323232;\n        color: #fff;\n        min-height: 48px;\n        min-width: 288px;\n        padding: 16px 24px;\n        box-shadow: 0 2px 5px 0 rgba(0, 0, 0, 0.26);\n        border-radius: 2px;\n        margin: 12px;\n        font-size: 14px;\n        cursor: default;\n        transition: transform 0.3s, opacity 0.3s;\n        transform: translateY(100px);\n        opacity: 0;\n        bottom: 0;\n        left: 0;\n        z-index: 3;\n        display: flex;\n        flex-direction: row;\n        ju\
+stify-content: center;\n        align-items: center;\n      }\n      \n      #lh-log.lh-show {\n        opacity: 1;\n        transform: translateY(0);\n      }\n    `,!this.el.parentNode)throw new Error("element needs to be in the DOM");this.el.parentNode.insertBefore(t,this.el),this._id=void 0}log(e,t=!0){this._id&&clearTimeout(this._id),this.el.textContent=e,this.el.classList.add("lh-show"),t&&(this._id=setTimeout(()=>{this.el.classList.remove("lh-show")},7e3))}warn(e){this.log("Warning: "+e)}error(e){this.log(e),setTimeout(()=>{throw new Error(e)},0)}hide(){this._id&&clearTimeout(this._id),this.el.classList.remove("lh-show")}};function Lt(){let o=window.__LIGHTHOUSE_JSON__,e=Fe(o,{occupyEntireViewport:!0,getStandaloneReportHTML(){return document.documentElement.outerHTML}});document.body.append(e),document.addEventListener("lh-analytics",t=>{let n=t;"gtag"in window&&window.gtag("event",n.detail.name,n.detail.data??{})}),document.addEventListener("lh-log",t=>{let n=document.querySelector("di\
+v#lh-log");if(!n)return;let r=new le(n),i=t.detail;switch(i.cmd){case"log":r.log(i.msg);break;case"warn":r.warn(i.msg);break;case"error":r.error(i.msg);break;case"hide":r.hide();break}})}window.__initLighthouseReport__=Lt;})();\n/**\n * @license\n * Copyright 2017 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n */\n/**\n * @license\n * Copyright 2023 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n */\n/**\n * @license\n * Copyright 2020 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n */\n/**\n * @license Copyright 2023 The Lighthouse Authors. All Rights Reserved.\n * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0\n * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\
+ License for the specific language governing permissions and limitations under the License.\n*/\n/**\n * @license\n * Copyright 2018 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n */\n/**\n * @license\n * Copyright 2017 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n *\n * Dummy text for ensuring report robustness: <\\/script> pre$`post %%LIGHTHOUSE_JSON%%\n * (this is handled by terser)\n */\n/**\n * @license\n * Copyright 2021 Google LLC\n * SPDX-License-Identifier: Apache-2.0\n */\n'
 };
 
 // report/generator/report-generator.js
@@ -56597,17 +57329,19 @@ vs: ${JSON.stringify(normalizedAuditSettings[k], null, 2)}`
       "insights/insight-audit.js"
     ];
     const fileList = [
-      ...["accessibility", "audit.js", "autocomplete.js", "baseline.js", "bf-cache.js", "bootup-time.js", "byte-efficiency", "clickjacking-mitigation.js", "csp-xss.js", "deprecations.js", "diagnostics.js", "dobetterweb", "errors-in-console.js", "final-screenshot.js", "has-hsts.js", "image-aspect-ratio.js", "image-size-responsive.js", "insights", "is-on-https.js", "layout-shifts.js", "long-tasks.js", "main-thread-tasks.js", "mainthread-work-breakdown.js", "manual", "metrics", "metrics.js", "network-requests.js", "network-rtt.js", "network-server-latency.js", "non-composited-animations.js", "oopif-iframe-test-audit.js", "origin-isolation.js", "predictive-perf.js", "redirects-http.js", "redirects.js", "resource-summary.js", "screenshot-thumbnails.js", "script-treemap-data.js", "seo", "server-response-time.js", "third-party-cookies.js", "trusted-types-xss.js", "unsized-images.js", "user-timings.js", "valid-source-maps.js", "violation-audit.js"],
+      ...["accessibility", "agentic", "audit.js", "autocomplete.js", "baseline.js", "bf-cache.js", "bootup-time.js", "byte-efficiency", "clickjacking-mitigation.js", "csp-xss.js", "deprecations.js", "diagnostics.js", "dobetterweb", "errors-in-console.js", "final-screenshot.js", "has-hsts.js", "image-aspect-ratio.js", "image-size-responsive.js", "insights", "is-on-https.js", "layout-shifts.js", "long-tasks.js", "main-thread-tasks.js", "mainthread-work-breakdown.js", "manual", "metrics", "metrics.js", "network-requests.js", "network-rtt.js", "network-server-latency.js", "non-composited-animations.js", "oopif-iframe-test-audit.js", "origin-isolation.js", "predictive-perf.js", "redirects-http.js", "redirects.js", "resource-summary.js", "screenshot-thumbnails.js", "script-treemap-data.js", "seo", "server-response-time.js", "third-party-cookies.js", "trusted-types-xss.js", "unsized-images.js", "user-timings.js", "valid-source-maps.js", "violation-audit.js", "webmcp-form-coverage.js", "webmcp\
+-registered-tools.js"],
       ...["charset.js", "doctype.js", "geolocation-on-start.js", "inspector-issues.js", "js-libraries.js", "notification-on-start.js", "paste-preventing-inputs.js"].map((f) => `dobetterweb/${f}`),
       ...["cumulative-layout-shift.js", "first-contentful-paint.js", "interaction-to-next-paint.js", "interactive.js", "largest-contentful-paint.js", "max-potential-fid.js", "speed-index.js", "total-blocking-time.js"].map((f) => `metrics/${f}`),
       ...["canonical.js", "crawlable-anchors.js", "hreflang.js", "http-status-code.js", "is-crawlable.js", "link-text.js", "manual", "meta-description.js", "robots-txt.js"].map((f) => `seo/${f}`),
       ...["structured-data.js"].map((f) => `seo/manual/${f}`),
-      ...["accesskeys.js", "aria-allowed-attr.js", "aria-allowed-role.js", "aria-command-name.js", "aria-conditional-attr.js", "aria-deprecated-role.js", "aria-dialog-name.js", "aria-hidden-body.js", "aria-hidden-focus.js", "aria-input-field-name.js", "aria-meter-name.js", "aria-progressbar-name.js", "aria-prohibited-attr.js", "aria-required-attr.js", "aria-required-children.js", "aria-required-parent.js", "aria-roles.js", "aria-text.js", "aria-toggle-field-name.js", "aria-tooltip-name.js", "aria-treeitem-name.js", "aria-valid-attr-value.js", "aria-valid-attr.js", "axe-audit.js", "button-name.js", "bypass.js", "color-contrast.js", "definition-list.js", "dlitem.js", "document-title.js", "duplicate-id-aria.js", "empty-heading.js", "form-field-multiple-labels.js", "frame-title.js", "heading-order.js", "html-has-lang.js", "html-lang-valid.js", "html-xml-lang-mismatch.js", "identical-links-same-purpose.js", "image-alt.js", "image-redundant-alt.js", "input-button-name.js", "input-image-alt.j\
-s", "label-content-name-mismatch.js", "label.js", "landmark-one-main.js", "link-in-text-block.js", "link-name.js", "list.js", "listitem.js", "manual", "meta-refresh.js", "meta-viewport.js", "object-alt.js", "select-name.js", "skip-link.js", "tabindex.js", "table-duplicate-name.js", "table-fake-caption.js", "target-size.js", "td-has-header.js", "td-headers-attr.js", "th-has-data-cells.js", "valid-lang.js", "video-caption.js"].map((f) => `accessibility/${f}`),
+      ...["accesskeys.js", "aria-allowed-attr.js", "aria-allowed-role.js", "aria-command-name.js", "aria-conditional-attr.js", "aria-deprecated-role.js", "aria-dialog-name.js", "aria-hidden-body.js", "aria-hidden-focus.js", "aria-input-field-name.js", "aria-meter-name.js", "aria-progressbar-name.js", "aria-prohibited-attr.js", "aria-required-attr.js", "aria-required-children.js", "aria-required-parent.js", "aria-roles.js", "aria-text.js", "aria-toggle-field-name.js", "aria-tooltip-name.js", "aria-treeitem-name.js", "aria-valid-attr-value.js", "aria-valid-attr.js", "autocomplete-valid.js", "axe-audit.js", "button-name.js", "bypass.js", "color-contrast.js", "definition-list.js", "dlitem.js", "document-title.js", "duplicate-id-aria.js", "empty-heading.js", "form-field-multiple-labels.js", "frame-title.js", "heading-order.js", "html-has-lang.js", "html-lang-valid.js", "html-xml-lang-mismatch.js", "identical-links-same-purpose.js", "image-alt.js", "image-redundant-alt.js", "input-button-nam\
+e.js", "input-image-alt.js", "label-content-name-mismatch.js", "label.js", "landmark-one-main.js", "link-in-text-block.js", "link-name.js", "list.js", "listitem.js", "manual", "meta-refresh.js", "meta-viewport.js", "object-alt.js", "presentation-role-conflict.js", "select-name.js", "skip-link.js", "svg-img-alt.js", "tabindex.js", "table-duplicate-name.js", "table-fake-caption.js", "target-size.js", "td-has-header.js", "td-headers-attr.js", "th-has-data-cells.js", "valid-lang.js", "video-caption.js"].map((f) => `accessibility/${f}`),
       ...["custom-controls-labels.js", "custom-controls-roles.js", "focus-traps.js", "focusable-controls.js", "interactive-element-affordance.js", "logical-tab-order.js", "managed-focus.js", "offscreen-content-hidden.js", "use-landmarks.js", "visual-order-follows-dom.js"].map((f) => `accessibility/manual/${f}`),
       ...["byte-efficiency-audit.js", "total-byte-weight.js", "unminified-css.js", "unminified-javascript.js", "unused-css-rules.js", "unused-javascript.js"].map((f) => `byte-efficiency/${f}`),
       ...["manual-audit.js"].map((f) => `manual/${f}`),
-      ...["README.md", "cache-insight.js", "cls-culprits-insight.js", "document-latency-insight.js", "dom-size-insight.js", "duplicated-javascript-insight.js", "font-display-insight.js", "forced-reflow-insight.js", "image-delivery-insight.js", "inp-breakdown-insight.js", "insight-audit.js", "lcp-breakdown-insight.js", "lcp-discovery-insight.js", "legacy-javascript-insight.js", "modern-http-insight.js", "network-dependency-tree-insight.js", "render-blocking-insight.js", "slow-css-selector-insight.js", "third-parties-insight.js", "viewport-insight.js"].map((f) => `insights/${f}`)
+      ...["README.md", "cache-insight.js", "cls-culprits-insight.js", "document-latency-insight.js", "dom-size-insight.js", "duplicated-javascript-insight.js", "font-display-insight.js", "forced-reflow-insight.js", "image-delivery-insight.js", "inp-breakdown-insight.js", "insight-audit.js", "lcp-breakdown-insight.js", "lcp-discovery-insight.js", "legacy-javascript-insight.js", "modern-http-insight.js", "network-dependency-tree-insight.js", "render-blocking-insight.js", "slow-css-selector-insight.js", "third-parties-insight.js", "viewport-insight.js"].map((f) => `insights/${f}`),
+      ...["llms-txt.js"].map((f) => `agentic/${f}`)
     ];
     return fileList.filter((f) => {
       return /\.js$/.test(f) && !ignoredFiles.includes(f);
@@ -56619,9 +57353,10 @@ s", "label-content-name-mismatch.js", "label.js", "landmark-one-main.js", "link-
    */
   static getGathererList() {
     const fileList = [
-      ...["accessibility.js", "anchor-elements.js", "bf-cache-failures.js", "console-messages.js", "css-usage.js", "devtools-log.js", "dobetterweb", "full-page-screenshot.js", "iframe-elements.js", "image-elements.js", "inputs.js", "inspector-issues.js", "js-usage.js", "link-elements.js", "main-document-content.js", "meta-elements.js", "network-user-agent.js", "scripts.js", "seo", "source-maps.js", "stacks.js", "stylesheets.js", "trace-elements.js", "trace.js", "viewport-dimensions.js"],
+      ...["accessibility.js", "agentic", "anchor-elements.js", "bf-cache-failures.js", "console-messages.js", "css-usage.js", "devtools-log.js", "dobetterweb", "full-page-screenshot.js", "iframe-elements.js", "image-elements.js", "inputs.js", "inspector-issues.js", "js-usage.js", "link-elements.js", "main-document-content.js", "meta-elements.js", "network-user-agent.js", "scripts.js", "seo", "source-maps.js", "stacks.js", "stylesheets.js", "trace-elements.js", "trace.js", "viewport-dimensions.js", "webmcp-tools.js"],
       ...["robots-txt.js"].map((f) => `seo/${f}`),
-      ...["doctype.js"].map((f) => `dobetterweb/${f}`)
+      ...["doctype.js"].map((f) => `dobetterweb/${f}`),
+      ...["llms-txt.js"].map((f) => `agentic/${f}`)
     ];
     return fileList.filter((f) => /\.js$/.test(f) && f !== "gatherer.js").sort();
   }
@@ -57747,7 +58482,7 @@ init_i18n();
  * Copyright 2021 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
-var UIStrings120 = {
+var UIStrings124 = {
   /**
    * @description Warning that the host device where Lighthouse is running appears to have a slower
    * CPU than the expected Lighthouse baseline.
@@ -57755,7 +58490,7 @@ var UIStrings120 = {
   warningSlowHostCpu: "The tested device appears to have a slower CPU than  Lighthouse expects. This can negatively affect your performance score. Learn more about [calibrating an appropriate CPU slowdown multiplier](https://github.com/GoogleChrome/lighthouse/blob/main/docs/throttling.md#cpu-throttling)."
 };
 var SLOW_CPU_BENCHMARK_INDEX_THRESHOLD = 1e3;
-var str_100 = createIcuMessageFn({ url: "core/gather/driver/environment.js" }.url, UIStrings120);
+var str_103 = createIcuMessageFn({ url: "core/gather/driver/environment.js" }.url, UIStrings124);
 async function getBrowserVersion(session) {
   const status = { msg: "Getting browser version", id: "lh:gather:getVersion" };
   lighthouse_logger_default.time(status, "verbose");
@@ -57795,7 +58530,7 @@ function getSlowHostCpuWarning(context) {
   const isDefaultMultiplier = throttling3.cpuSlowdownMultiplier === defaultThrottling2.cpuSlowdownMultiplier;
   if (!isThrottledMethod || !isDefaultMultiplier) return;
   if (baseArtifacts.BenchmarkIndex > SLOW_CPU_BENCHMARK_INDEX_THRESHOLD) return;
-  return str_100(UIStrings120.warningSlowHostCpu);
+  return str_103(UIStrings124.warningSlowHostCpu);
 }
 __name(getSlowHostCpuWarning, "getSlowHostCpuWarning");
 function getEnvironmentWarnings(context) {
@@ -57870,9 +58605,9 @@ __name(finalizeArtifacts, "finalizeArtifacts");
  * SPDX-License-Identifier: Apache-2.0
  */
 async function snapshotGather(page, options = {}) {
-  const { flags = {}, config: config3 } = options;
+  const { flags = {}, config: config4 } = options;
   lighthouse_logger_default.setLevel(flags.logLevel || "error");
-  const { resolvedConfig } = await initializeConfig("snapshot", config3, flags);
+  const { resolvedConfig } = await initializeConfig("snapshot", config4, flags);
   const driver = new Driver(page);
   await driver.connect();
   const computedCache = /* @__PURE__ */ new Map();
@@ -57922,7 +58657,7 @@ init_i18n();
  * Copyright 2021 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
-var UIStrings121 = {
+var UIStrings125 = {
   /**
    * @description A warning that previously-saved data may have affected the measured performance and instructions on how to avoid the problem. "locations" will be a list of possible types of data storage locations, e.g. "IndexedDB",  "Local Storage", or "Web SQL".
    * @example {IndexedDB, Local Storage} locations
@@ -57936,7 +58671,7 @@ var UIStrings121 = {
   /** A warning that the data on the page's origin may have affected the measured performance because the operation to clear the origin data timed out. */
   warningOriginDataTimeout: "Clearing the origin data timed out. Try auditing this page again and file a bug if the issue persists."
 };
-var str_101 = createIcuMessageFn({ url: "core/gather/driver/storage.js" }.url, UIStrings121);
+var str_104 = createIcuMessageFn({ url: "core/gather/driver/storage.js" }.url, UIStrings125);
 async function clearDataForOrigin(session, url, clearStorageTypes) {
   const status = { msg: "Cleaning origin data", id: "lh:storage:clearDataForOrigin" };
   lighthouse_logger_default.time(status);
@@ -57955,7 +58690,7 @@ async function clearDataForOrigin(session, url, clearStorageTypes) {
       err.code === "PROTOCOL_TIMEOUT"
     ) {
       lighthouse_logger_default.warn("Driver", "clearDataForOrigin timed out");
-      warnings.push(str_101(UIStrings121.warningOriginDataTimeout));
+      warnings.push(str_104(UIStrings125.warningOriginDataTimeout));
     } else {
       throw err;
     }
@@ -57976,7 +58711,7 @@ async function getImportantStorageWarning(session, url) {
   };
   const locations = usageData.usageBreakdown.filter((usage) => usage.usage).map((usage) => storageTypeNames[usage.storageType] || "").filter(Boolean);
   if (locations.length) {
-    return str_101(UIStrings121.warningData, {
+    return str_104(UIStrings125.warningData, {
       locations: locations.join(", "),
       locationCount: locations.length
     });
@@ -57997,7 +58732,7 @@ async function clearBrowserCaches(session) {
       err.code === "PROTOCOL_TIMEOUT"
     ) {
       lighthouse_logger_default.warn("Driver", "clearBrowserCaches timed out");
-      warnings.push(str_101(UIStrings121.warningCacheTimeout));
+      warnings.push(str_104(UIStrings125.warningCacheTimeout));
     } else {
       throw err;
     }
@@ -58237,11 +58972,11 @@ init_i18n();
  * Copyright 2021 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
-var UIStrings122 = {
+var UIStrings126 = {
   /** A warning that indicates page navigations should be audited using navigation mode, as opposed to timespan mode. "navigation mode" refers to a Lighthouse mode that analyzes a page navigation. "timespan mode" refers to a Lighthouse mode that analyzes user interactions over an arbitrary period of time. */
   warningNavigationDetected: "A page navigation was detected during the run. Using timespan mode to audit page navigations is not recommended. Use navigation mode to audit page navigations for better third-party attribution and main thread detection."
 };
-var str_102 = createIcuMessageFn({ url: "core/gather/timespan-runner.js" }.url, UIStrings122);
+var str_105 = createIcuMessageFn({ url: "core/gather/timespan-runner.js" }.url, UIStrings126);
 
 // core/gather/navigation-runner.js
 init_process_global();
@@ -58632,7 +59367,7 @@ init_url_utils();
  * Copyright 2021 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
-var UIStrings123 = {
+var UIStrings127 = {
   /**
    * @description Warning that the web page redirected during testing and that may have affected the load.
    * @example {https://example.com/requested/page} requested
@@ -58644,7 +59379,7 @@ var UIStrings123 = {
    */
   warningTimeout: "The page loaded too slowly to finish within the time limit. Results may be incomplete."
 };
-var str_103 = createIcuMessageFn({ url: "core/gather/driver/navigation.js" }.url, UIStrings123);
+var str_106 = createIcuMessageFn({ url: "core/gather/driver/navigation.js" }.url, UIStrings127);
 var DEFAULT_PAUSE_AFTER_FCP = 0;
 var DEFAULT_PAUSE_AFTER_LOAD = 0;
 var DEFAULT_NETWORK_QUIET_THRESHOLD = 5e3;
@@ -58733,9 +59468,9 @@ __name(gotoURL, "gotoURL");
 function getNavigationWarnings(navigation2) {
   const { requestedUrl, mainDocumentUrl } = navigation2;
   const warnings = [];
-  if (navigation2.timedOut) warnings.push(str_103(UIStrings123.warningTimeout));
+  if (navigation2.timedOut) warnings.push(str_106(UIStrings127.warningTimeout));
   if (!url_utils_default.equalWithExcludedFragments(requestedUrl, mainDocumentUrl)) {
-    warnings.push(str_103(UIStrings123.warningRedirected, {
+    warnings.push(str_106(UIStrings127.warningRedirected, {
       requested: requestedUrl,
       final: mainDocumentUrl
     }));
@@ -58760,7 +59495,7 @@ init_i18n();
  * Copyright 2021 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
-var UIStrings124 = {
+var UIStrings128 = {
   /**
    * Warning shown in report when the page under test is an XHTML document, which Lighthouse does not directly support
    * so we display a warning.
@@ -58772,7 +59507,7 @@ var UIStrings124 = {
    */
   warningStatusCode: "Lighthouse was unable to reliably load the page you requested. Make sure you are testing the correct URL and that the server is properly responding to all requests. (Status code: {errorCode})"
 };
-var str_104 = createIcuMessageFn({ url: "core/lib/navigation-error.js" }.url, UIStrings124);
+var str_107 = createIcuMessageFn({ url: "core/lib/navigation-error.js" }.url, UIStrings128);
 var HTML_MIME_TYPE = "text/html";
 var XHTML_MIME_TYPE = "application/xhtml+xml";
 function getNetworkError(mainRecord, context) {
@@ -58790,7 +59525,7 @@ function getNetworkError(mainRecord, context) {
     }
   } else if (mainRecord.hasErrorStatusCode()) {
     if (context.ignoreStatusCode) {
-      context.warnings.push(str_104(UIStrings124.warningStatusCode, { errorCode: mainRecord.statusCode }));
+      context.warnings.push(str_107(UIStrings128.warningStatusCode, { errorCode: mainRecord.statusCode }));
     } else {
       return new LighthouseError(LighthouseError.errors.ERRORED_DOCUMENT_REQUEST, {
         statusCode: `${mainRecord.statusCode}`
@@ -58828,7 +59563,6 @@ __name(getNonHtmlError, "getNonHtmlError");
 function getPageLoadError(navigationError, context) {
   const { url, networkRecords } = context;
   const mainRecordLantern = core_exports.NetworkAnalyzer.findResourceForUrl(
-    // @ts-expect-error - trace engine types for InitiatorType are outdated
     networkRecords,
     url
   );
@@ -58850,7 +59584,7 @@ function getPageLoadError(navigationError, context) {
     return navigationError;
   }
   if (finalRecord?.mimeType === XHTML_MIME_TYPE) {
-    context.warnings.push(str_104(UIStrings124.warningXhtml));
+    context.warnings.push(str_107(UIStrings128.warningXhtml));
   }
   const networkError = getNetworkError(mainRecord, context);
   const interstitialError = getInterstitialError(mainRecord, networkRecords);
@@ -59010,9 +59744,9 @@ async function _cleanup({ requestedUrl, driver, resolvedConfig, lhBrowser, lhPag
 }
 __name(_cleanup, "_cleanup");
 async function navigationGather(page, requestor, options = {}) {
-  const { flags = {}, config: config3 } = options;
+  const { flags = {}, config: config4 } = options;
   lighthouse_logger_default.setLevel(flags.logLevel || "error");
-  const { resolvedConfig } = await initializeConfig("navigation", config3, flags);
+  const { resolvedConfig } = await initializeConfig("navigation", config4, flags);
   const computedCache = /* @__PURE__ */ new Map();
   const isCallback = typeof requestor === "function";
   const runnerOptions = { resolvedConfig, computedCache };
@@ -59055,7 +59789,7 @@ init_lh();
  * Copyright 2021 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
-var UIStrings125 = {
+var UIStrings129 = {
   /**
    * @description Default name for a user flow on the given url. "User flow" refers to the series of page navigations and user interactions being tested on the page. "url" is a trimmed version of a url that only includes the domain name.
    * @example {example.com} url
@@ -59077,7 +59811,7 @@ var UIStrings125 = {
    */
   defaultSnapshotName: "Snapshot report ({url})"
 };
-var str_105 = createIcuMessageFn({ url: "core/user-flow.js" }.url, UIStrings125);
+var str_108 = createIcuMessageFn({ url: "core/user-flow.js" }.url, UIStrings129);
 
 // core/index.js
 init_lh();
@@ -59093,7 +59827,7 @@ init_lh();
  * Copyright 2020 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
-var config2 = {
+var config3 = {
   extends: "lighthouse:default",
   settings: {
     formFactor: "desktop",
