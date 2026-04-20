@@ -25,8 +25,8 @@ import sinon from 'sinon';
 import type {ParsedArguments} from '../src/bin/chrome-devtools-mcp-cli-options.js';
 import {McpContext} from '../src/McpContext.js';
 import {McpResponse} from '../src/McpResponse.js';
-import {stableIdSymbol} from '../src/PageCollector.js';
 import {DevTools} from '../src/third_party/index.js';
+import {stableIdSymbol} from '../src/utils/id.js';
 
 export function assertNoServiceWorkerReported(targets: Target[], id: string) {
   const target = targets.find(target => {
