@@ -46,6 +46,12 @@ Example with arguments: \`(el) => {
         )
         .optional()
         .describe(`An optional list of arguments to pass to the function.`),
+      dialogAction: zod
+        .string()
+        .optional()
+        .describe(
+          'Handle dialogs while execution. "accept", "dismiss", or string for response of window.prompt. Defaults to accept.',
+        ),
       ...(cliArgs?.experimentalPageIdRouting ? pageIdSchema : {}),
       ...(cliArgs?.categoryExtensions
         ? {
@@ -64,6 +70,7 @@ Example with arguments: \`(el) => {
         args: uidArgs,
         function: fnString,
         pageId,
+        dialogAction,
       } = request.params;
 
       if (cliArgs?.categoryExtensions && serviceWorkerId) {
@@ -77,11 +84,12 @@ Example with arguments: \`(el) => {
         }
 
         const worker = await getWebWorker(context, serviceWorkerId);
-        await context
-          .getSelectedMcpPage()
-          .waitForEventsAfterAction(async () => {
+        await context.getSelectedMcpPage().waitForEventsAfterAction(
+          async () => {
             await performEvaluation(worker, fnString, [], response);
-          });
+          },
+          {handleDialog: dialogAction ?? 'accept'},
+        );
         return;
       }
 
@@ -101,9 +109,12 @@ Example with arguments: \`(el) => {
 
         const evaluatable = await getPageOrFrame(page, frames);
 
-        await mcpPage.waitForEventsAfterAction(async () => {
-          await performEvaluation(evaluatable, fnString, args, response);
-        });
+        await mcpPage.waitForEventsAfterAction(
+          async () => {
+            await performEvaluation(evaluatable, fnString, args, response);
+          },
+          {handleDialog: dialogAction ?? 'accept'},
+        );
       } finally {
         void Promise.allSettled(args.map(arg => arg.dispose()));
       }
