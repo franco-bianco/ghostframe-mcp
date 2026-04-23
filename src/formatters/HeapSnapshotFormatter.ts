@@ -16,11 +16,42 @@ export interface FormattedSnapshotEntry {
   retainedSize: number;
 }
 
+function isNodeLike(
+  item: unknown,
+): item is DevTools.HeapSnapshotModel.HeapSnapshotModel.Node {
+  return (
+    typeof item === 'object' && item !== null && 'id' in item && 'name' in item
+  );
+}
+
 export class HeapSnapshotFormatter {
   #aggregates: Record<string, AggregatedInfoWithUid>;
 
   constructor(aggregates: Record<string, AggregatedInfoWithUid>) {
     this.#aggregates = aggregates;
+  }
+
+  static formatNodes(
+    items: ReadonlyArray<
+      | DevTools.HeapSnapshotModel.HeapSnapshotModel.Node
+      | DevTools.HeapSnapshotModel.HeapSnapshotModel.Edge
+    >,
+  ): string {
+    const lines: string[] = [];
+
+    if (items.length > 0 && isNodeLike(items[0])) {
+      lines.push('id,name,type,distance,selfSize,retainedSize');
+    }
+
+    for (const item of items) {
+      if (isNodeLike(item)) {
+        lines.push(
+          `${item.id},"${item.name}",${item.type},${item.distance},${item.selfSize},${item.retainedSize}`,
+        );
+      }
+    }
+
+    return lines.join('\n');
   }
 
   #getSortedAggregates(): AggregatedInfoWithUid[] {

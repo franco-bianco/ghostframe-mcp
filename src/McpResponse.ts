@@ -179,6 +179,7 @@ export class McpResponse implements Response {
     pagination?: PaginationOptions;
     stats?: DevTools.HeapSnapshotModel.HeapSnapshotModel.Statistics;
     staticData?: DevTools.HeapSnapshotModel.HeapSnapshotModel.StaticData | null;
+    nodes?: DevTools.HeapSnapshotModel.HeapSnapshotModel.ItemsRange;
   };
   #networkRequestsOptions?: {
     include: boolean;
@@ -401,6 +402,18 @@ export class McpResponse implements Response {
       include: true,
       stats,
       staticData,
+    };
+  }
+
+  setHeapSnapshotNodes(
+    nodes: DevTools.HeapSnapshotModel.HeapSnapshotModel.ItemsRange,
+    options?: PaginationOptions,
+  ) {
+    this.#heapSnapshotOptions = {
+      ...this.#heapSnapshotOptions,
+      include: true,
+      nodes,
+      pagination: options,
     };
   }
 
@@ -701,6 +714,7 @@ export class McpResponse implements Response {
         staticData?: object;
       };
       heapSnapshotData?: object[];
+      heapSnapshotNodes?: readonly object[];
       extensionServiceWorkers?: object[];
       extensionPages?: object[];
     } = {};
@@ -928,6 +942,20 @@ Call ${handleDialog.name} to handle it before continuing.`);
 
         response.push(formatter.toString());
         structuredContent.heapSnapshotData = formatter.toJSON();
+      }
+      const nodes = this.#heapSnapshotOptions.nodes;
+      if (nodes) {
+        const paginationData = this.#dataWithPagination(
+          nodes.items,
+          this.#heapSnapshotOptions.pagination,
+        );
+
+        response.push(HeapSnapshotFormatter.formatNodes(paginationData.items));
+
+        structuredContent.pagination = paginationData.pagination;
+        response.push(...paginationData.info);
+
+        structuredContent.heapSnapshotNodes = paginationData.items;
       }
     }
 
