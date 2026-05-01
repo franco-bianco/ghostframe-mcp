@@ -193,13 +193,12 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
   const args: LaunchOptions['args'] = [
     ...(options.chromeArgs ?? []),
     '--hide-crash-restore-bubble',
+    '--disable-blink-features=AutomationControlled',
   ];
-  const ignoreDefaultArgs: LaunchOptions['ignoreDefaultArgs'] =
-    options.ignoreDefaultChromeArgs ?? false;
-
-  if (headless) {
-    args.push('--screen-info={3840x2160}');
-  }
+  const ignoreDefaultArgs: LaunchOptions['ignoreDefaultArgs'] = [
+    ...(options.ignoreDefaultChromeArgs ?? []),
+    '--enable-automation',
+  ];
   let puppeteerChannel: ChromeReleaseChannel | undefined;
   if (options.devtools) {
     args.push('--auto-open-devtools-for-tabs');
