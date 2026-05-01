@@ -516,8 +516,6 @@ If you run into any issues, checkout our [troubleshooting guide](./docs/troubles
   - [`reload_extension`](docs/tool-reference.md#reload_extension)
   - [`trigger_extension_action`](docs/tool-reference.md#trigger_extension_action)
   - [`uninstall_extension`](docs/tool-reference.md#uninstall_extension)
-- **Memory** (1 tools)
-  - [`take_memory_snapshot`](docs/tool-reference.md#take_memory_snapshot)
 
 <!-- END AUTO GENERATED TOOLS -->
 

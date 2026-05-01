@@ -1,6 +1,6 @@
 <!-- AUTO GENERATED DO NOT EDIT - run 'npm run gen' to update-->
 
-# Chrome DevTools MCP Tool Reference (~6752 cl100k_base tokens)
+# Chrome DevTools MCP Tool Reference (~6588 cl100k_base tokens)
 
 - **[Input automation](#input-automation)** (9 tools)
   - [`click`](#click)
@@ -41,8 +41,6 @@
   - [`reload_extension`](#reload_extension)
   - [`trigger_extension_action`](#trigger_extension_action)
   - [`uninstall_extension`](#uninstall_extension)
-- **[Memory](#memory)** (1 tools)
-  - [`take_memory_snapshot`](#take_memory_snapshot)
 
 ## Input automation
 
@@ -432,17 +430,5 @@ in the DevTools Elements panel (if any).
 **Parameters:**
 
 - **id** (string) **(required)**: ID of the extension to uninstall.
-
----
-
-## Memory
-
-### `take_memory_snapshot`
-
-**Description:** Capture a heap snapshot of the currently selected page. Use to analyze the memory distribution of JavaScript objects and debug memory leaks.
-
-**Parameters:**
-
-- **filePath** (string) **(required)**: A path to a .heapsnapshot file to save the heapsnapshot to.
 
 ---

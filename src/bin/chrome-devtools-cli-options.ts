@@ -245,30 +245,6 @@ export const commands: Commands = {
       }
     }
   },
-  "get_memory_snapshot_details": {
-    "description": "Loads a memory heapsnapshot and returns all available information including statistics, static data, and aggregated node information. Supports pagination for aggregates. (requires flag: --experimentalMemory=true)",
-    "category": "Memory",
-    "args": {
-      "filePath": {
-        "name": "filePath",
-        "type": "string",
-        "description": "A path to a .heapsnapshot file to read.",
-        "required": true
-      },
-      "pageIdx": {
-        "name": "pageIdx",
-        "type": "number",
-        "description": "The page index for pagination of aggregates.",
-        "required": false
-      },
-      "pageSize": {
-        "name": "pageSize",
-        "type": "number",
-        "description": "The page size for pagination of aggregates.",
-        "required": false
-      }
-    }
-  },
   "get_network_request": {
     "description": "Gets a network request by an optional reqid, if omitted returns the currently selected request in the DevTools Network panel.",
     "category": "Network",
@@ -289,36 +265,6 @@ export const commands: Commands = {
         "name": "responseFilePath",
         "type": "string",
         "description": "The absolute or relative path to a .network-response file to save the response body to. If omitted, the body is returned inline.",
-        "required": false
-      }
-    }
-  },
-  "get_nodes_by_class": {
-    "description": "Loads a memory heapsnapshot and returns instances of a specific class with their stable IDs. (requires flag: --experimentalMemory=true)",
-    "category": "Memory",
-    "args": {
-      "filePath": {
-        "name": "filePath",
-        "type": "string",
-        "description": "A path to a .heapsnapshot file to read.",
-        "required": true
-      },
-      "uid": {
-        "name": "uid",
-        "type": "number",
-        "description": "The unique UID for the class, obtained from aggregates listing.",
-        "required": true
-      },
-      "pageIdx": {
-        "name": "pageIdx",
-        "type": "number",
-        "description": "The page index for pagination.",
-        "required": false
-      },
-      "pageSize": {
-        "name": "pageSize",
-        "type": "number",
-        "description": "The page size for pagination.",
         "required": false
       }
     }
@@ -451,18 +397,6 @@ export const commands: Commands = {
     "description": "Lists all WebMCP tools the page exposes. (requires flag: --experimentalWebmcp=true)",
     "category": "Debugging",
     "args": {}
-  },
-  "load_memory_snapshot": {
-    "description": "Loads a memory heapsnapshot and returns snapshot summary stats. (requires flag: --experimentalMemory=true)",
-    "category": "Memory",
-    "args": {
-      "filePath": {
-        "name": "filePath",
-        "type": "string",
-        "description": "A path to a .heapsnapshot file to read.",
-        "required": true
-      }
-    }
   },
   "navigate_page": {
     "description": "Go to a URL, or back, forward, or reload. Use project URL if not specified otherwise.",
@@ -682,18 +616,6 @@ export const commands: Commands = {
         "type": "boolean",
         "description": "Whether to focus the page and bring it to the top.",
         "required": false
-      }
-    }
-  },
-  "take_memory_snapshot": {
-    "description": "Capture a heap snapshot of the currently selected page. Use to analyze the memory distribution of JavaScript objects and debug memory leaks.",
-    "category": "Memory",
-    "args": {
-      "filePath": {
-        "name": "filePath",
-        "type": "string",
-        "description": "A path to a .heapsnapshot file to save the heapsnapshot to.",
-        "required": true
       }
     }
   },

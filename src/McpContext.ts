@@ -11,8 +11,6 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 
 import type {TargetUniverse} from './DevtoolsUtils.js';
 import {UniverseManager} from './DevtoolsUtils.js';
-import {HeapSnapshotManager} from './HeapSnapshotManager.js';
-import type {AggregatedInfoWithUid} from './HeapSnapshotManager.js';
 import {McpPage} from './McpPage.js';
 import {
   NetworkCollector,
@@ -92,7 +90,6 @@ export class McpContext implements Context {
 
   #locatorClass: typeof Locator;
   #options: McpContextOptions;
-  #heapSnapshotManager = new HeapSnapshotManager();
   #roots: Root[] | undefined = undefined;
 
   private constructor(
@@ -802,32 +799,4 @@ export class McpContext implements Context {
     return pptrExtensions.get(id);
   }
 
-  async getHeapSnapshotAggregates(
-    filePath: string,
-  ): Promise<Record<string, AggregatedInfoWithUid>> {
-    this.validatePath(filePath);
-    return await this.#heapSnapshotManager.getAggregates(filePath);
-  }
-
-  async getHeapSnapshotStats(
-    filePath: string,
-  ): Promise<DevTools.HeapSnapshotModel.HeapSnapshotModel.Statistics> {
-    this.validatePath(filePath);
-    return await this.#heapSnapshotManager.getStats(filePath);
-  }
-
-  async getHeapSnapshotStaticData(
-    filePath: string,
-  ): Promise<DevTools.HeapSnapshotModel.HeapSnapshotModel.StaticData | null> {
-    this.validatePath(filePath);
-    return await this.#heapSnapshotManager.getStaticData(filePath);
-  }
-
-  async getHeapSnapshotNodesByUid(
-    filePath: string,
-    uid: number,
-  ): Promise<DevTools.HeapSnapshotModel.HeapSnapshotModel.ItemsRange> {
-    this.validatePath(filePath);
-    return await this.#heapSnapshotManager.getNodesByUid(filePath, uid);
-  }
 }

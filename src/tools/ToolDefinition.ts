@@ -5,7 +5,6 @@
  */
 
 import type {ParsedArguments} from '../bin/chrome-devtools-mcp-cli-options.js';
-import type {AggregatedInfoWithUid} from '../HeapSnapshotManager.js';
 import type {McpPage} from '../McpPage.js';
 import {zod} from '../third_party/index.js';
 import type {
@@ -81,21 +80,6 @@ export interface DevToolsData {
 
 export interface Response {
   appendResponseLine(value: string): void;
-  setHeapSnapshotAggregates(
-    aggregates: Record<
-      string,
-      DevTools.HeapSnapshotModel.HeapSnapshotModel.AggregatedInfo
-    >,
-    options?: PaginationOptions,
-  ): void;
-  setHeapSnapshotStats(
-    stats: DevTools.HeapSnapshotModel.HeapSnapshotModel.Statistics,
-    staticData: DevTools.HeapSnapshotModel.HeapSnapshotModel.StaticData | null,
-  ): void;
-  setHeapSnapshotNodes(
-    nodes: DevTools.HeapSnapshotModel.HeapSnapshotModel.ItemsRange,
-    options?: PaginationOptions,
-  ): void;
   setIncludePages(value: boolean): void;
   setIncludeNetworkRequests(
     value: boolean,
@@ -209,19 +193,6 @@ export type Context = Readonly<{
   getExtensionServiceWorkerId(
     extensionServiceWorker: ExtensionServiceWorker,
   ): string | undefined;
-  getHeapSnapshotAggregates(
-    filePath: string,
-  ): Promise<Record<string, AggregatedInfoWithUid>>;
-  getHeapSnapshotStats(
-    filePath: string,
-  ): Promise<DevTools.HeapSnapshotModel.HeapSnapshotModel.Statistics>;
-  getHeapSnapshotStaticData(
-    filePath: string,
-  ): Promise<DevTools.HeapSnapshotModel.HeapSnapshotModel.StaticData | null>;
-  getHeapSnapshotNodesByUid(
-    filePath: string,
-    uid: number,
-  ): Promise<DevTools.HeapSnapshotModel.HeapSnapshotModel.ItemsRange>;
 }>;
 
 /**
