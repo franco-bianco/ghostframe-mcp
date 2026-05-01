@@ -16,7 +16,6 @@ import type {
   Viewport,
   DevTools,
 } from '../third_party/index.js';
-import type {InsightName, TraceResult} from '../trace-processing/parse.js';
 import type {
   TextSnapshotNode,
   GeolocationOptions,
@@ -106,12 +105,6 @@ export interface Response {
   // Allows re-using DevTools data queried by some tools.
   attachDevToolsData(data: DevToolsData): void;
   setTabId(tabId: string): void;
-  attachTraceSummary(trace: TraceResult): void;
-  attachTraceInsight(
-    trace: TraceResult,
-    insightSetId: string,
-    insightName: InsightName,
-  ): void;
   setListExtensions(): void;
   setListInPageTools(): void;
   setListWebMcpTools(): void;
@@ -134,11 +127,6 @@ export type SupportedExtensions =
  */
 export type Context = Readonly<{
   validatePath(filePath?: string): void;
-  isRunningPerformanceTrace(): boolean;
-  setIsRunningPerformanceTrace(x: boolean): void;
-  isCruxEnabled(): boolean;
-  recordedTraces(): TraceResult[];
-  storeTraceRecording(result: TraceResult): void;
   getPageById(pageId: number): ContextPage;
   newPage(
     background?: boolean,

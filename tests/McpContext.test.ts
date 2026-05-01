@@ -15,7 +15,6 @@ import sinon from 'sinon';
 import {NetworkFormatter} from '../src/formatters/NetworkFormatter.js';
 import {TextSnapshot} from '../src/TextSnapshot.js';
 import type {HTTPResponse} from '../src/third_party/index.js';
-import type {TraceResult} from '../src/trace-processing/parse.js';
 
 import {getMockRequest, html, withMcpContext} from './utils.js';
 
@@ -38,16 +37,6 @@ describe('McpContext', () => {
       assert.ok(await page.getElementByUid('1_1'));
       page.textSnapshot = await TextSnapshot.create(page);
       await page.getElementByUid('1_1');
-    });
-  });
-
-  it('can store and retrieve the latest performance trace', async () => {
-    await withMcpContext(async (_response, context) => {
-      const fakeTrace1 = {} as unknown as TraceResult;
-      const fakeTrace2 = {} as unknown as TraceResult;
-      context.storeTraceRecording(fakeTrace1);
-      context.storeTraceRecording(fakeTrace2);
-      assert.deepEqual(context.recordedTraces(), [fakeTrace2]);
     });
   });
 

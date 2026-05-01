@@ -352,7 +352,8 @@
         "name": "insight_name_length",
         "argType": "number"
       }
-    ]
+    ],
+    "isDeprecated": true
   },
   {
     "name": "performance_start_trace",
@@ -369,7 +370,8 @@
         "name": "file_path_length",
         "argType": "number"
       }
-    ]
+    ],
+    "isDeprecated": true
   },
   {
     "name": "performance_stop_trace",
@@ -378,7 +380,8 @@
         "name": "file_path_length",
         "argType": "number"
       }
-    ]
+    ],
+    "isDeprecated": true
   },
   {
     "name": "press_key",

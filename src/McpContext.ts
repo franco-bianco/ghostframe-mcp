@@ -37,7 +37,6 @@ import {
 import {listPages} from './tools/pages.js';
 import {CLOSE_PAGE_ERROR} from './tools/ToolDefinition.js';
 import type {Context, SupportedExtensions} from './tools/ToolDefinition.js';
-import type {TraceResult} from './trace-processing/parse.js';
 import type {
   EmulationSettings,
   GeolocationOptions,
@@ -51,8 +50,6 @@ interface McpContextOptions {
   experimentalDevToolsDebugging: boolean;
   // Whether all page-like targets are exposed as pages.
   experimentalIncludeAllPages?: boolean;
-  // Whether CrUX data should be fetched.
-  performanceCrux: boolean;
 }
 
 const DEFAULT_TIMEOUT = 5_000;
@@ -76,7 +73,6 @@ export class McpContext implements Context {
   #consoleCollector: ConsoleCollector;
   #devtoolsUniverseManager: UniverseManager;
 
-  #isRunningTrace = false;
   #screenRecorderData: {recorder: ScreenRecorder; filePath: string} | null =
     null;
 
@@ -85,8 +81,6 @@ export class McpContext implements Context {
 
   #extensionServiceWorkerMap = new WeakMap<Target, string>();
   #nextExtensionServiceWorkerId = 1;
-
-  #traceResults: TraceResult[] = [];
 
   #locatorClass: typeof Locator;
   #options: McpContextOptions;
@@ -383,14 +377,6 @@ export class McpContext implements Context {
     this.#updateSelectedPageTimeouts();
   }
 
-  setIsRunningPerformanceTrace(x: boolean): void {
-    this.#isRunningTrace = x;
-  }
-
-  isRunningPerformanceTrace(): boolean {
-    return this.#isRunningTrace;
-  }
-
   getScreenRecorder(): {recorder: ScreenRecorder; filePath: string} | null {
     return this.#screenRecorderData;
   }
@@ -399,10 +385,6 @@ export class McpContext implements Context {
     data: {recorder: ScreenRecorder; filePath: string} | null,
   ): void {
     this.#screenRecorderData = data;
-  }
-
-  isCruxEnabled(): boolean {
-    return this.#options.performanceCrux;
   }
 
   getSelectedPptrPage(): Page {
@@ -712,16 +694,6 @@ export class McpContext implements Context {
       this.logger(err);
       throw new Error('Could not save a file', {cause: err});
     }
-  }
-
-  storeTraceRecording(result: TraceResult): void {
-    // Clear the trace results because we only consume the latest trace currently.
-    this.#traceResults = [];
-    this.#traceResults.push(result);
-  }
-
-  recordedTraces(): TraceResult[] {
-    return this.#traceResults;
   }
 
   getNetworkRequestStableId(request: HTTPRequest): number {

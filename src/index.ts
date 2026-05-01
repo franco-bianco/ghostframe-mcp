@@ -231,7 +231,6 @@ export async function createMcpServer(
       context = await McpContext.from(browser, logger, {
         experimentalDevToolsDebugging: devtools,
         experimentalIncludeAllPages: serverArgs.experimentalIncludeAllPages,
-        performanceCrux: serverArgs.performanceCrux,
       });
       await updateRoots();
     }
@@ -389,12 +388,6 @@ export const logDisclaimers = (args: ReturnType<typeof parseArguments>) => {
 debug, and modify any data in the browser or DevTools.
 Avoid sharing sensitive or personal information that you do not want to share with MCP clients.`,
   );
-
-  if (!args.slim && args.performanceCrux) {
-    console.error(
-      `Performance tools may send trace URLs to the Google CrUX API to fetch real-user experience data. To disable, run with --no-performance-crux.`,
-    );
-  }
 
   if (!args.slim && args.usageStatistics) {
     console.error(

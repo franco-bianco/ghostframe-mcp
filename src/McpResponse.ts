@@ -33,16 +33,8 @@ import type {
   Response,
   SnapshotParams,
 } from './tools/ToolDefinition.js';
-import type {InsightName, TraceResult} from './trace-processing/parse.js';
-import {getInsightOutput, getTraceSummary} from './trace-processing/parse.js';
 import {paginate} from './utils/pagination.js';
 import type {PaginationOptions} from './utils/types.js';
-
-interface TraceInsightData {
-  trace: TraceResult;
-  insightSetId: string;
-  insightName: InsightName;
-}
 
 export function replaceHtmlElementsWithUids(schema: JSONSchema7Definition) {
   if (typeof schema === 'boolean') {
@@ -163,8 +155,6 @@ export class McpResponse implements Response {
     responseFilePath?: string;
   };
   #attachedConsoleMessageId?: number;
-  #attachedTraceSummary?: TraceResult;
-  #attachedTraceInsight?: TraceInsightData;
   #textResponseLines: string[] = [];
   #images: ImageContentData[] = [];
   #networkRequestsOptions?: {
@@ -309,32 +299,8 @@ export class McpResponse implements Response {
     this.#attachedConsoleMessageId = msgid;
   }
 
-  attachTraceSummary(result: TraceResult): void {
-    this.#attachedTraceSummary = result;
-  }
-
-  attachTraceInsight(
-    trace: TraceResult,
-    insightSetId: string,
-    insightName: InsightName,
-  ): void {
-    this.#attachedTraceInsight = {
-      trace,
-      insightSetId,
-      insightName,
-    };
-  }
-
   get includePages(): boolean {
     return this.#includePages;
-  }
-
-  get attachedTraceSummary(): TraceResult | undefined {
-    return this.#attachedTraceSummary;
-  }
-
-  get attachedTracedInsight(): TraceInsightData | undefined {
-    return this.#attachedTraceInsight;
   }
 
   get includeNetworkRequests(): boolean {
@@ -603,8 +569,6 @@ export class McpResponse implements Response {
       snapshot,
       detailedNetworkRequest,
       networkRequests,
-      traceInsight: this.#attachedTraceInsight,
-      traceSummary: this.#attachedTraceSummary,
       extensions,
       inPageTools,
       webmcpTools,
@@ -621,8 +585,6 @@ export class McpResponse implements Response {
       snapshot: SnapshotFormatter | string | undefined;
       detailedNetworkRequest?: NetworkFormatter;
       networkRequests?: NetworkFormatter[];
-      traceSummary?: TraceResult;
-      traceInsight?: TraceInsightData;
       extensions?: Map<string, Extension>;
       inPageTools?: ToolGroup<ToolDefinition>;
       webmcpTools?: WebMCPTool[];
@@ -637,8 +599,6 @@ export class McpResponse implements Response {
       networkRequests?: object[];
       consoleMessage?: object;
       consoleMessages?: object[];
-      traceSummary?: string;
-      traceInsights?: Array<{insightName: string; insightKey: string}>;
       extensions?: object[];
       inPageTools?: object;
       webmcpTools?: object[];
@@ -789,34 +749,6 @@ Call ${handleDialog.name} to handle it before continuing.`);
 
     if (this.#tabId) {
       structuredContent.tabId = this.#tabId;
-    }
-
-    if (data.traceSummary) {
-      const summary = getTraceSummary(data.traceSummary);
-      response.push(summary);
-      structuredContent.traceSummary = summary;
-      structuredContent.traceInsights = [];
-      for (const insightSet of data.traceSummary.insights?.values() ?? []) {
-        for (const [insightName, model] of Object.entries(insightSet.model)) {
-          structuredContent.traceInsights.push({
-            insightName,
-            insightKey: model.insightKey,
-          });
-        }
-      }
-    }
-
-    if (data.traceInsight) {
-      const insightOutput = getInsightOutput(
-        data.traceInsight.trace,
-        data.traceInsight.insightSetId,
-        data.traceInsight.insightName,
-      );
-      if ('error' in insightOutput) {
-        response.push(insightOutput.error);
-      } else {
-        response.push(insightOutput.output);
-      }
     }
 
     if (data.snapshot) {

@@ -112,7 +112,6 @@ export async function withMcpContext(
   options: {
     debug?: boolean;
     autoOpenDevTools?: boolean;
-    performanceCrux?: boolean;
     executablePath?: string;
     args?: string[];
   } = {},
@@ -129,7 +128,6 @@ export async function withMcpContext(
       logger('test'),
       {
         experimentalDevToolsDebugging: false,
-        performanceCrux: options.performanceCrux ?? true,
       },
       Locator,
     );

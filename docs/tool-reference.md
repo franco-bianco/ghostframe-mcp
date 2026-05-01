@@ -1,6 +1,6 @@
 <!-- AUTO GENERATED DO NOT EDIT - run 'npm run gen' to update-->
 
-# Chrome DevTools MCP Tool Reference (~6588 cl100k_base tokens)
+# Chrome DevTools MCP Tool Reference (~5896 cl100k_base tokens)
 
 - **[Input automation](#input-automation)** (9 tools)
   - [`click`](#click)
@@ -22,10 +22,6 @@
 - **[Emulation](#emulation)** (2 tools)
   - [`emulate`](#emulate)
   - [`resize_page`](#resize_page)
-- **[Performance](#performance)** (3 tools)
-  - [`performance_analyze_insight`](#performance_analyze_insight)
-  - [`performance_start_trace`](#performance_start_trace)
-  - [`performance_stop_trace`](#performance_stop_trace)
 - **[Network](#network)** (2 tools)
   - [`get_network_request`](#get_network_request)
   - [`list_network_requests`](#list_network_requests)
@@ -242,41 +238,6 @@
 
 - **height** (number) **(required)**: Page height
 - **width** (number) **(required)**: Page width
-
----
-
-## Performance
-
-### `performance_analyze_insight`
-
-**Description:** Provides more detailed information on a specific Performance Insight of an insight set that was highlighted in the results of a trace recording.
-
-**Parameters:**
-
-- **insightName** (string) **(required)**: The name of the Insight you want more information on. For example: "DocumentLatency" or "LCPBreakdown"
-- **insightSetId** (string) **(required)**: The id for the specific insight set. Only use the ids given in the "Available insight sets" list.
-
----
-
-### `performance_start_trace`
-
-**Description:** Start a performance trace on the selected webpage. Use to find frontend performance issues, Core Web Vitals (LCP, INP, CLS), and improve page load speed.
-
-**Parameters:**
-
-- **autoStop** (boolean) _(optional)_: Determines if the trace recording should be automatically stopped.
-- **filePath** (string) _(optional)_: The absolute file path, or a file path relative to the current working directory, to save the raw trace data. For example, trace.json.gz (compressed) or trace.json (uncompressed).
-- **reload** (boolean) _(optional)_: Determines if, once tracing has started, the current selected page should be automatically reloaded. Navigate the page to the right URL using the [`navigate_page`](#navigate_page) tool BEFORE starting the trace if reload or autoStop is set to true.
-
----
-
-### `performance_stop_trace`
-
-**Description:** Stop the active performance trace recording on the selected webpage.
-
-**Parameters:**
-
-- **filePath** (string) _(optional)_: The absolute file path, or a file path relative to the current working directory, to save the raw trace data. For example, trace.json.gz (compressed) or trace.json (uncompressed).
 
 ---
 

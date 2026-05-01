@@ -244,12 +244,6 @@ export const cliOptions = {
     describe:
       'Set to true to enable tools exposed by the inspected page itself',
   },
-  performanceCrux: {
-    type: 'boolean',
-    default: true,
-    describe:
-      'Set to false to disable sending URLs from performance traces to CrUX API to get field performance data.',
-  },
   usageStatistics: {
     type: 'boolean',
     default: true,

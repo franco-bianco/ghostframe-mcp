@@ -480,62 +480,6 @@ export const commands: Commands = {
       }
     }
   },
-  "performance_analyze_insight": {
-    "description": "Provides more detailed information on a specific Performance Insight of an insight set that was highlighted in the results of a trace recording.",
-    "category": "Performance",
-    "args": {
-      "insightSetId": {
-        "name": "insightSetId",
-        "type": "string",
-        "description": "The id for the specific insight set. Only use the ids given in the \"Available insight sets\" list.",
-        "required": true
-      },
-      "insightName": {
-        "name": "insightName",
-        "type": "string",
-        "description": "The name of the Insight you want more information on. For example: \"DocumentLatency\" or \"LCPBreakdown\"",
-        "required": true
-      }
-    }
-  },
-  "performance_start_trace": {
-    "description": "Start a performance trace on the selected webpage. Use to find frontend performance issues, Core Web Vitals (LCP, INP, CLS), and improve page load speed.",
-    "category": "Performance",
-    "args": {
-      "reload": {
-        "name": "reload",
-        "type": "boolean",
-        "description": "Determines if, once tracing has started, the current selected page should be automatically reloaded. Navigate the page to the right URL using the navigate_page tool BEFORE starting the trace if reload or autoStop is set to true.",
-        "required": false,
-        "default": true
-      },
-      "autoStop": {
-        "name": "autoStop",
-        "type": "boolean",
-        "description": "Determines if the trace recording should be automatically stopped.",
-        "required": false,
-        "default": true
-      },
-      "filePath": {
-        "name": "filePath",
-        "type": "string",
-        "description": "The absolute file path, or a file path relative to the current working directory, to save the raw trace data. For example, trace.json.gz (compressed) or trace.json (uncompressed).",
-        "required": false
-      }
-    }
-  },
-  "performance_stop_trace": {
-    "description": "Stop the active performance trace recording on the selected webpage.",
-    "category": "Performance",
-    "args": {
-      "filePath": {
-        "name": "filePath",
-        "type": "string",
-        "description": "The absolute file path, or a file path relative to the current working directory, to save the raw trace data. For example, trace.json.gz (compressed) or trace.json (uncompressed).",
-        "required": false
-      }
-    }
-  },
   "press_key": {
     "description": "Press a key or key combination. Use this when other input methods like fill() cannot be used (e.g., keyboard shortcuts, navigation keys, or special key combinations).",
     "category": "Input automation",

@@ -27,14 +27,7 @@ import {
   newPage,
   selectPage,
 } from '../src/tools/pages.js';
-import type {InsightName} from '../src/trace-processing/parse.js';
-import {
-  parseRawTraceBuffer,
-  traceResultIsSuccess,
-} from '../src/trace-processing/parse.js';
-
 import {serverHooks} from './server.js';
-import {loadTraceAsBuffer} from './trace-processing/fixtures/load.js';
 import {
   getImageContent,
   getMockAggregatedIssue,
@@ -853,95 +846,6 @@ describe('McpResponse network pagination', () => {
     });
   });
 
-  describe('trace summaries', () => {
-    it('includes the trace summary text and structured data', async t => {
-      const rawData = loadTraceAsBuffer('web-dev-with-commit.json.gz');
-      const result = await parseRawTraceBuffer(rawData);
-      if (!traceResultIsSuccess(result)) {
-        throw new Error(result.error);
-      }
-
-      await withMcpContext(async (response, context) => {
-        response.attachTraceSummary(result);
-        const {content, structuredContent} = await response.handle(
-          'test',
-          context,
-        );
-
-        t.assert.snapshot?.(getTextContent(content[0]));
-        const typedStructuredContent = structuredContent as {
-          traceSummary?: string;
-          traceInsights?: unknown[];
-        };
-        t.assert.snapshot?.(
-          JSON.stringify(typedStructuredContent.traceSummary, null, 2),
-        );
-        t.assert.snapshot?.(
-          JSON.stringify(typedStructuredContent.traceInsights, null, 2),
-        );
-      });
-    });
-  });
-
-  describe('trace insights', () => {
-    it('includes the trace insight output', async t => {
-      const rawData = loadTraceAsBuffer('web-dev-with-commit.json.gz');
-      const result = await parseRawTraceBuffer(rawData);
-      if (!traceResultIsSuccess(result)) {
-        throw new Error(result.error);
-      }
-
-      await withMcpContext(async (response, context) => {
-        response.attachTraceInsight(
-          result,
-          'NAVIGATION_0',
-          'LCPBreakdown' as InsightName,
-        );
-        const {content, structuredContent} = await response.handle(
-          'test',
-          context,
-        );
-
-        t.assert.snapshot?.(getTextContent(content[0]));
-        t.assert.snapshot?.(
-          JSON.stringify(
-            stabilizeStructuredContent(structuredContent),
-            null,
-            2,
-          ),
-        );
-      });
-    });
-
-    it('includes error if insight not found', async t => {
-      const rawData = loadTraceAsBuffer('web-dev-with-commit.json.gz');
-      const result = await parseRawTraceBuffer(rawData);
-      if (!traceResultIsSuccess(result)) {
-        throw new Error(result.error);
-      }
-
-      await withMcpContext(async (response, context) => {
-        response.attachTraceInsight(
-          result,
-          'BAD_ID',
-          'LCPBreakdown' as InsightName,
-        );
-        const {content, structuredContent} = await response.handle(
-          'test',
-          context,
-        );
-
-        t.assert.snapshot?.(getTextContent(content[0]));
-        t.assert.snapshot?.(
-          JSON.stringify(
-            stabilizeStructuredContent(structuredContent),
-            null,
-            2,
-          ),
-        );
-      });
-    });
-  });
 });
 
 describe('extensions', () => {

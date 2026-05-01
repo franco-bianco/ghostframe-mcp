@@ -497,10 +497,6 @@ If you run into any issues, checkout our [troubleshooting guide](./docs/troubles
 - **Emulation** (2 tools)
   - [`emulate`](docs/tool-reference.md#emulate)
   - [`resize_page`](docs/tool-reference.md#resize_page)
-- **Performance** (3 tools)
-  - [`performance_analyze_insight`](docs/tool-reference.md#performance_analyze_insight)
-  - [`performance_start_trace`](docs/tool-reference.md#performance_start_trace)
-  - [`performance_stop_trace`](docs/tool-reference.md#performance_stop_trace)
 - **Network** (2 tools)
   - [`get_network_request`](docs/tool-reference.md#get_network_request)
   - [`list_network_requests`](docs/tool-reference.md#list_network_requests)
@@ -623,11 +619,6 @@ The Chrome DevTools MCP server supports the following configuration option:
   Set to true to include tools related to extensions. Note: This feature is currently only supported with a pipe connection. autoConnect, browserUrl, and wsEndpoint are not supported with this feature until 149 will be released.
   - **Type:** boolean
   - **Default:** `false`
-
-- **`--performanceCrux`/ `--performance-crux`**
-  Set to false to disable sending URLs from performance traces to CrUX API to get field performance data.
-  - **Type:** boolean
-  - **Default:** `true`
 
 - **`--usageStatistics`/ `--usage-statistics`**
   Set to false to opt-out of usage statistics collection. Google collects usage data to improve the tool, handled under the Google Privacy Policy (https://policies.google.com/privacy). This is independent from Chrome browser metrics. Disabled if `CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS` or `CI` env variables are set.
