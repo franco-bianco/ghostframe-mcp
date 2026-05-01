@@ -11,7 +11,6 @@ import * as emulationTools from './emulation.js';
 import * as extensionTools from './extensions.js';
 import * as inPageTools from './inPage.js';
 import * as inputTools from './input.js';
-import * as lighthouseTools from './lighthouse.js';
 import * as memoryTools from './memory.js';
 import * as networkTools from './network.js';
 import * as pagesTools from './pages.js';
@@ -33,7 +32,6 @@ export const createTools = (args: ParsedArguments) => {
         ...Object.values(extensionTools),
         ...Object.values(inPageTools),
         ...Object.values(inputTools),
-        ...Object.values(lighthouseTools),
         ...Object.values(memoryTools),
         ...Object.values(networkTools),
         ...Object.values(pagesTools),

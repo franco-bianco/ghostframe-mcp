@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {readFileSync, writeFileSync} from 'node:fs';
+import {existsSync, readFileSync, writeFileSync} from 'node:fs';
 import {rm} from 'node:fs/promises';
 import {resolve} from 'node:path';
 
@@ -27,12 +27,13 @@ function removeConflictingGlobalDeclaration(): void {
     projectRoot,
     'node_modules/@paulirish/trace_engine/models/trace/ModelImpl.d.ts',
   );
+  if (!existsSync(filePath)) {
+    return;
+  }
   console.log(
     'Removing conflicting global declaration from @paulirish/trace_engine...',
   );
   const content = readFileSync(filePath, 'utf-8');
-  // Remove the declare global block using regex
-  // Matches: declare global { ... interface HTMLElementEventMap { ... } ... }
   const newContent = content.replace(
     /declare global\s*\{\s*interface HTMLElementEventMap\s*\{[^}]*\[ModelUpdateEvent\.eventName\]:\s*ModelUpdateEvent;\s*\}\s*\}/s,
     '',

@@ -225,7 +225,8 @@
         "name": "output_dir_path_length",
         "argType": "number"
       }
-    ]
+    ],
+    "isDeprecated": true
   },
   {
     "name": "list_console_messages",

@@ -107,8 +107,7 @@ function listBundledDeps() {
           Object.entries(devDependencies).filter(
             ([name]) =>
               aggregatedStats.bundledPackages.has(name) ||
-              name === 'chrome-devtools-frontend' ||
-              name === 'lighthouse',
+              name === 'chrome-devtools-frontend',
           ),
         );
 
@@ -211,22 +210,6 @@ const bundleDependency = (
               );
             }
 
-            // Add chrome-devtools-frontend main license
-            const lighthouseLicensePath = path.join(
-              process.cwd(),
-              'node_modules/lighthouse/LICENSE',
-            );
-            if (fs.existsSync(lighthouseLicensePath)) {
-              manualLicenses.push(
-                [
-                  'Name: lighthouse',
-                  'License: Apache-2.0',
-                  '',
-                  fs.readFileSync(lighthouseLicensePath, 'utf-8'),
-                ].join('\n'),
-              );
-            }
-
             for (const thirdPartyDir of thirdPartyDirectories) {
               const fullPath = path.join(process.cwd(), thirdPartyDir);
               const licenseFile = path.join(fullPath, 'LICENSE');
@@ -277,11 +260,7 @@ export default [
         return true;
       }
 
-      const existingExternals = [
-        './bidi.js',
-        '../bidi/bidi.js',
-        './lighthouse-devtools-mcp-bundle.js',
-      ];
+      const existingExternals = ['./bidi.js', '../bidi/bidi.js'];
 
       if (existingExternals.includes(source)) {
         return true;
