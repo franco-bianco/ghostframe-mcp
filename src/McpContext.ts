@@ -328,7 +328,15 @@ export class McpContext implements Context {
     }
 
     if (!options.geolocation) {
-      await page.setGeolocation({latitude: 0, longitude: 0});
+      // Clear the override entirely instead of forcing {0, 0} (Null Island),
+      // which is itself a fingerprintable bot tell. Falls back to the
+      // browser's real geolocation behavior.
+      const client = await page.createCDPSession();
+      try {
+        await client.send('Emulation.clearGeolocationOverride');
+      } finally {
+        await client.detach();
+      }
       delete newSettings.geolocation;
     } else {
       await page.setGeolocation(options.geolocation);
