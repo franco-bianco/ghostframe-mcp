@@ -25,6 +25,7 @@ import type {
   JSONSchema7Definition,
   Extension,
 } from './third_party/index.js';
+import {DTMCP_SYMBOL_KEY} from './tools/inPage.js';
 import type {ToolGroup, ToolDefinition} from './tools/inPage.js';
 import {handleDialog} from './tools/pages.js';
 import type {
@@ -102,25 +103,32 @@ async function getToolGroup(
     return;
   }
 
-  const toolGroup = await page.pptrPage.evaluate(() => {
+  const toolGroup = await page.pptrPage.evaluate(stateKey => {
     return new Promise<ToolGroup<ToolDefinition> | undefined>(resolve => {
       const event = new CustomEvent('devtoolstooldiscovery');
       // @ts-expect-error Adding custom property
       event.respondWith = (toolGroup: ToolGroup) => {
-        if (!window.__dtmcp) {
-          window.__dtmcp = {};
-        }
-        window.__dtmcp.toolGroup = toolGroup;
+        const sym = Symbol.for(stateKey);
+        const w = window as unknown as Record<symbol, Record<string, unknown>>;
+        const state = (w[sym] ??= {});
+        state['toolGroup'] = toolGroup;
 
-        // When receiving a toolGroup for the first time, expose a simple execution helper
-        if (!window.__dtmcp.executeTool) {
-          window.__dtmcp.executeTool = async (toolName, args) => {
-            if (!window.__dtmcp?.toolGroup) {
+        if (!state['executeTool']) {
+          state['executeTool'] = async (
+            toolName: string,
+            args: Record<string, unknown>,
+          ) => {
+            const tg = state['toolGroup'] as
+              | ToolGroup<
+                  ToolDefinition & {
+                    execute: (args: Record<string, unknown>) => unknown;
+                  }
+                >
+              | undefined;
+            if (!tg) {
               throw new Error('No tools found on the page');
             }
-            const tool = window.__dtmcp.toolGroup.tools.find(
-              t => t.name === toolName,
-            );
+            const tool = tg.tools.find(t => t.name === toolName);
             if (!tool) {
               throw new Error(`Tool ${toolName} not found`);
             }
@@ -136,7 +144,7 @@ async function getToolGroup(
         resolve(undefined);
       }, 0);
     });
-  });
+  }, DTMCP_SYMBOL_KEY);
 
   for (const tool of toolGroup?.tools ?? []) {
     replaceHtmlElementsWithUids(tool.inputSchema);

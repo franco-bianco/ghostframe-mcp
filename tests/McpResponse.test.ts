@@ -987,7 +987,7 @@ describe('inPage tools', () => {
         stubToolDiscovery(mcpPage.pptrPage);
 
         const initScript = `
-          window.__dtmcp = {
+          window[Symbol.for('dtmcp')] = {
             toolGroup: {
               name: 'In-Page group',
               description: 'Test tools',
@@ -1005,7 +1005,7 @@ describe('inPage tools', () => {
             },
           };
           window.addEventListener('devtoolstooldiscovery', (e) => {
-            e.respondWith(window.__dtmcp?.toolGroup);
+            e.respondWith(window[Symbol.for('dtmcp')]?.toolGroup);
           });
         `;
         await mcpPage.pptrPage.evaluateOnNewDocument(initScript);

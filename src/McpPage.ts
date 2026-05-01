@@ -13,6 +13,7 @@ import type {
   Viewport,
   WebMCPTool,
 } from './third_party/index.js';
+import {DTMCP_SYMBOL_KEY} from './tools/inPage.js';
 import type {ToolGroup, ToolDefinition} from './tools/inPage.js';
 import {takeSnapshot} from './tools/snapshot.js';
 import type {
@@ -166,7 +167,7 @@ export class McpPage implements ContextPage {
     }
 
     const result = await this.pptrPage.evaluate(
-      async (name, args, ...elements) => {
+      async (stateKey, name, args, ...elements) => {
         // Replace the UIDs with DOM elements.
         for (const [key, value] of Object.entries(args)) {
           if (
@@ -179,21 +180,27 @@ export class McpPage implements ContextPage {
           }
         }
 
-        if (!window.__dtmcp?.executeTool) {
+        const sym = Symbol.for(stateKey);
+        const w = window as unknown as Record<symbol, Record<string, unknown>>;
+        const state = w[sym];
+        const executeTool = state?.['executeTool'] as
+          | ((n: string, a: Record<string, unknown>) => unknown)
+          | undefined;
+        if (!executeTool) {
           throw new Error('No tools found on the page');
         }
-        const toolResult = await window.__dtmcp.executeTool(name, args);
+        const toolResult = await executeTool(name, args);
 
         const stashDOMElement = (el: Element) => {
-          if (!window.__dtmcp) {
-            window.__dtmcp = {};
+          const s = (w[sym] ??= {});
+          let stashed = s['stashedElements'] as Element[] | undefined;
+          if (!stashed) {
+            stashed = [];
+            s['stashedElements'] = stashed;
           }
-          if (window.__dtmcp.stashedElements === undefined) {
-            window.__dtmcp.stashedElements = [];
-          }
-          window.__dtmcp.stashedElements.push(el);
+          stashed.push(el);
           return {
-            stashedId: `stashed-${window.__dtmcp.stashedElements.length - 1}`,
+            stashedId: `stashed-${stashed.length - 1}`,
           };
         };
 
@@ -250,11 +257,16 @@ export class McpPage implements ContextPage {
           return data;
         };
 
+        const processed = processToolResult(toolResult);
+        const finalStashed = w[sym]?.['stashedElements'] as
+          | Element[]
+          | undefined;
         return {
-          result: processToolResult(toolResult),
-          stashed: window.__dtmcp?.stashedElements?.length ?? 0,
+          result: processed,
+          stashed: finalStashed?.length ?? 0,
         };
       },
+      DTMCP_SYMBOL_KEY,
       toolName,
       params,
       ...handles,
@@ -262,13 +274,23 @@ export class McpPage implements ContextPage {
 
     const elementHandles: ElementHandle[] = [];
     for (let i = 0; i < (result.stashed ?? 0); i++) {
-      const elementHandle = await this.pptrPage.evaluateHandle(index => {
-        const el = window.__dtmcp?.stashedElements?.[index];
-        if (!el) {
-          throw new Error(`Stashed element at index ${index} not found`);
-        }
-        return el;
-      }, i);
+      const elementHandle = await this.pptrPage.evaluateHandle(
+        (stateKey, index) => {
+          const sym = Symbol.for(stateKey);
+          const w = window as unknown as Record<
+            symbol,
+            Record<string, unknown>
+          >;
+          const stashed = w[sym]?.['stashedElements'] as Element[] | undefined;
+          const el = stashed?.[index];
+          if (!el) {
+            throw new Error(`Stashed element at index ${index} not found`);
+          }
+          return el;
+        },
+        DTMCP_SYMBOL_KEY,
+        i,
+      );
       elementHandles.push(elementHandle);
     }
 

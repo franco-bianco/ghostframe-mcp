@@ -21,20 +21,25 @@ export interface ToolGroup<T extends ToolDefinition> {
   tools: T[];
 }
 
-declare global {
-  interface Window {
-    __dtmcp?: {
-      toolGroup?: ToolGroup<
-        ToolDefinition & {execute: (args: Record<string, unknown>) => unknown}
-      >;
-      stashedElements?: Element[];
-      executeTool?: (
-        toolName: string,
-        args: Record<string, unknown>,
-      ) => unknown;
-    };
-  }
+/**
+ * Internal page-side state used to dispatch in-page tools and stash element
+ * handles. Exposed via Symbol.for('dtmcp') rather than a named global so that
+ * a simple `'__dtmcp' in window` check from a detection script does not flag
+ * us. The key is still discoverable via `Object.getOwnPropertySymbols(window)`,
+ * but is not enumerated by default.
+ */
+export interface DtmcpState {
+  toolGroup?: ToolGroup<
+    ToolDefinition & {execute: (args: Record<string, unknown>) => unknown}
+  >;
+  stashedElements?: Element[];
+  executeTool?: (
+    toolName: string,
+    args: Record<string, unknown>,
+  ) => unknown;
 }
+
+export const DTMCP_SYMBOL_KEY = 'dtmcp';
 
 export const listInPageTools = definePageTool({
   name: 'list_in_page_tools',
@@ -42,7 +47,7 @@ export const listInPageTools = definePageTool({
   In-page tools can be called via the 'execute_in_page_tool()' MCP tool.
   Alternatively, in-page tools can be executed by calling 'evaluate_script' and adding the
   following command to the script:
-  'window.__dtmcp.executeTool(toolName, params)'
+  'window[Symbol.for("dtmcp")].executeTool(toolName, params)'
   This might be helpful when the in-page-tools return non-serializable values or when composing
   the in-page-tools with additional functionality.`,
   annotations: {

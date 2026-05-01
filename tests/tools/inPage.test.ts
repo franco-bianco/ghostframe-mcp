@@ -26,7 +26,7 @@ describe('inPage', () => {
           response.setPage(page);
 
           await page.pptrPage.evaluate(() => {
-            window.__dtmcp = {
+            (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
               toolGroup: {
                 name: 'test-group',
                 description: 'test description',
@@ -47,7 +47,7 @@ describe('inPage', () => {
             };
             window.addEventListener('devtoolstooldiscovery', (e: Event) => {
               // @ts-expect-error Event has `respondWith`
-              e.respondWith(window.__dtmcp?.toolGroup);
+              e.respondWith((window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')]?.toolGroup);
             });
           });
 
@@ -172,7 +172,7 @@ describe('inPage', () => {
       await withMcpContext(
         async (response, context) => {
           await setupInPageTools(response, context, () => {
-            window.__dtmcp = {
+            (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
               toolGroup: {
                 name: 'test-group',
                 description: 'test description',
@@ -194,7 +194,7 @@ describe('inPage', () => {
             };
             window.addEventListener('devtoolstooldiscovery', (e: Event) => {
               // @ts-expect-error Event has `respondWith`
-              e.respondWith(window.__dtmcp?.toolGroup);
+              e.respondWith((window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')]?.toolGroup);
             });
           });
 
@@ -222,7 +222,7 @@ describe('inPage', () => {
     it('throws if tool not found in list', async () => {
       await withMcpContext(async (response, context) => {
         await setupInPageTools(response, context, () => {
-          window.__dtmcp = {
+          (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
             toolGroup: {
               name: 'test-group',
               description: 'test description',
@@ -231,7 +231,7 @@ describe('inPage', () => {
           };
           window.addEventListener('devtoolstooldiscovery', (e: Event) => {
             // @ts-expect-error Event has `respondWith`
-            e.respondWith(window.__dtmcp?.toolGroup);
+            e.respondWith((window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')]?.toolGroup);
           });
         });
 
@@ -258,7 +258,7 @@ describe('inPage', () => {
       await withMcpContext(
         async (response, context) => {
           await setupInPageTools(response, context, () => {
-            window.__dtmcp = {
+            (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
               toolGroup: {
                 name: 'test-group',
                 description: 'test description',
@@ -280,7 +280,7 @@ describe('inPage', () => {
             };
             window.addEventListener('devtoolstooldiscovery', (e: Event) => {
               // @ts-expect-error Event has `respondWith`
-              e.respondWith(window.__dtmcp?.toolGroup);
+              e.respondWith((window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')]?.toolGroup);
             });
           });
 
@@ -310,7 +310,7 @@ describe('inPage', () => {
       await withMcpContext(
         async (response, context) => {
           await setupInPageTools(response, context, () => {
-            window.__dtmcp = {
+            (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
               toolGroup: {
                 name: 'test-group',
                 description: 'test description',
@@ -326,7 +326,7 @@ describe('inPage', () => {
             };
             window.addEventListener('devtoolstooldiscovery', (e: Event) => {
               // @ts-expect-error Event has `respondWith`
-              e.respondWith(window.__dtmcp?.toolGroup);
+              e.respondWith((window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')]?.toolGroup);
             });
           });
 
@@ -375,7 +375,7 @@ describe('inPage', () => {
         };
 
         await page.pptrPage.evaluate(() => {
-          window.__dtmcp = {
+          (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
             executeTool: async (
               _name: string,
               args: Record<string, unknown>,
@@ -446,7 +446,7 @@ describe('inPage', () => {
       await withMcpContext(
         async (response, context) => {
           await setupInPageTools(response, context, () => {
-            window.__dtmcp = {
+            (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
               toolGroup: {
                 name: 'test-group',
                 description: 'test description',
@@ -465,7 +465,7 @@ describe('inPage', () => {
             };
             window.addEventListener('devtoolstooldiscovery', (e: Event) => {
               // @ts-expect-error Event has `respondWith`
-              e.respondWith(window.__dtmcp?.toolGroup);
+              e.respondWith((window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')]?.toolGroup);
             });
           });
 
@@ -494,7 +494,7 @@ describe('inPage', () => {
       await withMcpContext(
         async (response, context) => {
           await setupInPageTools(response, context, () => {
-            window.__dtmcp = {
+            (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
               toolGroup: {
                 name: 'test-group',
                 description: 'test description',
@@ -514,7 +514,7 @@ describe('inPage', () => {
             };
             window.addEventListener('devtoolstooldiscovery', (e: Event) => {
               // @ts-expect-error Event has `respondWith`
-              e.respondWith(window.__dtmcp?.toolGroup);
+              e.respondWith((window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')]?.toolGroup);
             });
           });
 
@@ -546,7 +546,7 @@ describe('inPage', () => {
             class CustomClass {
               val = 'value';
             }
-            window.__dtmcp = {
+            (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
               toolGroup: {
                 name: 'test-group',
                 description: 'test description',
@@ -565,7 +565,7 @@ describe('inPage', () => {
             };
             window.addEventListener('devtoolstooldiscovery', (e: Event) => {
               // @ts-expect-error Event has `respondWith`
-              e.respondWith(window.__dtmcp?.toolGroup);
+              e.respondWith((window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')]?.toolGroup);
             });
           });
 
@@ -613,7 +613,7 @@ describe('inPage', () => {
           };
 
           await page.pptrPage.evaluate(() => {
-            window.__dtmcp = {
+            (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
               executeTool: async () => {
                 const div = document.createElement('div');
                 div.id = 'test-element';
@@ -670,7 +670,7 @@ describe('inPage', () => {
           };
 
           await page.pptrPage.evaluate(() => {
-            window.__dtmcp = {
+            (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
               executeTool: async () => {
                 const div = document.createElement('div');
                 div.id = 'test-element';
@@ -736,7 +736,7 @@ describe('inPage', () => {
           };
 
           await page.pptrPage.evaluate(() => {
-            window.__dtmcp = {
+            (window as unknown as Record<symbol, Record<string, unknown>>)[Symbol.for('dtmcp')] = {
               executeTool: async () => {
                 return 'simple-result';
               },
