@@ -128,6 +128,10 @@ export async function withMcpContext(
       logger('test'),
       {
         experimentalDevToolsDebugging: false,
+        // Tests opt out of stealth so the Universe + ConsoleCollector are
+        // initialized and console-related expectations match upstream behavior.
+        // Stealth-mode behavior is exercised by dedicated tests.
+        stealth: false,
       },
       Locator,
     );

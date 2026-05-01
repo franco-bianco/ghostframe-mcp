@@ -277,5 +277,13 @@
   {
     "name": "category_experimental_in_page",
     "flagType": "boolean"
+  },
+  {
+    "name": "stealth_present",
+    "flagType": "boolean"
+  },
+  {
+    "name": "stealth",
+    "flagType": "boolean"
   }
 ]

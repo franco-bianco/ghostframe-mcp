@@ -244,6 +244,12 @@ export const cliOptions = {
     describe:
       'Set to true to enable tools exposed by the inspected page itself',
   },
+  stealth: {
+    type: 'boolean',
+    default: true,
+    describe:
+      'Stealth posture (default: true). Skips initialization of the chrome-devtools-frontend Universe (which forces Runtime.enable + Debugger.enable on every page and is the single largest CDP fingerprint) and the page console / pageerror / Runtime.exceptionThrown listeners that implicitly enable Runtime. Trade-off: list_console_messages and get_console_message return empty results, and the ConsoleFormatter degrades to its non-DevTools-detailed mode. Set to false to restore the upstream chrome-devtools-mcp behavior.',
+  },
   usageStatistics: {
     type: 'boolean',
     default: true,

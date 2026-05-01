@@ -231,6 +231,7 @@ export async function createMcpServer(
       context = await McpContext.from(browser, logger, {
         experimentalDevToolsDebugging: devtools,
         experimentalIncludeAllPages: serverArgs.experimentalIncludeAllPages,
+        stealth: serverArgs.stealth,
       });
       await updateRoots();
     }

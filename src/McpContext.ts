@@ -50,6 +50,13 @@ interface McpContextOptions {
   experimentalDevToolsDebugging: boolean;
   // Whether all page-like targets are exposed as pages.
   experimentalIncludeAllPages?: boolean;
+  // When true, skip initialization of the DevTools Universe and the
+  // console/pageerror/Runtime.exceptionThrown listeners that implicitly enable
+  // the Runtime CDP domain. The Universe is the single largest CDP fingerprint
+  // because it forces Runtime.enable + Debugger.enable on every page and is
+  // not covered by the rebrowser-puppeteer-core drop-in. Trade-off:
+  // list_console_messages / get_console_message return empty results.
+  stealth: boolean;
 }
 
 const DEFAULT_TIMEOUT = 5_000;
@@ -119,8 +126,15 @@ export class McpContext implements Context {
     const pages = await this.createPagesSnapshot();
     await this.createExtensionServiceWorkersSnapshot();
     await this.#networkCollector.init(pages);
-    await this.#consoleCollector.init(pages);
-    await this.#devtoolsUniverseManager.init(pages);
+    if (!this.#options.stealth) {
+      // Console + Universe init force Runtime.enable + Debugger.enable on every
+      // page (page.on('console'|'pageerror') and createCDPSession +
+      // DebuggerModel observer). The console.groupEnd Proxy-trap family of
+      // detectors looks for exactly that. Skip both when stealth is on; tools
+      // that depend on collected console data will return empty results.
+      await this.#consoleCollector.init(pages);
+      await this.#devtoolsUniverseManager.init(pages);
+    }
   }
 
   dispose() {
