@@ -1,98 +1,173 @@
 ---
 name: troubleshooting
-description: Uses Chrome DevTools MCP and documentation to troubleshoot connection and target issues. Trigger this skill when list_pages, new_page, or navigate_page fail, or when the server initialization fails.
+description: Diagnoses Chrome DevTools MCP failures in this stealth fork. Use when a tool call fails (list_pages, new_page, navigate_page), the server won't start, the target site detects the browser as a bot, or `evaluate_script` results don't match what's on the page.
 ---
 
-## Troubleshooting Wizard
+You are diagnosing a failed call. Work the steps in order; do not skip ahead.
 
-You are acting as a troubleshooting wizard to help the user configure and fix their Chrome DevTools MCP server setup. When this skill is triggered (e.g., because `list_pages`, `new_page`, or `navigate_page` failed, or the server wouldn't start), follow this step-by-step diagnostic process:
+## Step 1: Categorize the symptom
 
-### Step 1: Find and Read Configuration
+Read the error or describe the unexpected behavior. Categorize as one of:
 
-Your first action should be to locate and read the MCP configuration file. Search for the following files in the user's workspace: `.mcp.json`, `gemini-extension.json`, `.claude/settings.json`, `.vscode/launch.json`, or `.gemini/settings.json`.
+- **A. Server / connection failure.** MCP didn't start, `list_pages` errors immediately, `Target closed`, `ERR_MODULE_NOT_FOUND`, etc.
+- **B. Target detects the browser.** Cloudflare/DataDome/Akamai/PerimeterX/Imperva/Kasada interstitial on first navigation; 403 on a previously-working URL; CAPTCHA storm.
+- **C. `evaluate_script` returns the wrong thing.** Returns `undefined` for a known-present page global; returns stale values; returns isolated-world values when the page-side state is needed.
+- **D. Persona disagreement.** Site detects mismatched UA / timezone / locale / proxy IP after `emulate`.
+- **E. Tool not found.** Expected tool isn't available.
 
-If you find a configuration file, read and interpret it to identify potential issues such as:
+Each category has its own playbook below.
 
-- Incorrect arguments or flags.
-- Missing environment variables.
-- Usage of `--autoConnect` in incompatible environments.
+## Step 2A: Server / connection failure
 
-If you cannot find any of these files, only then should you ask the user to provide their configuration file content.
+Locate the MCP configuration first. Search the workspace for `.mcp.json`, `gemini-extension.json`, `.claude/settings.json`, `.vscode/launch.json`, `.gemini/settings.json`. Read for:
 
-### Step 2: Triage Common Connection Errors
+- Incorrect args or flag names (typos like `--autoBronnect`).
+- `--autoConnect` in a sandboxed client.
+- Missing env vars referenced in args.
 
-Before reading documentation or suggesting configuration changes, check if the error message matches one of the following common patterns.
+If no config file is found, ask the user for theirs.
 
-#### Error: `Could not find DevToolsActivePort`
+Then triage the error string:
 
-This error is highly specific to the `--autoConnect` feature. It means the MCP server cannot find the file created by a running, debuggable Chrome instance. This is not a generic connection failure.
+### `Could not find DevToolsActivePort`
 
-Your primary goal is to guide the user to ensure Chrome is running and properly configured. Do not immediately suggest switching to `--browserUrl`. Follow this exact sequence:
+Specific to `--autoConnect`. The MCP cannot find the file that a running, debuggable Chrome creates. In order:
 
-1. **Ask the user to confirm that the correct Chrome version** (e.g., "Chrome Canary" if the error mentions it) is currently running.
-2. **If the user confirms it is running, instruct them to enable remote debugging.** Be very specific about the URL and the action: "Please open a new tab in Chrome, navigate to `chrome://inspect/#remote-debugging`, and make sure the 'Enable remote debugging' checkbox is checked."
-3. **Once the user confirms both steps, your only next action should be to call the `list_pages` tool.** This is the simplest and safest way to verify if the connection is now successful. Do not retry the original, more complex command yet.
-4. **If `list_pages` succeeds, the problem is resolved.** If it still fails with the same error, then you can proceed to the more advanced steps like suggesting `--browserUrl` or checking for sandboxing issues.
+1. Confirm Chrome (right channel — Stable / Canary as the error mentions) is currently running.
+2. Instruct: open `chrome://inspect/#remote-debugging` and tick "Enable remote debugging".
+3. Run `list_pages`. Don't retry the original failed command yet.
+4. If `list_pages` still fails, fall back to `--browserUrl http://127.0.0.1:9222` or check sandboxing.
 
-#### Symptom: Server starts but creates a new empty profile
+### `Target closed`
 
-If the server starts successfully but `list_pages` returns an empty list or creates a new profile instead of connecting to the existing Chrome instance, check for typos in the arguments.
+Browser failed to launch. Close existing Chrome instances, confirm Chrome installs cleanly, retry.
 
-- **Check for flag typos:** For example, `--autoBronnect` instead of `--autoConnect`.
-- **Verify the configuration:** Ensure the arguments match the expected flags exactly.
+### `Server starts but creates a new empty profile`
 
-#### Symptom: Missing Tools / Only 9 tools available
+Argument typo. Check flag spelling exactly.
 
-If the server starts successfully but only a limited subset of tools (like `list_pages`, `get_console_message`, `lighthouse_audit`, `take_memory_snapshot`) are available, this is likely because the MCP client is enforcing a **read-only mode**.
+### `ProtocolError: Network.enable timed out` / `socket connection was closed unexpectedly`
 
-All tools in `chrome-devtools-mcp` are annotated with `readOnlyHint: true` (for safe, non-modifying tools) or `readOnlyHint: false` (for tools that modify browser state, like `emulate`, `click`, `navigate_page`). To access the full suite of tools, the user must disable read-only mode in their MCP client (e.g., by exiting "Plan Mode" in Gemini CLI or adjusting their client's tool safety settings).
+`--autoConnect` handshake failure. Required:
 
-#### Symptom: Extension tools are missing or extensions fail to load
+1. Chrome 144+ already running.
+2. Remote debugging enabled.
+3. Connection prompt accepted.
+4. No competing tool on the debug port.
 
-If the tools related to extensions (like `install_extension`) are not available, or if the extensions you load are not functioning:
+### `ERR_MODULE_NOT_FOUND`
 
-1. **Check for the `--categoryExtensions` flag**: Ensure this flag is passed in the MCP server configuration to enable the extension category tools.
-2. **Make sure the MCP server in configured to launch Chrome instead of connecting to an instance**: Chrome before 149 is not able to load extensions when connecting to an existing instance (`--auto-connect`, `--browserUrl`).
+Wrong Node version or corrupted `npx` cache:
 
-#### Other Common Errors
+```sh
+rm -rf ~/.npm/_npx
+npm cache clean --force
+```
 
-Identify other error messages from the failed tool call or the MCP initialization logs:
+### Sandboxing / Host validation / WSL / Windows-specific
 
-- `Target closed`
-- "Tool not found" (check if they are using `--slim` which only enables navigation and screenshot tools).
-- `ProtocolError: Network.enable timed out` or `The socket connection was closed unexpectedly`
-- `Error [ERR_MODULE_NOT_FOUND]: Cannot find module`
-- Any sandboxing or host validation errors.
+Map to the corresponding section in [`docs/troubleshooting.md`](../../docs/troubleshooting.md).
 
-### Step 3: Read Known Issues
+## Step 2B: Target detects the browser
 
-Read the contents of https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/main/docs/troubleshooting.md to map the error to a known issue. Pay close attention to:
+Probable cause is launch posture, persona, or behavioral. Walk these in order:
 
-- Sandboxing restrictions (macOS Seatbelt, Linux containers).
-- WSL requirements.
-- `--autoConnect` handshakes, timeouts, and requirements (requires **running** Chrome 144+).
+1. **Check `navigator.webdriver`.**
+   ```bash
+   chrome-devtools evaluate_script "() => navigator.webdriver"
+   ```
+   If `true`: launch flags are leaking. `--enable-automation` not stripped, or `--disable-blink-features=AutomationControlled` missing. See [`docs/stealth-configuration.md#default-flag-posture`](../../docs/stealth-configuration.md#default-flag-posture).
 
-### Step 4: Formulate a Configuration
+2. **Check the UA for `HeadlessChrome`.**
+   ```bash
+   chrome-devtools evaluate_script "() => navigator.userAgent"
+   ```
+   If present: running headless without a persona override. Apply `emulate` with a stealth persona, or run headed.
 
-Based on the exact error and the user's environment (OS, MCP client), formulate the correct MCP configuration snippet. Check if they need to:
+3. **Check the WebGL renderer.**
+   ```bash
+   chrome-devtools evaluate_script "() => { const c=document.createElement('canvas').getContext('webgl'); const e=c.getExtension('WEBGL_debug_renderer_info'); return c.getParameter(e.UNMASKED_RENDERER_WEBGL); }"
+   ```
+   `SwiftShader` or `Google Inc. (Google)` indicates software rendering — a bot tell. Run on a host with GPU access or apply WebGL polyfills.
 
-- Pass `--browser-url=http://127.0.0.1:9222` instead of `--autoConnect` (e.g. if they are in a sandboxed environment like Claude Desktop).
-- Enable remote debugging in Chrome (`chrome://inspect/#remote-debugging`) and accept the connection prompt. **Ask the user to verify this is enabled if using `--autoConnect`.**
-- Add `--logFile <absolute_path_to_log_file>` to capture debug logs for analysis.
-- Increase `startup_timeout_ms` (e.g. to 20000) if using Codex on Windows.
+4. **Run `bot.sannysoft.com`.** The matrix tells you which signal class flipped you. Hand off to `skills/detection-testing/` for the full sweep.
 
-_If you are unsure of the user's configuration, ask the user to provide their current MCP server JSON configuration._
+5. **If all four detectors pass and the target still blocks**, hand off to `skills/diagnose-bot-block/`.
 
-### Step 5: Run Diagnostic Commands
+## Step 2C: `evaluate_script` returns the wrong thing
 
-If the issue is still unclear, run diagnostic commands to test the server directly:
+Most common cause: world mismatch.
 
-- Run `npx chrome-devtools-mcp@latest --help` to verify the installation and Node.js environment.
-- If you need more information, run `DEBUG=* npx chrome-devtools-mcp@latest --logFile=/tmp/cdm-test.log` to capture verbose logs. Analyze the output for errors.
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Script returns `undefined` for a `window.foo` set by the page | Ran in isolated world | Pass `world: "main"` |
+| Script reads stale DOM after a click | Page-side handler hasn't run yet | Add `wait_for` between click and eval |
+| Script throws `Cannot read property 'X' of undefined` for a page-defined global | Isolated world cannot see page globals | Pass `world: "main"` |
+| Script in main world is rejected | Stealth mode gates main-world for agent-injected scripts | Re-route through user-supplied call, or rewrite to be isolated-world-safe |
 
-### Step 6: Check GitHub for Existing Issues
+See [`skills/chrome-devtools/SKILL.md`](../chrome-devtools/SKILL.md) for the routing rules.
 
-If https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/main/docs/troubleshooting.md does not cover the specific error, check if the `gh` (GitHub CLI) tool is available in the environment. If so, search the GitHub repository for similar issues:
-`gh issue list --repo ChromeDevTools/chrome-devtools-mcp --search "<error snippet>" --state all`
+## Step 2D: Persona disagreement
 
-Alternatively, you can recommend that the user checks https://github.com/ChromeDevTools/chrome-devtools-mcp/issues and https://github.com/ChromeDevTools/chrome-devtools-mcp/discussions for help.
+Run the coherence probe:
+
+```bash
+chrome-devtools evaluate_script "() => ({
+  ua: navigator.userAgent,
+  uaCH: navigator.userAgentData?.toJSON(),
+  langs: navigator.languages,
+  platform: navigator.platform,
+  tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  locale: Intl.DateTimeFormat().resolvedOptions().locale
+})"
+```
+
+Then compare against:
+
+- The persona you passed to `emulate`. Any disagreement means `emulate` did not bundle the attribute.
+- The proxy egress IP geo. Verify externally — `https://ipinfo.io/json` — and confirm the IP's geo aligns with the timezone and locale.
+
+A US-Pacific timezone behind a Frankfurt egress IP is a stronger detection signal than any single mismatched value.
+
+## Step 2E: Tool not found
+
+- The fork strips `lighthouse_audit`, `take_memory_snapshot`, `performance_start_trace`, `performance_stop_trace`, `performance_analyze_insight`. They are intentionally absent. Do not request them.
+- `--slim` mode exposes only navigation and screenshot tools. Confirm the client isn't running slim.
+- If the tool is `install_extension` or other extension tooling, the server needs `--categoryExtensions` and (for Chrome <149) must launch Chrome itself rather than connect.
+- Some MCP clients enforce read-only mode and hide tools annotated `readOnlyHint: false`. The full set requires turning off the client's read-only / plan-mode setting.
+
+## Step 3: Read upstream known issues
+
+Map remaining symptoms to [`docs/troubleshooting.md`](../../docs/troubleshooting.md). It has the inherited environment cases (sandboxing, WSL, Windows shell wrapping, Web Bluetooth on macOS).
+
+## Step 4: Capture verbose logs
+
+If the issue is still unclear:
+
+```sh
+DEBUG=* npx chrome-devtools-mcp@latest --logFile=/tmp/cdm.log
+```
+
+Read the log for:
+
+- Launch flags actually applied (compare against expected stealth posture).
+- CDP domains enabled at startup (Universe gate verification).
+- Persona application (one `emulate` call should produce multiple CDP calls; confirm all of them happened).
+
+## Step 5: Confirm with diagnostics
+
+If the user is still stuck:
+
+```sh
+npx chrome-devtools-mcp@latest --help
+```
+
+Confirms install, Node version, basic startup. If this fails, the rest is moot — fix the install.
+
+## Step 6: Search known issues
+
+Check the upstream repo for similar symptoms before declaring novel:
+
+```sh
+gh issue list --repo ChromeDevTools/chrome-devtools-mcp --search "<error snippet>" --state all
+```

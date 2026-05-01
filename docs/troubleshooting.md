@@ -1,22 +1,24 @@
 # Troubleshooting
 
+Stealth-specific symptoms first, then inherited connection/environment issues.
+
 ## General tips
 
-- Run `npx chrome-devtools-mcp@latest --help` to test if the MCP server runs on your machine.
-- Make sure that your MCP client uses the same npm and node version as your terminal.
-- When configuring your MCP client, try using the `--yes` argument to `npx` to
-  auto-accept installation prompt.
-- Find a specific error in the output of the `chrome-devtools-mcp` server.
-  Usually, if your client is an IDE, logs would be in the Output pane.
-- Search the [GitHub repository issues and discussions](https://github.com/ChromeDevTools/chrome-devtools-mcp) for help or existing similar problems.
+- Run `npx chrome-devtools-mcp@latest --help` to confirm the server starts.
+- Match the npm and node version between your MCP client and your terminal.
+- Use `--yes` on `npx` to auto-accept install prompts in clients that don't surface them.
+- Server stderr is in the client's Output pane (most IDE clients).
+- Search the upstream repo for matches before opening an issue.
 
 ## Debugging
 
-Start the MCP server with debugging enabled and a log file:
+Verbose logs to a file:
 
-- `DEBUG=* npx chrome-devtools-mcp@latest --log-file=/path/to/chrome-devtools-mcp.log`
+```sh
+DEBUG=* npx chrome-devtools-mcp@latest --log-file=/tmp/cdm.log
+```
 
-Using `.mcp.json` to debug while using a client:
+Through `.mcp.json`:
 
 ```json
 {
@@ -27,157 +29,137 @@ Using `.mcp.json` to debug while using a client:
       "args": [
         "chrome-devtools-mcp@latest",
         "--log-file",
-        "/path/to/chrome-devtools-mcp.log"
+        "/tmp/cdm.log"
       ],
-      "env": {
-        "DEBUG": "*"
-      }
+      "env": { "DEBUG": "*" }
     }
   }
 }
 ```
 
-## Specific problems
+## Stealth-specific symptoms
+
+### Detected on first navigation by Cloudflare / DataDome / Akamai / PerimeterX / Imperva / Kasada
+
+You navigate to a target site and immediately get an interstitial, a 403, or a JS challenge.
+
+Triage in this order:
+
+1. **Confirm `navigator.webdriver`**. Run `evaluate_script` against the target page (or a neutral one) with the script `() => navigator.webdriver`. If `true`, the launch posture is leaking. See [`docs/stealth-configuration.md#default-flag-posture`](./stealth-configuration.md#default-flag-posture). Likely cause: `--enable-automation` is still in the default args (`src/browser.ts:197-198`) or `--disable-blink-features=AutomationControlled` is missing (`src/browser.ts:193-196`).
+2. **Confirm UA does not contain `HeadlessChrome`**. Run `() => navigator.userAgent`. If present, you are running headless without a persona override. Apply `emulate` with a stealth persona, or run headed.
+3. **Run a detector page**. Open `bot.sannysoft.com` in the same session. The test matrix tells you which signal class flipped you. See [`skills/detection-testing/SKILL.md`](../skills/detection-testing/SKILL.md).
+4. **Diff CDP enables**. The Universe gate (`src/DevtoolsUtils.ts:142-156`) leaves `Runtime.enable` and `Debugger.enable` open by default. In stealth mode this is gated; verify the gate is active for your config.
+
+If the target also passes the four detectors, follow [`skills/diagnose-bot-block/SKILL.md`](../skills/diagnose-bot-block/SKILL.md).
+
+### `evaluate_script` does not see DOM changes the page just made
+
+Most likely: the script ran in an isolated world while the change is main-world state.
+
+Decision: if the script needs to read `window.foo` set by the page, pass `world: "main"`. If it only needs to read DOM, leave it isolated.
+
+See [`docs/stealth-configuration.md#evaluate_script-and-isolated-worlds`](./stealth-configuration.md#evaluate_script-and-isolated-worlds) for the full routing table.
+
+### `evaluate_script` fails with "main world is gated"
+
+You requested `world: "main"` from an agent-side script in stealth mode. Stealth mode allows main-world for user-supplied scripts; agent-injected helpers stay isolated. Either route through a user-call, or rewrite the script to be isolated-world-safe.
+
+### Persona looks right but the site still flags us
+
+Coherence check. After `emulate`, evaluate each of the following and confirm they all match the same persona:
+
+```javascript
+() => ({
+  ua: navigator.userAgent,
+  uaCH: navigator.userAgentData?.toJSON(),
+  langs: navigator.languages,
+  platform: navigator.platform,
+  tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  locale: Intl.DateTimeFormat().resolvedOptions().locale
+})
+```
+
+Also verify the proxy egress IP geo agrees with the timezone. A US/Pacific timezone behind a Frankfurt egress IP is a stronger signal than any single value.
+
+### Humanized input feels too slow
+
+Default-on humanization adds 80–600 ms per interaction. For test suites that don't need stealth, the global off-switch exists. Do not add per-call timing overrides — they fragment the persona. See [`skills/humanized-input/SKILL.md`](../skills/humanized-input/SKILL.md).
+
+### `chrome.runtime` polyfill is detected
+
+Polyfills are detected by their *shape*. The fix is rarely to add a flag; it is to update the polyfill to track the upstream reference (Patchright). Read [`docs/detection-signals.md#dom-layer`](./detection-signals.md#dom-layer) before patching.
+
+### `navigator.webdriver` is `false` but `Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')` reveals an override
+
+The override itself is the signal. The fix is to delete the property descriptor at `addScriptToEvaluateOnNewDocument` time, not to set the value. See the borrow-target list in [`skills/borrow-stealth-feature/SKILL.md`](../skills/borrow-stealth-feature/SKILL.md).
+
+## Inherited environment issues
 
 ### `Error [ERR_MODULE_NOT_FOUND]: Cannot find module ...`
 
-This usually indicates either a non-supported Node version is in use or that the
-`npm`/`npx` cache is corrupted. Try clearing the cache, uninstalling
-`chrome-devtools-mcp` and installing it again. Clear the cache by running:
+Wrong Node version or corrupted npx cache:
 
 ```sh
-rm -rf ~/.npm/_npx # NOTE: this might remove other installed npx executables.
+rm -rf ~/.npm/_npx
 npm cache clean --force
 ```
 
-### `Target closed` error
+### `Target closed`
 
-This indicates that the browser could not be started. Make sure that no Chrome
-instances are running or close them. Make sure you have the latest stable Chrome
-installed and that [your system is able to run Chrome](https://support.google.com/chrome/a/answer/7100626?hl=en).
+Browser failed to start. Close any running Chrome instances. Confirm Chrome is installed and the system can run it.
 
-### Chrome crashes on macOS when using Web Bluetooth
+### Chrome crashes on macOS with Web Bluetooth
 
-On macOS, Chrome launched by an MCP client application (such as Claude Desktop) may crash when a Web Bluetooth prompt appears. This is caused by a macOS privacy permission violation (TCC).
+macOS TCC permission issue. Grant Bluetooth to the MCP client app in System Settings > Privacy & Security > Bluetooth, then restart the client.
 
-To resolve this, grant Bluetooth permission to the MCP client application in `System Settings > Privacy & Security > Bluetooth`. After granting permission, restart the client application and start a new MCP session.
+### Remote debugging from VM to host fails
 
-### Remote debugging between virtual machine (VM) and host fails
-
-When attempting to connect to Chrome running on a host machine from within a virtual machine (VM), Chrome may reject the connection due to 'Host' header validation. You can bypass this restriction by creating an SSH tunnel from the VM to the host. In the VM, run:
+Chrome rejects the connection on `Host` header validation. Tunnel:
 
 ```sh
 ssh -N -L 127.0.0.1:9222:127.0.0.1:9222 <user>@<host-ip>
 ```
 
-Point the MCP connection inside the VM to `http://127.0.0.1:9222`. This allows DevTools to reach the host browser without triggering the Host validation error.
+Then point the MCP at `http://127.0.0.1:9222`.
 
-### Operating system sandboxes
+### OS sandboxes (macOS Seatbelt, Linux containers)
 
-Some MCP clients allow sandboxing the MCP server using macOS Seatbelt or Linux
-containers. If sandboxes are enabled, `chrome-devtools-mcp` is not able to start
-Chrome that requires permissions to create its own sandboxes. As a workaround,
-either disable sandboxing for `chrome-devtools-mcp` in your MCP client or use
-`--browser-url` to connect to a Chrome instance that you start manually outside
-of the MCP client sandbox.
+If the client sandboxes the MCP server, `chrome-devtools-mcp` cannot launch a sandboxed Chrome. Either disable client-side sandboxing for the MCP, or run Chrome manually outside the sandbox and connect with `--browser-url`.
 
 ### WSL
 
-By default, `chrome-devtools-mcp` in WSL requires Chrome to be installed within the Linux environment. While it normally attempts to launch Chrome on the Windows side, this currently fails due to a [known WSL issue](https://github.com/microsoft/WSL/issues/14201). Ensure you are using a [Linux distribution compatible with Chrome](https://support.google.com/chrome/a/answer/7100626).
+Chrome must be installed inside the Linux environment by default. Two paths:
 
-Possible workarounds include:
-
-- **Install Google Chrome in WSL:**
-  - `wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb`
-  - `sudo dpkg -i google-chrome-stable_current_amd64.deb`
-
-- **Use Mirrored networking:**
-  1. Configure [Mirrored networking for WSL](https://learn.microsoft.com/en-us/windows/wsl/networking).
-  2. Start Chrome on the Windows side with:
-     `chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\path\to\dir`
-  3. Start `chrome-devtools-mcp` with:
-     `npx chrome-devtools-mcp --browser-url http://127.0.0.1:9222`
-
-- **Use PowerShell or Git Bash** instead of WSL.
-
-### Windows 10: Error during discovery for MCP server 'chrome-devtools': MCP error -32000: Connection closed
-
-- **Solution 1** Call using `cmd` (For more info https://github.com/modelcontextprotocol/servers/issues/1082#issuecomment-2791786310)
-
-  ```json
-  "mcpServers": {
-      "chrome-devtools": {
-        "command": "cmd",
-        "args": ["/c", "npx", "-y", "chrome-devtools-mcp@latest"]
-      }
-    }
+- **Install Chrome in WSL**:
+  ```sh
+  wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+  sudo dpkg -i google-chrome-stable_current_amd64.deb
   ```
+- **Mirrored networking + Chrome on Windows**:
+  1. Configure mirrored networking for WSL.
+  2. Start Chrome: `chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\path\to\dir`.
+  3. `npx chrome-devtools-mcp --browser-url http://127.0.0.1:9222`
 
-  > **The Key Change:** On Windows, running a Node.js package via `npx` often requires the `cmd /c` prefix to be executed correctly from within another process like VSCode's extension host. Therefore, `"command": "npx"` was replaced with `"command": "cmd"`, and the actual `npx` command was moved into the `"args"` array, preceded by `"/c"`. This fix allows Windows to interpret the command correctly and launch the server.
+### Windows 10: `MCP error -32000: Connection closed`
 
-- **Solution 2** Instead of another layer of shell you can write the absolute path to `npx`:
-  > Note: The path below is an example. You must adjust it to match the actual location of `npx` on your machine. Depending on your setup, the file extension might be `.cmd`, `.bat`, or `.exe` rather than `.ps1`. Also, ensure you use double backslashes (`\\`) as path delimiters, as required by the JSON format.
-  ```json
-  "mcpServers": {
-      "chrome-devtools": {
-        "command": "C:\\nvm4w\\nodejs\\npx.ps1",
-        "args": ["-y", "chrome-devtools-mcp@latest"]
-      }
-    }
-  ```
+Wrap `npx` in `cmd /c`:
 
-### Claude Code plugin installation fails with `Failed to clone repository`
-
-When installing `chrome-devtools-mcp` as a Claude Code plugin (either from the
-official marketplace or via `/plugin marketplace add`), the installation may fail
-with a timeout error if your environment cannot reach `github.com` on port 443
-(HTTPS):
-
-```
-Failed to download/cache plugin chrome-devtools-mcp: Failed to clone repository:
-  Cloning into '...'...
-  fatal: unable to access 'https://github.com/ChromeDevTools/chrome-devtools-mcp.git/':
-  Failed to connect to github.com port 443
+```json
+"chrome-devtools": {
+  "command": "cmd",
+  "args": ["/c", "npx", "-y", "chrome-devtools-mcp@latest"]
+}
 ```
 
-This can happen in environments with restricted outbound HTTPS connectivity,
-corporate firewalls, or proxy configurations that block HTTPS git operations.
+Or use the absolute path to `npx` (with double backslashes in JSON).
 
-**Workaround 1: Use SSH instead of HTTPS**
+### `--autoConnect` connection timeouts
 
-If you have SSH access to GitHub configured, you can redirect all GitHub HTTPS
-URLs to use SSH by running:
+Symptoms: `ProtocolError: Network.enable timed out`, `socket connection was closed unexpectedly`. Required state:
 
-```sh
-git config --global url."git@github.com:".insteadOf "https://github.com/"
-```
+1. Chrome 144+ already running.
+2. Remote debugging enabled at `chrome://inspect/#remote-debugging`.
+3. Connection prompt accepted.
+4. No other tool holding the debugging port.
 
-Then retry the plugin installation. This tells git to use your SSH key for all
-GitHub operations instead of HTTPS.
-
-**Workaround 2: Install via CLI instead**
-
-If the plugin marketplace approach fails, you can install `chrome-devtools-mcp`
-as an MCP server directly without cloning the repository:
-
-```sh
-claude mcp add chrome-devtools --scope user npx chrome-devtools-mcp@latest
-```
-
-This bypasses the git clone entirely and uses npm/npx to fetch the package. Note
-that this method installs only the MCP server without the bundled skills.
-
-### Connection timeouts with `--autoConnect`
-
-If you are using the `--autoConnect` flag and tools like `list_pages`, `new_page`, or `navigate_page` fail with a timeout (e.g., `ProtocolError: Network.enable timed out` or `The socket connection was closed unexpectedly`), this usually means the MCP server cannot handshake with the running Chrome instance correctly. Ensure:
-
-1. Chrome 144+ is **already** running.
-2. Remote debugging is enabled in Chrome via `chrome://inspect/#remote-debugging`.
-3. You have allowed the remote debugging connection prompt in the browser.
-4. There is no other MCP server or tool trying to connect to the same debugging port.
-
-> [!IMPORTANT]
-> In Chrome versions up to 149, connection issues may be caused by frozen or unloaded tabs.
-> Chrome DevTools MCP forces all tabs to be loaded, so ensure your system has sufficient resources.
-> It is currently not recommended to use Chrome DevTools MCP with browser instances running hundreds of tabs.
-> See [Issue #1921](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/1921) for more details.
+In Chrome 144–149, frozen or unloaded tabs can also block the handshake. The fork forces tabs to load; ensure the host has memory headroom. Avoid `--autoConnect` on browsers with hundreds of tabs.
