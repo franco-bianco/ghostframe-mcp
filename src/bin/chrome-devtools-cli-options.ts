@@ -188,6 +188,16 @@ export const commands: Commands = {
         "type": "string",
         "description": "Handle dialogs while execution. \"accept\", \"dismiss\", or string for response of window.prompt. Defaults to accept.",
         "required": false
+      },
+      "world": {
+        "name": "world",
+        "type": "string",
+        "description": "Execution world. \"isolated\" (default when no args/element UIDs are passed; recommended for stealth) runs in a fresh isolated context invisible to page scripts and to Function.prototype.toString patching detection. \"main\" runs in the same realm as page scripts. Defaults to \"main\" when args contain element UIDs, since element handles can only be evaluated in the realm that created them. Has no effect when evaluating in a service worker.",
+        "required": false,
+        "enum": [
+          "isolated",
+          "main"
+        ]
       }
     }
   },

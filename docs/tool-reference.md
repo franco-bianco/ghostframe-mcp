@@ -1,6 +1,6 @@
 <!-- AUTO GENERATED DO NOT EDIT - run 'npm run gen' to update-->
 
-# Chrome DevTools MCP Tool Reference (~5896 cl100k_base tokens)
+# Chrome DevTools MCP Tool Reference (~6021 cl100k_base tokens)
 
 - **[Input automation](#input-automation)** (9 tools)
   - [`click`](#click)
@@ -289,6 +289,7 @@ Example with arguments: `(el) => {
 
 - **args** (array) _(optional)_: An optional list of arguments to pass to the function.
 - **dialogAction** (string) _(optional)_: Handle dialogs while execution. "accept", "dismiss", or string for response of window.prompt. Defaults to accept.
+- **world** (enum: "isolated", "main") _(optional)_: Execution world. "isolated" (default when no args/element UIDs are passed; recommended for stealth) runs in a fresh isolated context invisible to page scripts and to Function.prototype.toString patching detection. "main" runs in the same realm as page scripts. Defaults to "main" when args contain element UIDs, since element handles can only be evaluated in the realm that created them. Has no effect when evaluating in a service worker.
 
 ---
 

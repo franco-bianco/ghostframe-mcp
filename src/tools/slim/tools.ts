@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {Dialog} from '../../third_party/index.js';
+import type {Dialog, Realm} from '../../third_party/index.js';
 import {zod} from '../../third_party/index.js';
 import {ToolCategory} from '../categories.js';
 import {definePageTool} from '../ToolDefinition.js';
@@ -80,12 +80,27 @@ export const evaluate = definePageTool({
   },
   schema: {
     script: zod.string().describe(`JS script to run on the page`),
+    world: zod
+      .enum(['isolated', 'main'])
+      .optional()
+      .describe(
+        'Execution world. "isolated" (default, recommended for stealth) runs in a fresh isolated context invisible to page scripts; "main" runs in the same realm as page scripts. Use "main" only when same-realm access is required.',
+      ),
   },
   blockedByDialog: true,
   handler: async (request, response) => {
     const page = request.page;
+    const world = request.params.world ?? 'isolated';
+    const target =
+      world === 'isolated'
+        ? (
+            page.pptrPage.mainFrame() as unknown as {
+              isolatedRealm: () => Realm;
+            }
+          ).isolatedRealm()
+        : page.pptrPage;
     try {
-      const result = await page.pptrPage.evaluate(request.params.script);
+      const result = await target.evaluate(request.params.script);
       response.appendResponseLine(JSON.stringify(result));
     } catch (err) {
       response.appendResponseLine(String(err.message));

@@ -25,8 +25,8 @@ import type {
   JSONSchema7Definition,
   Extension,
 } from './third_party/index.js';
-import {DTMCP_SYMBOL_KEY} from './tools/inPage.js';
 import type {ToolGroup, ToolDefinition} from './tools/inPage.js';
+import {DTMCP_SYMBOL_KEY} from './utils/dtmcpState.js';
 import {handleDialog} from './tools/pages.js';
 import type {
   DevToolsData,

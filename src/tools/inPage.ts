@@ -21,25 +21,6 @@ export interface ToolGroup<T extends ToolDefinition> {
   tools: T[];
 }
 
-/**
- * Internal page-side state used to dispatch in-page tools and stash element
- * handles. Exposed via Symbol.for('dtmcp') rather than a named global so that
- * a simple `'__dtmcp' in window` check from a detection script does not flag
- * us. The key is still discoverable via `Object.getOwnPropertySymbols(window)`,
- * but is not enumerated by default.
- */
-export interface DtmcpState {
-  toolGroup?: ToolGroup<
-    ToolDefinition & {execute: (args: Record<string, unknown>) => unknown}
-  >;
-  stashedElements?: Element[];
-  executeTool?: (
-    toolName: string,
-    args: Record<string, unknown>,
-  ) => unknown;
-}
-
-export const DTMCP_SYMBOL_KEY = 'dtmcp';
 
 export const listInPageTools = definePageTool({
   name: 'list_in_page_tools',

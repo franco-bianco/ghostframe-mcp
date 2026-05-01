@@ -13,8 +13,8 @@ import type {
   Viewport,
   WebMCPTool,
 } from './third_party/index.js';
-import {DTMCP_SYMBOL_KEY} from './tools/inPage.js';
 import type {ToolGroup, ToolDefinition} from './tools/inPage.js';
+import {DTMCP_SYMBOL_KEY} from './utils/dtmcpState.js';
 import {takeSnapshot} from './tools/snapshot.js';
 import type {
   ContextPage,

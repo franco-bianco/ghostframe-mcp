@@ -5,7 +5,13 @@
  */
 
 import {zod} from '../third_party/index.js';
-import type {Frame, JSHandle, Page, WebWorker} from '../third_party/index.js';
+import type {
+  Frame,
+  JSHandle,
+  Page,
+  Realm,
+  WebWorker,
+} from '../third_party/index.js';
 import type {ExtensionServiceWorker} from '../types.js';
 
 import {ToolCategory} from './categories.js';
@@ -13,6 +19,7 @@ import type {Context, Response} from './ToolDefinition.js';
 import {defineTool, pageIdSchema} from './ToolDefinition.js';
 
 export type Evaluatable = Page | Frame | WebWorker;
+type EvaluationTarget = Evaluatable | Realm;
 
 export const evaluateScript = defineTool(cliArgs => {
   return {
@@ -52,6 +59,12 @@ Example with arguments: \`(el) => {
         .describe(
           'Handle dialogs while execution. "accept", "dismiss", or string for response of window.prompt. Defaults to accept.',
         ),
+      world: zod
+        .enum(['isolated', 'main'])
+        .optional()
+        .describe(
+          'Execution world. "isolated" (default when no args/element UIDs are passed; recommended for stealth) runs in a fresh isolated context invisible to page scripts and to Function.prototype.toString patching detection. "main" runs in the same realm as page scripts. Defaults to "main" when args contain element UIDs, since element handles can only be evaluated in the realm that created them. Has no effect when evaluating in a service worker.',
+        ),
       ...(cliArgs?.experimentalPageIdRouting ? pageIdSchema : {}),
       ...(cliArgs?.categoryExtensions
         ? {
@@ -73,6 +86,12 @@ Example with arguments: \`(el) => {
         pageId,
         dialogAction,
       } = request.params;
+      // Element handles are bound to the realm that created them, so when the
+      // caller passes element UIDs we have to evaluate in main world. Default
+      // to isolated when no element UIDs are passed.
+      const world =
+        request.params.world ??
+        (uidArgs && uidArgs.length > 0 ? 'main' : 'isolated');
 
       if (cliArgs?.categoryExtensions && serviceWorkerId) {
         if (uidArgs && uidArgs.length > 0) {
@@ -109,10 +128,12 @@ Example with arguments: \`(el) => {
         }
 
         const evaluatable = await getPageOrFrame(page, frames);
+        const target: EvaluationTarget =
+          world === 'isolated' ? toIsolatedRealm(evaluatable) : evaluatable;
 
         await mcpPage.waitForEventsAfterAction(
           async () => {
-            await performEvaluation(evaluatable, fnString, args, response);
+            await performEvaluation(target, fnString, args, response);
           },
           {handleDialog: dialogAction ?? 'accept'},
         );
@@ -123,15 +144,25 @@ Example with arguments: \`(el) => {
   };
 });
 
+// Frame.isolatedRealm() is marked @internal in puppeteer-core's public types
+// but is the supported way to get a Realm scoped to an isolated world. We cast
+// through a structural type so the @internal tag does not block compilation.
+type IsolatedRealmFrame = Frame & {isolatedRealm: () => Realm};
+
+const toIsolatedRealm = (target: Page | Frame): Realm => {
+  const frame = 'mainFrame' in target ? target.mainFrame() : target;
+  return (frame as IsolatedRealmFrame).isolatedRealm();
+};
+
 const performEvaluation = async (
-  evaluatable: Evaluatable,
+  target: EvaluationTarget,
   fnString: string,
   args: Array<JSHandle<unknown>>,
   response: Response,
 ) => {
-  const fn = await evaluatable.evaluateHandle(`(${fnString})`);
+  const fn = await target.evaluateHandle(`(${fnString})`);
   try {
-    const result = await evaluatable.evaluate(
+    const result = await target.evaluate(
       async (fn, ...args) => {
         // @ts-expect-error no types for function fn
         return JSON.stringify(await fn(...args));

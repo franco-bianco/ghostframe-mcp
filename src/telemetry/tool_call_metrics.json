@@ -94,6 +94,10 @@
       {
         "name": "script_length",
         "argType": "number"
+      },
+      {
+        "name": "world",
+        "argType": "string"
       }
     ]
   },
@@ -111,6 +115,10 @@
       {
         "name": "dialog_action_length",
         "argType": "number"
+      },
+      {
+        "name": "world",
+        "argType": "string"
       }
     ]
   },
