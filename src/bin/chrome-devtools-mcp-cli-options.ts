@@ -252,9 +252,9 @@ export const cliOptions = {
   },
   usageStatistics: {
     type: 'boolean',
-    default: true,
+    default: false,
     describe:
-      'Set to false to opt-out of usage statistics collection. Google collects usage data to improve the tool, handled under the Google Privacy Policy (https://policies.google.com/privacy). This is independent from Chrome browser metrics. Disabled if `CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS` or `CI` env variables are set.',
+      'Send usage statistics to Google Clearcut. Off by default in this stealth fork (sending stealth-config telemetry to Google contradicts the fork posture). Set to true to opt back in. Also disabled if `CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS` or `CI` env variables are set.',
   },
   clearcutEndpoint: {
     type: 'string',
