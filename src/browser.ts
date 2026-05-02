@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import {getStealthInitScript} from './init-scripts/index.js';
 import {logger} from './logger.js';
 import type {
   Browser,
@@ -150,6 +151,14 @@ interface McpLaunchOptions {
   devtools: boolean;
   enableExtensions?: boolean;
   viaCli?: boolean;
+  /**
+   * When true, install the Patchright-shape DOM polyfills (see
+   * `src/init-scripts/`) on every page via
+   * `Page.addScriptToEvaluateOnNewDocument`. Defaults to false at the launch
+   * layer; the McpContext-level `stealth` default of true does NOT propagate
+   * here automatically and must be plumbed in by the caller.
+   */
+  stealth?: boolean;
 }
 
 export function detectDisplay(): void {
@@ -166,6 +175,39 @@ export function detectDisplay(): void {
       process.env['DISPLAY'] = display;
     } catch {
       // no-op
+    }
+  }
+}
+
+/**
+ * Install the Patchright-shape stealth init script so it runs on every new
+ * document for every current and future page. The script must execute in the
+ * page's main world (no `worldName`) — running it in an isolated world would
+ * leave `window.chrome`, `WebGLRenderingContext.prototype.getParameter`, etc.
+ * untouched from the perspective of detector scripts that themselves run in
+ * the main world. See `src/init-scripts/` for the polyfill bodies.
+ */
+async function installStealthInitScript(browser: Browser): Promise<void> {
+  const script = getStealthInitScript();
+  const inject = async (target: Target): Promise<void> => {
+    try {
+      const page = await target.page();
+      if (!page) {
+        return;
+      }
+      await page.evaluateOnNewDocument(script);
+    } catch (err) {
+      logger('Failed to install stealth init script', err);
+    }
+  };
+  browser.on('targetcreated', target => {
+    void inject(target);
+  });
+  for (const page of await browser.pages()) {
+    try {
+      await page.evaluateOnNewDocument(script);
+    } catch (err) {
+      logger('Failed to install stealth init script on existing page', err);
     }
   }
 }
@@ -234,6 +276,9 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       // should expose the process earlier or expose the getRecentLogs() getter.
       browser.process()?.stderr?.pipe(options.logFile);
       browser.process()?.stdout?.pipe(options.logFile);
+    }
+    if (options.stealth) {
+      await installStealthInitScript(browser);
     }
     if (options.viewport) {
       const [page] = await browser.pages();
