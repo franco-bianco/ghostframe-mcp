@@ -8,140 +8,142 @@ The reference for *why* each choice matters lives in [`detection-signals.md`](./
 
 ### Default flag posture
 
-The launch routine lives at `src/browser.ts:46-134` (connect path) and `src/browser.ts:173-261` (launch path); the route is decided at `src/index.ts:191-228`.
+Launch routes through `src/browser.ts:46-134` (connect path) and `src/browser.ts:215-280` (launch path); the route is decided at `src/index.ts:191-228`.
 
 Stripped from the inherited posture:
 
-- `--enable-automation` — `src/browser.ts:197-198` keeps `ignoreDefaultArgs:false`, which retains this flag. Stealth mode strips it explicitly.
-- Hardcoded `--screen-info={3840x2160}` at `src/browser.ts:201` — replaced with persona-coherent values from the active emulation profile.
+- `--enable-automation` — `src/browser.ts:240-243` adds it to `ignoreDefaultArgs`. Without this strip, `navigator.webdriver === true` is the top automation tell.
+- Hardcoded `--screen-info=3840x2160` — removed entirely. Persona-coherent values come from the `emulate` tool's viewport field instead.
 
 Added in stealth mode:
 
-- `--disable-blink-features=AutomationControlled`. Absent in the inherited launch (`src/browser.ts:193-196`); without it `navigator.webdriver === true` survives.
-- Persona-aware viewport, locale, and timezone flags so launch-time values agree with what the page reads from `navigator` and `Intl`.
+- `--disable-blink-features=AutomationControlled` (`src/browser.ts:238`). Defense-in-depth even if the `--enable-automation` strip is bypassed.
 
 Kept deliberately:
 
-- `pipe:true` at `src/browser.ts:225`. Avoids `--remote-debugging-port`, which is a CDP-detectable signal (the port shows up in `chrome://flags` and is probable from an injected script in some configurations).
+- `pipe:true` (`src/browser.ts:314`). Avoids `--remote-debugging-port`, which is a CDP-detectable signal.
 
 ### Channel selection
 
-Default: stable Chrome via Puppeteer's resolver. Alternatives are the `chrome` channel binaries on the host. Document the channel chosen — Canary and Dev change fingerprints often and are usable but not the default.
+Default: stable Chrome via Puppeteer's resolver. `--channel canary|dev|beta` switches binaries. Canary changes fingerprints often and is fine for ad-hoc work but not the default.
 
 ### Profile lifecycle
 
-`src/browser.ts:175-191` builds a predictable user-data-dir at `$HOME/.cache/chrome-devtools-mcp[-cli]/chrome-profile[-channel]`. Cookies, IndexedDB, and HSTS pins persist across runs.
+`src/browser.ts:222-247` builds a user-data-dir at `$HOME/.cache/chrome-devtools-mcp-stealth/chrome-profile[-channel]`. Distinct from upstream's `$HOME/.cache/chrome-devtools-mcp/...` so this fork can coexist without contention.
 
-For a one-shot session that should not leak prior browsing into the new run, override the user-data-dir to a fresh temp path. For a session that should look like a returning user, reuse the default.
+Cookies, IndexedDB, localStorage, and Cloudflare reputation persist across runs. For a one-shot session that should not leak prior browsing, pass `--isolated` (or override `--user-data-dir` to a fresh temp path). For a session that should look like a returning user, reuse the default.
 
 ### Headless posture
 
-The CLI entry forces `headless: true` at `src/bin/chrome-devtools.ts:55-64,101-105`. The MCP path defaults to `headless: false` at `src/bin/chrome-devtools-mcp-cli-options.ts:90-94`. This asymmetry is real — fix in scripts you write rather than assuming a default.
+The CLI entry forces `headless: true` at `src/bin/chrome-devtools.ts:55-64,101-105`. The MCP path defaults to `headless: false` at `src/bin/chrome-devtools-mcp-cli-options.ts`. This asymmetry is real — set it explicitly in scripts you write rather than relying on defaults.
 
-Headless Chrome ships a UA containing `HeadlessChrome` and a different `navigator.userAgent`. Stealth mode requires the persona profile (see [Fingerprint coherence](#fingerprint-coherence)) to override UA when running headless. Running headless without the override is one of the most common mistakes on this fork.
+Headless Chrome ships a UA containing `HeadlessChrome` and a different `navigator.userAgent`. Stealth mode requires a persona profile (see [Fingerprint coherence](#fingerprint-coherence)) when running headless. Running headless without the override is the most common mistake.
 
 ### Linux DISPLAY
 
-`src/browser.ts:155-171` reads `DISPLAY` from env. There is no Xvfb fallback, and the fork does not auto-spawn one. If headed mode on Linux returns "cannot open display", install Xvfb and run the MCP under `xvfb-run`. Out of scope for the fork to manage this.
+`src/browser.ts:164-180` reads `DISPLAY` from env. There is no Xvfb fallback, and the fork does not auto-spawn one. If headed mode on Linux fails with "cannot open display", install Xvfb and run the MCP server under `xvfb-run`. Out of scope for the fork to manage.
 
 ### `--no-sandbox` posture
 
-Permitted in containers where the host already provides isolation. Not a stealth signal in itself, but `--single-process` is — do not pair them. Some bot-detection vendors probe for the `--single-process` shape via `crossOriginIsolated`.
+Permitted in containers where the host already provides isolation. Not a stealth signal in itself, but `--single-process` is — never pair them. Some bot-detection vendors probe for the `--single-process` shape via `crossOriginIsolated`.
+
+### Authenticated proxies
+
+`--proxy-server` accepts `host:port:user:pass` and URL forms with embedded credentials. Chrome strips inline `user:pass@` from the flag for security; the fork answers the 407 challenge via Puppeteer's `page.authenticate()` on every existing and future page (`src/browser.ts:223-256`). See README "Proxy" for the supported formats.
 
 ## CDP routing
 
 ### The Universe gate
 
-`src/DevtoolsUtils.ts:142-156` enables `Runtime.enable` and `Debugger.enable` on every page on attach. This is the single largest CDP-detectable leak on the fork (rebrowser publishes the detection vector).
+`src/DevtoolsUtils.ts:55-127` defines a `UniverseManager` that, when initialised, calls `page.createCDPSession()` per page and observes `DebuggerModel` + `RuntimeModel`, which forces `Runtime.enable` and `Debugger.enable` on every page. This is the largest single CDP-detectable leak (rebrowser publishes the detection vector).
 
-Stealth mode gates this off. The cost: DevTools-frontend Universe affordances (Universe-mediated CDP-frontend probing) become unavailable. Acceptable trade.
+Stealth mode gates this off in `src/McpContext.ts:#init` — the Universe is not initialised when `--stealth` is on. The console / pageerror / `Runtime.exceptionThrown` listeners are also not subscribed in stealth mode, since each implicitly enables `Runtime`.
 
-Two implicit `Runtime.enable` paths persist via Puppeteer's listener wiring:
+Trade-off:
 
-- `src/PageCollector.ts:280` — `Runtime.exceptionThrown` listener.
-- `src/McpContext.ts:113-122` and `src/PageCollector.ts:140` — `page.on('console'|'pageerror')` calls.
+- DevTools-frontend Universe affordances (CDP-frontend probing) become unavailable.
+- `list_console_messages` and `get_console_message` return empty results.
+- `ConsoleFormatter` falls back to its non-Universe-detailed mode.
 
-These are the next mitigation targets. Document the residual leak; do not paper over it.
+`--no-stealth` restores the upstream behaviour, including the Universe and the console listeners.
 
 ### `evaluate_script` and isolated worlds
 
-The public contract for `evaluate_script` keeps a main-world default for backwards compatibility. Stealth mode adds a `world: "isolated" | "main"` parameter, defaulting to `isolated` for agent-injected scripts.
+`evaluate_script` and slim `evaluate` accept `world: 'isolated' | 'main'`. The default is `'isolated'` — except when `args` (element UIDs) are passed, in which case the default falls back to `'main'`. Element handles are bound to the realm that created them; you cannot evaluate a main-world handle inside an isolated realm.
 
-Tools that currently leak main-world state and are migration targets:
-
-- `src/McpPage.ts:168,265`
-- `src/McpResponse.ts:105,116`
-- `src/WaitForHelper.ts:37,65,76`
-- `src/TextSnapshot.ts:189,204,224`
-- `src/tools/script.ts:132,134`
-- `src/tools/slim/tools.ts:88`
-- `src/tools/pages.ts:290`
-
-Routing rules (see [`skills/chrome-devtools/SKILL.md`](../skills/chrome-devtools/SKILL.md) for the fold-in):
+Routing rules:
 
 1. Read-only DOM access from agent-side code: isolated.
 2. Need `window.foo` set by the page: main.
-3. Sets state visible to the page: main.
+3. Set state visible to the page: main.
 4. Injected by the agent rather than the user: isolated.
 
-### `__dtmcp` global
+Implementation: `Frame.isolatedRealm()` (Puppeteer's `@internal` API; cast through a structural type — see `src/tools/script.ts`).
 
-`src/McpPage.ts:182-198` parks an internal helper at `window.__dtmcp`. A page can list it, name it, and report it. Stealth mode moves the identity to `Symbol.for('dtmcp')` so the global object's enumerable surface is unchanged.
+### `Symbol.for('dtmcp')` global
 
-### rebrowser-puppeteer base
+The in-page tools state lives at `window[Symbol.for('dtmcp')]` rather than `window.__dtmcp` (`src/utils/dtmcpState.ts`). The Symbol-keyed property does not appear in `Object.keys(window)` or `for…in`, so a simple `'__dtmcp' in window` check does not flag us. It remains discoverable via `Object.getOwnPropertySymbols(window)`.
 
-User-tool eval routing uses `rebrowser-puppeteer-core` instead of stock `puppeteer-core` — see `src/third_party/index.ts:46`. This handles `Runtime.evaluate` re-routing only; the Universe gate above is a separate fix.
+The user-facing path for calling in-page tools from `evaluate_script` is `window[Symbol.for("dtmcp")].executeTool(toolName, params)`.
+
+### rebrowser-puppeteer (deferred)
+
+A `rebrowser-puppeteer-core` drop-in was considered for handling user-tool eval routing through isolated worlds. Deferred: the latest rebrowser-puppeteer-core release (24.8.1, May 2025) is ~34 minor versions behind our pinned puppeteer-core (24.42.0). The Universe gate above covers the bigger detection delta and is independent. Revisit if rebrowser-puppeteer-core catches up, or via a `patch-package` approach over puppeteer-core@24.42.
 
 ## Fingerprint coherence
 
 ### `emulate` bundles a persona
 
-`src/McpContext.ts:340` (geolocation), `src/McpContext.ts:347-353` (`setUserAgent` is string-only) — the inherited tool sets values one at a time, which is the bot tell.
+The fork's `emulate` tool routes UA, UA-CH, locale, timezone, geolocation, viewport, and color-scheme through raw CDP rather than `page.setUserAgent`:
 
-In stealth mode, `emulate` accepts a persona object: UA string + UA-CH metadata + `Accept-Language` + locale + timezone + geolocation + viewport. All apply atomically. Per-attribute overrides are not exposed.
+- `Emulation.setUserAgentOverride` with `userAgentMetadata` (brands, platform, mobile, bitness, fullVersionList) so `navigator.userAgent` and `Sec-CH-UA-*` stay in sync.
+- `Emulation.setLocaleOverride` for `navigator.language` and `Intl` APIs.
+- `Emulation.setTimezoneOverride` for `Intl.DateTimeFormat().resolvedOptions().timeZone`.
+- `Network.setExtraHTTPHeaders({'Accept-Language': locale})` so the Accept-Language header matches.
+- `Emulation.clearGeolocationOverride` when no geolocation is provided (instead of `{lat:0,lon:0}` Null Island, which is itself a bot tell).
 
-Specifically:
-
-- `setUserAgent` accepts UA-CH metadata (versions, mobile, platform, fullVersionList).
-- `Emulation.setLocaleOverride` and `Emulation.setTimezoneOverride` are called as part of `emulate`.
-- `setExtraHTTPHeaders` sets `Accept-Language` to match locale.
-- Geolocation defaults to `clearGeolocationOverride` rather than `{0,0}` Null Island. Setting it to `{0,0}` is a known bot tell.
+`userAgentMetadata` is exposed as a JSON-encoded string parameter (the local `enforce-zod-schema` ESLint rule forbids nested `zod.object` schemas).
 
 ### Coherence checks after a persona change
 
 After running `emulate`, evaluate the following in the page and confirm they all match the persona:
 
 - `navigator.userAgent`
-- `navigator.userAgentData` (UA-CH high-entropy values)
+- `navigator.userAgentData` (UA-CH high-entropy values via `getHighEntropyValues()`)
 - `navigator.languages`
 - `navigator.platform`
 - `Intl.DateTimeFormat().resolvedOptions().timeZone`
 - `Intl.DateTimeFormat().resolvedOptions().locale`
-- The proxy egress IP's geo (verified externally; e.g. `https://ipinfo.io/json`)
+- The proxy egress IP's geo (verified externally via e.g. <https://ipinfo.io/json>)
 
-A mismatch on any one is a detection.
+A mismatch on any one is a detection. A US/Pacific timezone behind a Frankfurt egress IP is a stronger signal than any single value.
 
 ## Humanized input
 
-Default-on for `click`, `hover`, `type_text`, `drag`. One global off-switch only — no per-call overrides. The off-switch is for tests that need deterministic timing; it should never ship to production runs.
+Default-on for `click`, `click_at`, `hover`, `type_text`, `drag`, `press_key` (`src/utils/humanInput.ts`, wired in `src/tools/input.ts`). One global off-switch via `--no-stealth` — no per-call timing overrides. Per-call overrides fragment the persona and are explicitly not exposed.
 
 Distributions:
 
-- **Mouse**: cubic-bezier path with 1–3 control-point jitters. 8–24 `mouseMoved` events along the path. 8–30 ms non-uniform inter-event gap. Optional 80–250 ms pre-press dwell. 40–180 ms down-to-up dwell.
-- **Typing**: lognormal flight 80–250 ms (mean ~110 ms). Dwell 50–150 ms. Thinking pause 350–600 ms every 8–25 characters.
-- **Drag**: 80–280 ms randomized inter-step. The inherited 50 ms uniform gap (`src/tools/input.ts:305-307`) is a tell.
+- **Mouse** — cubic-bezier path with 1–3 control-point jitters, 8–24 `mouseMoved` events along the path, 8–30 ms non-uniform inter-event gap, optional 80–250 ms pre-press dwell, 40–180 ms down-to-up dwell.
+- **Typing** — lognormal flight 80–250 ms (mean ~110 ms). Dwell 50–150 ms. Thinking pause 350–600 ms every 8–25 characters.
+- **Drag** — 80–280 ms randomized inter-step.
+- **Modifier keys** — 30–80 ms dwell.
 
-The inherited code path has zero humanization (`src/tools/input.ts:67-69,105,141,214,272,344,434-438`). Migration is in progress; until done, treat the off-switch as default-off and verify each input tool individually.
+`fill` and `fill_form` remain atomic value-sets (no per-character humanization) — long-form fills would time out test suites and the use case is "set a value", not "key it in".
+
+The submit-key in `type_text` (`{submitKey: 'Enter'}`) is intentionally pressed via the un-humanized `keyboard.press` directly to preserve the existing `Unknown key: "..."` error shape from the existing test for invalid submit keys.
 
 See [`skills/humanized-input/SKILL.md`](../skills/humanized-input/SKILL.md) for the operational guide.
 
 ## DOM polyfills
 
-Stealth mode ships Patchright-shape polyfills:
+Stealth mode injects Patchright-shape polyfills via `Page.addScriptToEvaluateOnNewDocument` on every existing and future page (`src/browser.ts:198-220`, `src/init-scripts/`). They run in the page's main world (no `worldName`); running them in an isolated world would leave the patched APIs untouched from the perspective of detector scripts that themselves run in main world.
 
-- `chrome.runtime`, `chrome.loadTimes`, `chrome.csi`
-- `Notification.permission` aligned with `Permissions.query({name:'notifications'})`
-- `WebGLRenderingContext.getParameter` returning sane vendor/renderer for `UNMASKED_VENDOR_WEBGL` (37445) and `UNMASKED_RENDERER_WEBGL` (37446)
-- `Function.prototype.toString` Proxy preserving `function () { [native code] }` for the polyfilled functions
+Shipped polyfills:
 
-Read the arms-race caveat in [`detection-signals.md`](./detection-signals.md#dom-layer) before adding new polyfills.
+- `chrome.runtime` / `chrome.loadTimes` / `chrome.csi` stubs (`src/init-scripts/chrome-globals.ts`).
+- `Notification.permission` aligned with `Permissions.query({name:'notifications'})` (`src/init-scripts/permissions.ts`).
+- `WebGLRenderingContext.prototype.getParameter` for `UNMASKED_VENDOR_WEBGL` (37445) and `UNMASKED_RENDERER_WEBGL` (37446) — returns `Intel Inc.` / `Intel Iris OpenGL Engine` (`src/init-scripts/webgl.ts`).
+- `Function.prototype.toString` Proxy preserving `function NAME() { [native code] }` for any function tagged with `Symbol.for('__cdtmcp_native__')` (`src/init-scripts/native-toString.ts`). The four shim functions above are tagged at registration time.
+
+Read the arms-race caveat in [`detection-signals.md#dom-layer`](./detection-signals.md#dom-layer) before adding new polyfills.

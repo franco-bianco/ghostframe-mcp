@@ -24,7 +24,7 @@ export const cliOptions = {
   browserUrl: {
     type: 'string',
     description:
-      'Connect to a running, debuggable Chrome instance (e.g. `http://127.0.0.1:9222`). For more details see: https://github.com/ChromeDevTools/chrome-devtools-mcp#connecting-to-a-running-chrome-instance.',
+      'Connect to a running, debuggable Chrome instance (e.g. `http://127.0.0.1:9222`). See README "Connecting to a running Chrome instance".',
     alias: 'u',
     conflicts: ['wsEndpoint'],
     coerce: (url: string | undefined) => {
@@ -42,7 +42,7 @@ export const cliOptions = {
   wsEndpoint: {
     type: 'string',
     description:
-      'WebSocket endpoint to connect to a running Chrome instance (e.g., ws://127.0.0.1:9222/devtools/browser/<id>). Alternative to --browserUrl.',
+      'WebSocket endpoint to connect to a running Chrome instance (e.g., `ws://127.0.0.1:9222/devtools/browser/{ID}`). Alternative to --browserUrl.',
     alias: 'w',
     conflicts: ['browserUrl'],
     coerce: (url: string | undefined) => {
@@ -106,7 +106,7 @@ export const cliOptions = {
   userDataDir: {
     type: 'string',
     description:
-      'Path to the user data directory for Chrome. Default is $HOME/.cache/chrome-devtools-mcp/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE',
+      'Path to the user data directory for Chrome. Default is $HOME/.cache/chrome-devtools-mcp-stealth/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE.',
     conflicts: ['browserUrl', 'wsEndpoint', 'isolated'],
   },
   channel: {
@@ -141,15 +141,8 @@ export const cliOptions = {
   },
   proxyServer: {
     type: 'string',
-    description: `Proxy server for Chrome to route all browser traffic through. Accepts:
-- host:port                         (no auth)
-- host:port:user:pass               (with basic auth — common proxy-list format)
-- http://host:port                  (no auth, explicit scheme)
-- http://user:pass@host:port        (with auth, embedded creds)
-- socks5://host:port                (no auth, SOCKS5)
-Authenticated proxies use Puppeteer's page.authenticate() to answer the 407
-challenge — Chrome itself strips inline credentials from --proxy-server, so the
-credentials are applied at the page-event layer, not on the command line.`,
+    description:
+      'Proxy server for Chrome to route all browser traffic through. Accepts: `host:port` (no auth), `host:port:user:pass` (with basic auth — common proxy-list format), `http://host:port`, `http://user:pass@host:port`, `socks5://host:port`, or `socks5://user:pass@host:port`. Authenticated proxies use Puppeteer\'s page.authenticate() to answer the 407 challenge — Chrome strips inline credentials from --proxy-server for security, so credentials are applied at the page-event layer, not on the command line.',
   },
   acceptInsecureCerts: {
     type: 'boolean',
@@ -201,7 +194,7 @@ credentials are applied at the page-event layer, not on the command line.`,
   experimentalScreencast: {
     type: 'boolean',
     describe:
-      'Exposes experimental screencast tools (requires ffmpeg). Install ffmpeg https://www.ffmpeg.org/download.html and ensure it is available in the MCP server PATH.',
+      'Exposes experimental screencast tools (requires ffmpeg). Install ffmpeg from <https://www.ffmpeg.org/download.html> and ensure it is on the MCP server PATH.',
   },
   experimentalFfmpegPath: {
     type: 'string',

@@ -192,11 +192,11 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md). Slim mode (3
   - **Default:** `false`
 
 - **`--browserUrl`/ `--browser-url`, `-u`**
-  Connect to a running, debuggable Chrome instance (e.g. `http://127.0.0.1:9222`). For more details see: https://github.com/ChromeDevTools/chrome-devtools-mcp#connecting-to-a-running-chrome-instance.
+  Connect to a running, debuggable Chrome instance (e.g. `http://127.0.0.1:9222`). See README "Connecting to a running Chrome instance".
   - **Type:** string
 
 - **`--wsEndpoint`/ `--ws-endpoint`, `-w`**
-  WebSocket endpoint to connect to a running Chrome instance (e.g., ws://127.0.0.1:9222/devtools/browser/<id>). Alternative to --browserUrl.
+  WebSocket endpoint to connect to a running Chrome instance (e.g., `ws://127.0.0.1:9222/devtools/browser/{ID}`). Alternative to --browserUrl.
   - **Type:** string
 
 - **`--wsHeaders`/ `--ws-headers`**
@@ -217,7 +217,7 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md). Slim mode (3
   - **Type:** boolean
 
 - **`--userDataDir`/ `--user-data-dir`**
-  Path to the user data directory for Chrome. Default is $HOME/.cache/chrome-devtools-mcp/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE
+  Path to the user data directory for Chrome. Default is $HOME/.cache/chrome-devtools-mcp-stealth/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE.
   - **Type:** string
 
 - **`--channel`**
@@ -234,15 +234,7 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md). Slim mode (3
   - **Type:** string
 
 - **`--proxyServer`/ `--proxy-server`**
-  Proxy server for Chrome to route all browser traffic through. Accepts:
-- host:port                         (no auth)
-- host:port:user:pass               (with basic auth — common proxy-list format)
-- http://host:port                  (no auth, explicit scheme)
-- http://user:pass@host:port        (with auth, embedded creds)
-- socks5://host:port                (no auth, SOCKS5)
-Authenticated proxies use Puppeteer's page.authenticate() to answer the 407
-challenge — Chrome itself strips inline credentials from --proxy-server, so the
-credentials are applied at the page-event layer, not on the command line.
+  Proxy server for Chrome to route all browser traffic through. Accepts: `host:port` (no auth), `host:port:user:pass` (with basic auth — common proxy-list format), `http://host:port`, `http://user:pass@host:port`, `socks5://host:port`, or `socks5://user:pass@host:port`. Authenticated proxies use Puppeteer's page.authenticate() to answer the 407 challenge — Chrome strips inline credentials from --proxy-server for security, so credentials are applied at the page-event layer, not on the command line.
   - **Type:** string
 
 - **`--acceptInsecureCerts`/ `--accept-insecure-certs`**
@@ -254,7 +246,7 @@ credentials are applied at the page-event layer, not on the command line.
   - **Type:** boolean
 
 - **`--experimentalScreencast`/ `--experimental-screencast`**
-  Exposes experimental screencast tools (requires ffmpeg). Install ffmpeg https://www.ffmpeg.org/download.html and ensure it is available in the MCP server PATH.
+  Exposes experimental screencast tools (requires ffmpeg). Install ffmpeg from <https://www.ffmpeg.org/download.html> and ensure it is on the MCP server PATH.
   - **Type:** boolean
 
 - **`--experimentalFfmpegPath`/ `--experimental-ffmpeg-path`**

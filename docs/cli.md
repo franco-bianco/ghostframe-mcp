@@ -1,79 +1,95 @@
-# Chrome DevTools CLI
+# Stealth CLI
 
 Experimental CLI client for the MCP server. Useful for ad-hoc browser driving, scripting stealth probes, or having an agent generate shell scripts that automate browser actions.
 
-## Getting started
-
-Install the package globally:
+The fork is private (not on npm). The CLI is invoked from the local build:
 
 ```sh
-npm i chrome-devtools-mcp@latest -g
-chrome-devtools status
+node /absolute/path/to/chromedevtools-mcp-stealth/build/src/bin/chrome-devtools.js status
 ```
+
+If you want a shorter command, alias it in your shell rc:
+
+```sh
+alias cdms='node /absolute/path/to/chromedevtools-mcp-stealth/build/src/bin/chrome-devtools.js'
+cdms status
+```
+
+Or `npm link` from the repo to install `chrome-devtools-mcp-stealth` and `chrome-devtools-stealth` on `PATH` for the current user (these names will not collide with upstream `chrome-devtools-mcp` / `chrome-devtools`).
 
 ## How it works
 
 The CLI connects to a background MCP daemon (Unix socket on Linux/Mac, named pipe on Windows).
 
-- **Implicit start**: the first tool call starts the daemon and Chrome if needed.
-- **State persistence**: subsequent commands hit the same browser instance, preserving cookies, profile state, and open pages.
-- **Manual control**: `start`, `stop`, `status`. `start` forwards args to the MCP server; not all server args are supported in CLI form (`chrome-devtools start --help`).
+- **Implicit start** — the first tool call starts the daemon and Chrome if needed.
+- **State persistence** — subsequent commands hit the same browser instance, preserving cookies, profile state, and open pages.
+- **Manual control** — `start`, `stop`, `status`. `start` forwards args to the MCP server; not all server args are supported in CLI form (`<cmd> start --help`).
 
-Headless is the CLI default. The MCP path defaults to headed — see [`stealth-configuration.md`](./stealth-configuration.md#headless-posture) for why this matters.
+Headless is the CLI default. The MCP path defaults to headed — see [`stealth-configuration.md#headless-posture`](./stealth-configuration.md#headless-posture) for why this matters.
 
 ```sh
-chrome-devtools status
-chrome-devtools navigate_page "https://example.com"
-chrome-devtools take_screenshot --filePath screenshot.png
-chrome-devtools stop
+cdms status
+cdms navigate_page "https://example.com"
+cdms take_screenshot --filePath screenshot.png
+cdms stop
 ```
 
 ## Stealth-relevant flags
 
-Pass to `chrome-devtools start`. Names and exact wiring evolve; check `--help` against the version you have installed.
+Pass to `<cmd> start`. Names and exact wiring evolve; check `--help` against the build you have.
 
-- **Profile lifecycle**. `--userDataDir <path>` reuses or creates a Chrome profile dir. Without it, isolated mode is implied — a fresh profile per session. Cookies, IndexedDB, and HSTS pins persist when the dir is reused. See [`stealth-configuration.md#profile-lifecycle`](./stealth-configuration.md#profile-lifecycle).
-- **Channel selection**. `--channel <stable|beta|canary>` picks the Chrome binary. Default is stable. Canary changes fingerprints often.
-- **Headless**. `--headless` / `--headed`. Headless ships `HeadlessChrome` in the UA unless persona override is in effect.
-- **Connect to running Chrome**. `--browserUrl http://127.0.0.1:9222` or `--wsEndpoint ws://...` to skip the launch path entirely. Use this when the launch flags are out of your control (sandboxed clients) or when you want to drive your own Chrome instance.
-- **Auto-connect**. `--autoConnect` discovers a running Chrome via its `DevToolsActivePort` file. Requires Chrome 144+ already running with remote debugging enabled.
+- **Stealth posture** — `--stealth` (default `true` in this fork). `--no-stealth` disables the Universe gate, polyfills, and humanizers; useful as a diagnostic when something breaks mysteriously.
+- **Profile lifecycle** — `--user-data-dir <path>` reuses or creates a Chrome profile dir. Default is `$HOME/.cache/chrome-devtools-mcp-stealth/chrome-profile[-channel]`. `--isolated` uses a temp dir, cleared at session end. See [`stealth-configuration.md#profile-lifecycle`](./stealth-configuration.md#profile-lifecycle).
+- **Channel** — `--channel <stable|beta|canary|dev>`. Default stable. Canary changes fingerprints often.
+- **Headless** — `--headless` / `--headed`. Headless ships `HeadlessChrome` in the UA unless an `emulate` persona override is in effect.
+- **Proxy** — `--proxy-server` accepts `host:port`, `host:port:user:pass`, `http://user:pass@host:port`, `socks5://...`. See README "Proxy".
+- **Connect to running Chrome** — `--browser-url http://127.0.0.1:9222` or `--ws-endpoint ws://...` to skip the launch path entirely. Stealth launch flags do not apply to a connected Chrome — only the CDP-side stealth (Universe gate, console listeners, humanizer) applies.
+- **Auto-connect** — `--auto-connect` discovers a running Chrome via its `DevToolsActivePort` file. Requires Chrome 144+ already running with remote debugging enabled.
 
-The full server flag surface is documented in `npx chrome-devtools-mcp@latest --help`. The CLI exposes a filtered subset (see `src/bin/chrome-devtools.ts`).
+The full server flag surface is documented in `<cmd> --help`. The CLI subcommand exposes a filtered subset (see `src/bin/chrome-devtools.ts`).
 
 ## Command usage
 
 ```sh
-chrome-devtools <tool> [arguments] [flags]
+<cmd> <tool> [arguments] [flags]
 ```
 
 - Required arguments: positional.
 - Optional arguments: flags (`--filePath`, `--fullPage`, etc.).
 
-Tools that take additional arguments beyond simple types are not yet exposed in the CLI (see `--categoryExtensions`).
+Tools that take complex arguments are not exposed in the CLI (see `--category-extensions`).
 
 ### Examples
 
 Navigation:
 
 ```sh
-chrome-devtools new_page "https://example.com"
-chrome-devtools navigate_page "https://example.com" --type url
+cdms new_page "https://example.com"
+cdms navigate_page "https://example.com" --type url
 ```
 
 Interaction (UID from `take_snapshot`):
 
 ```sh
-chrome-devtools click "1_4"
-chrome-devtools fill "1_8" "search query"
-chrome-devtools type_text "hello world"
+cdms click "1_4"
+cdms fill "1_8" "search query"
+cdms type_text "hello world"
 ```
 
 Detection probe:
 
 ```sh
-chrome-devtools new_page "https://bot.sannysoft.com"
-chrome-devtools take_screenshot --filePath sannysoft.png
-chrome-devtools take_snapshot --filePath sannysoft.txt
+cdms new_page "https://bot.sannysoft.com"
+cdms take_screenshot --filePath sannysoft.png
+cdms take_snapshot --filePath sannysoft.txt
+```
+
+Through a proxy:
+
+```sh
+cdms start --proxy-server=203.0.113.7:8888:user:pass
+cdms new_page "https://api.ipify.org/?format=json"
+cdms evaluate_script '() => document.body.innerText'
 ```
 
 See [`skills/detection-testing/SKILL.md`](../skills/detection-testing/SKILL.md) for the full probe workflow.
@@ -83,7 +99,7 @@ See [`skills/detection-testing/SKILL.md`](../skills/detection-testing/SKILL.md) 
 Default: human-readable Markdown. JSON via flag:
 
 ```sh
-chrome-devtools list_pages --output-format=json
+cdms list_pages --output-format=json
 ```
 
 ## Troubleshooting
@@ -91,17 +107,17 @@ chrome-devtools list_pages --output-format=json
 If the CLI hangs or fails to connect:
 
 ```sh
-chrome-devtools stop
+cdms stop
 ```
 
 For verbose logs:
 
 ```sh
-DEBUG=* chrome-devtools list_pages
+DEBUG=* cdms list_pages
 ```
 
-See [`troubleshooting.md`](./troubleshooting.md) for stealth-specific failures (CDP-detected on first navigation, isolated-world eval not picking up changes, persona incoherence).
+See [`troubleshooting.md`](./troubleshooting.md) for stealth-specific failures.
 
 ## CLI generation
 
-`scripts/generate-cli.ts` generates the CLI surface from tool metadata. Some tools are excluded from generation (`wait_for`, `fill_form`). Server args that do not make sense in a CLI are filtered in `src/bin/chrome-devtools.ts`.
+`scripts/generate-cli.ts` generates the CLI surface from tool metadata. Some tools are excluded from generation (`wait_for`, `fill_form`). Server args that do not make sense in a CLI are filtered in `src/bin/chrome-devtools.ts`. Re-run `npm run cli:generate` after schema or option changes.

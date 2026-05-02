@@ -1,6 +1,6 @@
 <!-- AUTO GENERATED DO NOT EDIT - run 'npm run gen' to update-->
 
-# Chrome DevTools MCP Tool Reference (~6472 cl100k_base tokens)
+# Chrome DevTools MCP Tool Reference (~6496 cl100k_base tokens)
 
 - **[Input automation](#input-automation)** (9 tools)
   - [`click`](#click)
@@ -230,7 +230,7 @@
 - **timezone** (string) _(optional)_: IANA timezone identifier (e.g. `America/Los_Angeles`) used to override the page's timezone. Omit to clear the timezone override.
 - **userAgent** (string) _(optional)_: User agent to [`emulate`](#emulate). Set to empty string to clear the user agent override.
 - **userAgentMetadata** (string) _(optional)_: User-Agent Client Hints metadata sent alongside the UA override, encoded as a JSON object string. Recognized keys: brands (array of {brand, version}), fullVersionList (array of {brand, version}), fullVersion, platform, platformVersion, architecture, model, mobile (bool), bitness, wow64 (bool). Used to keep `navigator.userAgent` and `Sec-CH-UA-*` headers in sync. Omit to clear when no userAgent is provided.
-- **viewport** (string) _(optional)_: [`Emulate`](#emulate) device viewports '&lt;width&gt;x&lt;height&gt;x&lt;devicePixelRatio&gt;[,mobile][,touch][,landscape]'. 'touch' and 'mobile' to [`emulate`](#emulate) mobile devices. 'landscape' to [`emulate`](#emulate) landscape mode.
+- **viewport** (string) _(optional)_: [`Emulate`](#emulate) device viewports as 'WIDTHxHEIGHTxDPR' optionally followed by ',mobile', ',touch', and/or ',landscape' (e.g. '1280x720x1', '412x823x1.75,mobile,touch'). 'touch' and 'mobile' [`emulate`](#emulate) mobile devices; 'landscape' emulates landscape mode.
 
 ---
 
@@ -278,7 +278,7 @@
 
 **Parameters:**
 
-- **patterns** (array) **(required)**: URL patterns to block. Wildcard `*` matches any character sequence. Examples: "*.doubleclick.net*", "https://example.com/track/*". Pass an empty array to clear.
+- **patterns** (array) **(required)**: URL patterns to block. Wildcard `*` matches any character sequence. Examples: `*.doubleclick.net*`, `https://example.com/track/*`. Pass an empty array to clear.
 
 ---
 

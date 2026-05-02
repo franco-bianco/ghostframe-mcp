@@ -9,7 +9,7 @@ Configuration that responds to these signals lives in [`stealth-configuration.md
 A detector composes a verdict from multiple layers. A single layer rarely flips the verdict; coherence across layers does.
 
 | Layer | What it measures | Where we mitigate |
-|---|---|---|
+| --- | --- | --- |
 | CDP | Whether the browser has CDP attached and what domains are enabled | `docs/stealth-configuration.md#cdp-routing` |
 | Launch | Process flags, command-line shape, parent process | `docs/stealth-configuration.md#browser-launch` |
 | DOM | JS-visible objects, properties, and method shapes | `docs/stealth-configuration.md#dom-polyfills` |

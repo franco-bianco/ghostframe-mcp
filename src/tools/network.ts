@@ -98,7 +98,7 @@ export const setBlockedUrls = definePageTool({
     patterns: zod
       .array(zod.string())
       .describe(
-        'URL patterns to block. Wildcard `*` matches any character sequence. Examples: "*.doubleclick.net*", "https://example.com/track/*". Pass an empty array to clear.',
+        'URL patterns to block. Wildcard `*` matches any character sequence. Examples: `*.doubleclick.net*`, `https://example.com/track/*`. Pass an empty array to clear.',
       ),
   },
   blockedByDialog: false,

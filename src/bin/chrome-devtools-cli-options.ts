@@ -180,7 +180,7 @@ export const commands: Commands = {
       "viewport": {
         "name": "viewport",
         "type": "string",
-        "description": "Emulate device viewports '<width>x<height>x<devicePixelRatio>[,mobile][,touch][,landscape]'. 'touch' and 'mobile' to emulate mobile devices. 'landscape' to emulate landscape mode.",
+        "description": "Emulate device viewports as 'WIDTHxHEIGHTxDPR' optionally followed by ',mobile', ',touch', and/or ',landscape' (e.g. '1280x720x1', '412x823x1.75,mobile,touch'). 'touch' and 'mobile' emulate mobile devices; 'landscape' emulates landscape mode.",
         "required": false
       }
     }
@@ -598,7 +598,7 @@ export const commands: Commands = {
       "patterns": {
         "name": "patterns",
         "type": "array",
-        "description": "URL patterns to block. Wildcard `*` matches any character sequence. Examples: \"*.doubleclick.net*\", \"https://example.com/track/*\". Pass an empty array to clear.",
+        "description": "URL patterns to block. Wildcard `*` matches any character sequence. Examples: `*.doubleclick.net*`, `https://example.com/track/*`. Pass an empty array to clear.",
         "required": true
       }
     }

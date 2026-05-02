@@ -105,7 +105,7 @@ export const emulate = definePageTool({
       .optional()
       .transform(viewportTransform)
       .describe(
-        `Emulate device viewports '<width>x<height>x<devicePixelRatio>[,mobile][,touch][,landscape]'. 'touch' and 'mobile' to emulate mobile devices. 'landscape' to emulate landscape mode.`,
+        `Emulate device viewports as 'WIDTHxHEIGHTxDPR' optionally followed by ',mobile', ',touch', and/or ',landscape' (e.g. '1280x720x1', '412x823x1.75,mobile,touch'). 'touch' and 'mobile' emulate mobile devices; 'landscape' emulates landscape mode.`,
       ),
   },
   blockedByDialog: true,
