@@ -317,13 +317,6 @@ Same as upstream — useful when you want manual and agent-driven sessions to sh
 
 When connecting to a running Chrome, the fork does not launch its own browser, and the launch-time stealth flags (`--enable-automation` strip, polyfill injection, etc.) do not apply — the connected Chrome is whatever it was when started. The Universe gate, console-listener gate, and humanizers still apply because they live in the McpContext / tool layers.
 
-## Limitations
-
-- **Interactive CAPTCHAs are out of scope.** Cloudflare Turnstile, hCaptcha, reCAPTCHA Enterprise need a real user click on the widget or TLS-level fingerprint fidelity beyond what JS-side stealth can spoof. The fork passes standard Cloudflare Bot Management; sites that layer Turnstile at the actual transaction surface (e.g. AXS at `tix.axs.com`) need an external CAPTCHA solver or a real-user click.
-- **JA3/JA4 + HTTP/2 frame ordering** are inherited from real Chrome via CDP. PerimeterX, Akamai Bot Manager v4, and similar can still flag the network-level fingerprint when paired with other signals.
-- **DOM polyfill shape detection.** The polyfills are detectable by their shape; track Patchright as the upstream and expect maintenance churn as detectors evolve.
-- **Datacenter-IP reputation.** Sites with strict reputation feeds may serve Turnstile to known datacenter IPs regardless of stealth. Use a residential or ISP-tier proxy in those cases.
-
 ## Docs and skills
 
 - [`docs/detection-signals.md`](./docs/detection-signals.md) — six-layer detection map (CDP / launch / DOM / fingerprint / behavioral / network) with citations.
