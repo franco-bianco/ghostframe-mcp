@@ -92,7 +92,7 @@ export const emulate = definePageTool({
       .string()
       .optional()
       .describe(
-        'IANA timezone identifier (e.g. `America/Los_Angeles`) used to override the page\'s timezone. Omit to clear the timezone override.',
+        "IANA timezone identifier (e.g. `America/Los_Angeles`) used to override the page's timezone. Omit to clear the timezone override.",
       ),
     colorScheme: zod
       .enum(['dark', 'light', 'auto'])

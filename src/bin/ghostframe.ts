@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-process.title = 'chrome-devtools';
+process.title = 'ghostframe';
 
 import process from 'node:process';
 
@@ -24,11 +24,11 @@ import {hideBin, yargs, type CallToolResult} from '../third_party/index.js';
 import {checkForUpdates} from '../utils/check-for-updates.js';
 import {VERSION} from '../version.js';
 
-import {commands} from './chrome-devtools-cli-options.js';
-import {cliOptions, parseArguments} from './chrome-devtools-mcp-cli-options.js';
+import {commands} from './ghostframe-cli-options.js';
+import {cliOptions, parseArguments} from './ghostframe-mcp-cli-options.js';
 
 await checkForUpdates(
-  'Run `npm install -g chrome-devtools-mcp@latest` and `chrome-devtools start` to update and restart the daemon.',
+  'Run `git pull && npm run build` in the fork and `ghostframe start` to update and restart the daemon.',
 );
 
 async function start(args: string[], sessionId: string) {
@@ -64,12 +64,10 @@ startCliOptions.isolated!.description =
 startCliOptions.categoryExtensions!.default = true;
 
 const y = yargs(hideBin(process.argv))
-  .scriptName('chrome-devtools')
+  .scriptName('ghostframe')
   .showHelpOnFail(true)
-  .usage('chrome-devtools <command> [...args] --flags')
-  .usage(
-    `Run 'chrome-devtools <command> --help' for help on the specific command.`,
-  )
+  .usage('ghostframe <command> [...args] --flags')
+  .usage(`Run 'ghostframe <command> --help' for help on the specific command.`)
   .option('sessionId', {
     type: 'string',
     description: 'Session ID for daemon scoping',
@@ -84,7 +82,7 @@ const y = yargs(hideBin(process.argv))
 
 y.command(
   'start',
-  'Start or restart chrome-devtools-mcp',
+  'Start or restart ghostframe-mcp',
   y =>
     y
       .options(startCliOptions)
@@ -112,11 +110,11 @@ y.command(
 
 y.command(
   'status',
-  'Checks if chrome-devtools-mcp is running',
+  'Checks if ghostframe-mcp is running',
   y => y,
   async argv => {
     if (isDaemonRunning(argv.sessionId)) {
-      console.log('chrome-devtools-mcp daemon is running.');
+      console.log('ghostframe-mcp daemon is running.');
       const response = await sendCommand(
         {
           method: 'status',
@@ -140,7 +138,7 @@ y.command(
         process.exit(1);
       }
     } else {
-      console.log('chrome-devtools-mcp daemon is not running.');
+      console.log('ghostframe-mcp daemon is not running.');
     }
     process.exit(0);
   },
@@ -148,7 +146,7 @@ y.command(
 
 y.command(
   'stop',
-  'Stop chrome-devtools-mcp if any',
+  'Stop ghostframe-mcp if any',
   y => y,
   async argv => {
     const sessionId = argv.sessionId as string;

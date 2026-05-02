@@ -14,9 +14,9 @@
  */
 
 import {chromeGlobalsScript} from './chrome-globals.js';
+import {nativeToStringScript} from './native-toString.js';
 import {permissionsScript} from './permissions.js';
 import {webglScript} from './webgl.js';
-import {nativeToStringScript} from './native-toString.js';
 
 /**
  * Returns a single concatenated script string suitable for passing to

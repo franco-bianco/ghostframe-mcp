@@ -22,7 +22,7 @@ import type {
 } from 'puppeteer-core';
 import sinon from 'sinon';
 
-import type {ParsedArguments} from '../src/bin/chrome-devtools-mcp-cli-options.js';
+import type {ParsedArguments} from '../src/bin/ghostframe-mcp-cli-options.js';
 import {McpContext} from '../src/McpContext.js';
 import {McpResponse} from '../src/McpResponse.js';
 import {TextSnapshot} from '../src/TextSnapshot.js';
@@ -385,16 +385,13 @@ export async function runCli(
 
 export async function assertDaemonIsNotRunning(sessionId?: string) {
   const result = await runCli(['status'], sessionId);
-  assert.strictEqual(
-    result.stdout,
-    'chrome-devtools-mcp daemon is not running.\n',
-  );
+  assert.strictEqual(result.stdout, 'ghostframe-mcp daemon is not running.\n');
 }
 
 export async function assertDaemonIsRunning(sessionId?: string) {
   const result = await runCli(['status'], sessionId);
   assert.ok(
-    result.stdout.startsWith('chrome-devtools-mcp daemon is running.\n'),
-    'chrome-devtools-mcp daemon is not running',
+    result.stdout.startsWith('ghostframe-mcp daemon is running.\n'),
+    'ghostframe-mcp daemon is not running',
   );
 }

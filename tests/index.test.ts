@@ -33,7 +33,7 @@ describe('e2e', () => {
     const transport = new StdioClientTransport({
       command: 'node',
       args: [
-        'build/src/bin/chrome-devtools-mcp.js',
+        'build/src/bin/ghostframe-mcp.js',
         '--headless',
         '--isolated',
         '--executable-path',

@@ -21,7 +21,6 @@ export interface ToolGroup<T extends ToolDefinition> {
   tools: T[];
 }
 
-
 export const listInPageTools = definePageTool({
   name: 'list_in_page_tools',
   description: `Lists all in-page tools the page exposes for providing runtime information.

@@ -10,7 +10,7 @@ import path from 'node:path';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 
-import {parseArguments} from '../build/src/bin/chrome-devtools-mcp-cli-options.js';
+import {parseArguments} from '../build/src/bin/ghostframe-mcp-cli-options.js';
 import {buildFlag} from '../build/src/index.js';
 import {
   labels,
@@ -21,15 +21,15 @@ import {createTools} from '../build/src/tools/tools.js';
 
 const OUTPUT_PATH = path.join(
   import.meta.dirname,
-  '../src/bin/chrome-devtools-cli-options.ts',
+  '../src/bin/ghostframe-cli-options.ts',
 );
 
 async function fetchTools() {
-  console.log('Connecting to chrome-devtools-mcp to fetch tools...');
+  console.log('Connecting to ghostframe-mcp to fetch tools...');
   // Use the local build of the server
   const serverPath = path.join(
     import.meta.dirname,
-    '../build/src/bin/chrome-devtools-mcp.js',
+    '../build/src/bin/ghostframe-mcp.js',
   );
 
   const transport = new StdioClientTransport({

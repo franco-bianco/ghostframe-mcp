@@ -6,10 +6,9 @@
 
 import type fs from 'node:fs';
 
-import type {parseArguments} from './bin/chrome-devtools-mcp-cli-options.js';
+import type {parseArguments} from './bin/ghostframe-mcp-cli-options.js';
 import type {Channel} from './browser.js';
 import {ensureBrowserConnected, ensureBrowserLaunched} from './browser.js';
-import {parseProxy} from './utils/proxy.js';
 import {loadIssueDescriptions} from './issue-descriptions.js';
 import {logger} from './logger.js';
 import {McpContext} from './McpContext.js';
@@ -30,6 +29,7 @@ import {labels, OFF_BY_DEFAULT_CATEGORIES} from './tools/categories.js';
 import type {DefinedPageTool, ToolDefinition} from './tools/ToolDefinition.js';
 import {pageIdSchema} from './tools/ToolDefinition.js';
 import {createTools} from './tools/tools.js';
+import {parseProxy} from './utils/proxy.js';
 import {VERSION} from './version.js';
 
 export function buildFlag(category: ToolCategory) {
@@ -45,7 +45,7 @@ function buildDisabledMessage(
     ? `is in category ${categoryLabel} which`
     : `requires experimental feature ${flag} and`;
 
-  return `Tool ${toolName} ${reason} is currently disabled. Enable it by running chrome-devtools start ${flag}=true. For more information check the README.`;
+  return `Tool ${toolName} ${reason} is currently disabled. Enable it by running ghostframe start ${flag}=true. For more information check the README.`;
 }
 
 function getCategoryStatus(
@@ -148,8 +148,8 @@ export async function createMcpServer(
 
   const server = new McpServer(
     {
-      name: 'chrome_devtools',
-      title: 'Chrome DevTools MCP server',
+      name: 'ghostframe',
+      title: 'Ghostframe stealth MCP server',
       version: VERSION,
     },
     {capabilities: {logging: {}}},
@@ -393,7 +393,7 @@ export async function createMcpServer(
 
 export const logDisclaimers = (args: ReturnType<typeof parseArguments>) => {
   console.error(
-    `chrome-devtools-mcp exposes content of the browser instance to the MCP clients allowing them to inspect,
+    `ghostframe-mcp exposes content of the browser instance to the MCP clients allowing them to inspect,
 debug, and modify any data in the browser or DevTools.
 Avoid sharing sensitive or personal information that you do not want to share with MCP clients.`,
   );

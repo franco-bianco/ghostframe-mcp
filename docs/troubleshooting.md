@@ -5,7 +5,7 @@ Stealth-specific symptoms first, then inherited connection/environment issues.
 In examples below, `BIN` is the fork's MCP entrypoint:
 
 ```sh
-BIN=/absolute/path/to/chromedevtools-mcp-stealth/build/src/bin/chrome-devtools-mcp.js
+BIN=/absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js
 ```
 
 ## General tips
@@ -28,11 +28,11 @@ Through `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "chrome-devtools-stealth": {
+    "ghostframe": {
       "type": "stdio",
       "command": "node",
       "args": [
-        "/absolute/path/to/build/src/bin/chrome-devtools-mcp.js",
+        "/absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js",
         "--log-file",
         "/tmp/cdm.log"
       ],
@@ -86,7 +86,7 @@ Coherence check. After `emulate`, evaluate each of the following and confirm the
   platform: navigator.platform,
   tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
   locale: Intl.DateTimeFormat().resolvedOptions().locale,
-})
+});
 ```
 
 Also verify the proxy egress IP geo agrees with the timezone. A US/Pacific timezone behind a Frankfurt egress IP is a stronger signal than any single value.
@@ -97,7 +97,7 @@ Default-on humanization adds 80–600 ms per interaction. For test suites that d
 
 ### `chrome.runtime` polyfill is detected
 
-Polyfills are detected by their *shape*. The fix is rarely to add a flag; it is to update the polyfill to track the upstream reference (Patchright). Read [`detection-signals.md#dom-layer`](./detection-signals.md#dom-layer) before patching.
+Polyfills are detected by their _shape_. The fix is rarely to add a flag; it is to update the polyfill to track the upstream reference (Patchright). Read [`detection-signals.md#dom-layer`](./detection-signals.md#dom-layer) before patching.
 
 ### `navigator.webdriver` is `false` but `Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')` reveals an override
 
@@ -116,7 +116,7 @@ The fork passes standard Cloudflare Bot Management. Sites that layer Turnstile a
 Wrong Node version or missing `node_modules`:
 
 ```sh
-cd /absolute/path/to/chromedevtools-mcp-stealth
+cd /absolute/path/to/ghostframe-mcp
 npm install
 npm run build
 ```
@@ -164,12 +164,12 @@ Chrome must be installed inside the Linux environment by default. Two paths:
 Wrap the launch in `cmd /c`:
 
 ```json
-"chrome-devtools-stealth": {
+"ghostframe": {
   "command": "cmd",
   "args": [
     "/c",
     "node",
-    "C:\\absolute\\path\\to\\build\\src\\bin\\chrome-devtools-mcp.js"
+    "C:\\absolute\\path\\to\\ghostframe-mcp\\build\\src\\bin\\ghostframe-mcp.js"
   ]
 }
 ```
@@ -191,4 +191,4 @@ In Chrome 144–149, frozen or unloaded tabs can also block the handshake. Avoid
 
 Symptom: `The browser is already running for /Users/.../.cache/chrome-devtools-mcp/chrome-profile`.
 
-This fork uses `~/.cache/chrome-devtools-mcp-stealth/...` to coexist with upstream, so the lock collision should not happen with both running. If you see it on this fork's path, another `chrome-devtools-mcp-stealth` instance is running — stop it (`<cmd> stop`) or use `--isolated` for ephemeral profiles.
+This fork uses `~/.cache/ghostframe-mcp/...` (and `~/.cache/ghostframe-cli/...` for the CLI path) to coexist with upstream, so the lock collision should not happen with both running. If you see it on the fork's path, another `ghostframe-mcp` instance is running — stop it (`ghostframe stop`) or use `--isolated` for ephemeral profiles.

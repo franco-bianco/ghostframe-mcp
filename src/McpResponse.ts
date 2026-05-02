@@ -6,7 +6,7 @@
 
 import type {WebMCPTool} from 'puppeteer-core';
 
-import type {ParsedArguments} from './bin/chrome-devtools-mcp-cli-options.js';
+import type {ParsedArguments} from './bin/ghostframe-mcp-cli-options.js';
 import {ConsoleFormatter} from './formatters/ConsoleFormatter.js';
 import {IssueFormatter} from './formatters/IssueFormatter.js';
 import {NetworkFormatter} from './formatters/NetworkFormatter.js';
@@ -26,7 +26,6 @@ import type {
   Extension,
 } from './third_party/index.js';
 import type {ToolGroup, ToolDefinition} from './tools/inPage.js';
-import {DTMCP_SYMBOL_KEY} from './utils/dtmcpState.js';
 import {handleDialog} from './tools/pages.js';
 import type {
   DevToolsData,
@@ -34,6 +33,7 @@ import type {
   Response,
   SnapshotParams,
 } from './tools/ToolDefinition.js';
+import {DTMCP_SYMBOL_KEY} from './utils/dtmcpState.js';
 import {paginate} from './utils/pagination.js';
 import type {PaginationOptions} from './utils/types.js';
 

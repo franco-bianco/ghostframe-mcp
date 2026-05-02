@@ -2,7 +2,7 @@
 
 How this fork configures Chrome and CDP for stealth. Read this before launching the browser or routing scripts through `evaluate_script`.
 
-The reference for *why* each choice matters lives in [`detection-signals.md`](./detection-signals.md).
+The reference for _why_ each choice matters lives in [`detection-signals.md`](./detection-signals.md).
 
 ## Browser launch
 
@@ -29,13 +29,13 @@ Default: stable Chrome via Puppeteer's resolver. `--channel canary|dev|beta` swi
 
 ### Profile lifecycle
 
-`src/browser.ts:222-247` builds a user-data-dir at `$HOME/.cache/chrome-devtools-mcp-stealth/chrome-profile[-channel]`. Distinct from upstream's `$HOME/.cache/chrome-devtools-mcp/...` so this fork can coexist without contention.
+`src/browser.ts:222-247` builds a user-data-dir at `$HOME/.cache/ghostframe-mcp/chrome-profile[-channel]` (or `ghostframe-cli` when invoked via the CLI). Distinct from upstream `chrome-devtools-mcp`'s `$HOME/.cache/chrome-devtools-mcp/...` so this fork can coexist without contention.
 
 Cookies, IndexedDB, localStorage, and Cloudflare reputation persist across runs. For a one-shot session that should not leak prior browsing, pass `--isolated` (or override `--user-data-dir` to a fresh temp path). For a session that should look like a returning user, reuse the default.
 
 ### Headless posture
 
-The CLI entry forces `headless: true` at `src/bin/chrome-devtools.ts:55-64,101-105`. The MCP path defaults to `headless: false` at `src/bin/chrome-devtools-mcp-cli-options.ts`. This asymmetry is real — set it explicitly in scripts you write rather than relying on defaults.
+The CLI entry forces `headless: true` at `src/bin/ghostframe.ts:55-64,101-105`. The MCP path defaults to `headless: false` at `src/bin/ghostframe-mcp-cli-options.ts`. This asymmetry is real — set it explicitly in scripts you write rather than relying on defaults.
 
 Headless Chrome ships a UA containing `HeadlessChrome` and a different `navigator.userAgent`. Stealth mode requires a persona profile (see [Fingerprint coherence](#fingerprint-coherence)) when running headless. Running headless without the override is the most common mistake.
 

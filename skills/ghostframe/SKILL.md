@@ -1,7 +1,9 @@
 ---
-name: chrome-devtools
+name: ghostframe
 description: Drives a stealth-mode Chrome via MCP. Use when automating browser interactions on sites that watch for bots (Cloudflare, DataDome, Akamai, PerimeterX, Imperva, Kasada), inspecting network traffic on those sites, or driving CDP scripts through isolated worlds. Does not apply to `--slim` mode.
 ---
+
+# Stealth Chrome DevTools MCP
 
 This skill orients you to Chrome DevTools MCP in this stealth fork. It is not the general-purpose browser MCP. Routing decisions, world selection, and persona handling differ.
 
@@ -42,23 +44,23 @@ A worked example. Reading the page's title:
 
 ```javascript
 // isolated is fine — DOM read
-() => document.title
+() => document.title;
 ```
 
 Reading a SPA's router state that the framework parks on `window.__APP__`:
 
 ```javascript
 // must be main — page-set global
-() => window.__APP__?.router.currentRoute
+() => window.__APP__?.router.currentRoute;
 ```
 
 Triggering a click that the page's framework expects to receive a synthetic event:
 
 ```javascript
 // must be main — page-side handler reads details
-(uid) => {
-  uid.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-}
+uid => {
+  uid.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+};
 ```
 
 The fork uses `Symbol.for('dtmcp')` rather than a global `__dtmcp` so the page's enumerable global surface is unchanged. Do not write to `window.__dtmcp`.
@@ -85,17 +87,17 @@ After `emulate`, verify coherence with one `evaluate_script` call:
   uaCH: navigator.userAgentData?.toJSON(),
   langs: navigator.languages,
   tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-  locale: Intl.DateTimeFormat().resolvedOptions().locale
-})
+  locale: Intl.DateTimeFormat().resolvedOptions().locale,
+});
 ```
 
 If any one disagrees with the persona you set, see [`docs/troubleshooting.md`](../../docs/troubleshooting.md) → "Persona looks right but the site still flags us".
 
-## When `chrome-devtools-mcp` is insufficient
+## When `ghostframe-mcp` is insufficient
 
 For interactive debugging that the MCP cannot reach, fall back to Chrome DevTools UI:
 
-- https://developer.chrome.com/docs/devtools
+- <https://developer.chrome.com/docs/devtools>
 
 For launch failures, see [`docs/troubleshooting.md`](../../docs/troubleshooting.md).
 

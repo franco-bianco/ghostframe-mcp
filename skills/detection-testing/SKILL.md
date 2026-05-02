@@ -3,27 +3,29 @@ name: detection-testing
 description: Verify the stealth config against public bot detectors. Use after changing launch flags, polyfills, persona, or humanization defaults; before shipping a config change; or as the next step when `stealth-launch` flagged a problem. Manual visual review of detector pages — not an automated test suite.
 ---
 
+# Detection testing
+
 Sweep four public detector pages in order. Each tests a different signal mix; the union covers most of the layers in [`docs/detection-signals.md`](../../docs/detection-signals.md).
 
 ## Default scope
 
-Operates on the currently selected page. Apply your persona via `emulate` *before* starting the sweep — detectors that recognize a clean stock-Chrome fingerprint will not flag anything, but the test is whether the persona you intend to ship looks human.
+Operates on the currently selected page. Apply your persona via `emulate` _before_ starting the sweep — detectors that recognize a clean stock-Chrome fingerprint will not flag anything, but the test is whether the persona you intend to ship looks human.
 
 ## The four detectors
 
-| Detector | What it tests | How to read |
-|---|---|---|
-| `bot.sannysoft.com` | Binary pass/fail per signal (webdriver, plugins, languages, WebGL vendor, etc.) | Red rows are fails. Quickest sanity check. |
-| `arh.antoinevastel.com` | Vastel's combined fingerprint + lie-detection battery | Stealth-plugin shape fails here; stock Chrome passes. |
-| `creepjs` | Fingerprint hashing + "lies" (descriptor mismatches, prototype tampering) | Look at lies count and trust score. Best after polyfill work. |
-| `pixelscan` | Commercial-grade fingerprint + IP correlation | Free tier shows partial fails; useful for relative comparison. |
+| Detector                | What it tests                                                                   | How to read                                                    |
+| ----------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `bot.sannysoft.com`     | Binary pass/fail per signal (webdriver, plugins, languages, WebGL vendor, etc.) | Red rows are fails. Quickest sanity check.                     |
+| `arh.antoinevastel.com` | Vastel's combined fingerprint + lie-detection battery                           | Stealth-plugin shape fails here; stock Chrome passes.          |
+| `creepjs`               | Fingerprint hashing + "lies" (descriptor mismatches, prototype tampering)       | Look at lies count and trust score. Best after polyfill work.  |
+| `pixelscan`             | Commercial-grade fingerprint + IP correlation                                   | Free tier shows partial fails; useful for relative comparison. |
 
 ## Workflow
 
 ### 1. Apply the persona
 
 ```bash
-chrome-devtools emulate --userAgent "<persona UA>" --viewport "<persona viewport>"
+ghostframe emulate --userAgent "<persona UA>" --viewport "<persona viewport>"
 ```
 
 Bundle locale, timezone, and geolocation through the same `emulate` call (see [`docs/stealth-configuration.md#emulate-bundles-a-persona`](../../docs/stealth-configuration.md#emulate-bundles-a-persona)).
@@ -31,7 +33,7 @@ Bundle locale, timezone, and geolocation through the same `emulate` call (see [`
 Verify coherence once:
 
 ```bash
-chrome-devtools evaluate_script "() => ({
+ghostframe evaluate_script "() => ({
   ua: navigator.userAgent,
   tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
   langs: navigator.languages
@@ -41,9 +43,9 @@ chrome-devtools evaluate_script "() => ({
 ### 2. bot.sannysoft.com
 
 ```bash
-chrome-devtools new_page "https://bot.sannysoft.com"
-chrome-devtools take_screenshot --fullPage true --filePath sanny.png
-chrome-devtools take_snapshot --filePath sanny.txt
+ghostframe new_page "https://bot.sannysoft.com"
+ghostframe take_screenshot --fullPage true --filePath sanny.png
+ghostframe take_snapshot --filePath sanny.txt
 ```
 
 Read `sanny.png` for the test matrix. Common red rows:
@@ -60,15 +62,15 @@ For each red row, map to the layer in [`docs/detection-signals.md`](../../docs/d
 ### 3. arh.antoinevastel.com
 
 ```bash
-chrome-devtools navigate_page --url "https://arh.antoinevastel.com/bots/areyouheadless"
-chrome-devtools take_screenshot --fullPage true --filePath vastel.png
+ghostframe navigate_page --url "https://arh.antoinevastel.com/bots/areyouheadless"
+ghostframe take_screenshot --fullPage true --filePath vastel.png
 ```
 
 Then the broader test page:
 
 ```bash
-chrome-devtools navigate_page --url "https://arh.antoinevastel.com/bots"
-chrome-devtools take_screenshot --fullPage true --filePath vastel-bots.png
+ghostframe navigate_page --url "https://arh.antoinevastel.com/bots"
+ghostframe take_screenshot --fullPage true --filePath vastel-bots.png
 ```
 
 Vastel tests Chrome-specific surface. If `chrome.runtime` polyfill shape is off, this catches it. If the polyfill's `toString` doesn't return `[native code]`, this catches it.
@@ -76,14 +78,14 @@ Vastel tests Chrome-specific surface. If `chrome.runtime` polyfill shape is off,
 ### 4. creepjs
 
 ```bash
-chrome-devtools navigate_page --url "https://abrahamjuliot.github.io/creepjs/"
+ghostframe navigate_page --url "https://abrahamjuliot.github.io/creepjs/"
 ```
 
 CreepJS takes time to compute. Wait for the full page render:
 
 ```bash
-chrome-devtools wait_for "trust score"
-chrome-devtools take_screenshot --fullPage true --filePath creep.png
+ghostframe wait_for "trust score"
+ghostframe take_screenshot --fullPage true --filePath creep.png
 ```
 
 Read for:
@@ -95,8 +97,8 @@ Read for:
 ### 5. pixelscan
 
 ```bash
-chrome-devtools navigate_page --url "https://pixelscan.net/fingerprint-check"
-chrome-devtools take_screenshot --fullPage true --filePath pixelscan.png
+ghostframe navigate_page --url "https://pixelscan.net/fingerprint-check"
+ghostframe take_screenshot --fullPage true --filePath pixelscan.png
 ```
 
 Free tier shows fewer signals than the paid version. Use as relative comparison between config changes — same browser, same persona, same proxy, before vs after.
@@ -105,15 +107,15 @@ Free tier shows fewer signals than the paid version. Use as relative comparison 
 
 For each detector that flagged, map the failed signal to a layer:
 
-| Detector signal | Layer | Likely fix |
-|---|---|---|
-| `webdriver` | Launch | Strip `--enable-automation`, add `--disable-blink-features=AutomationControlled` |
-| `HeadlessChrome` UA | Launch | Apply persona via `emulate` |
-| `chrome.runtime` shape | DOM | Update polyfill to track Patchright |
-| WebGL software vendor | Fingerprint | Run on GPU host or apply WebGL polyfills |
-| Timezone / locale mismatch | Fingerprint | `emulate` with locale + timezone bundled |
-| `webdriver` descriptor present (value `false`) | DOM | Remove descriptor at `addScriptToEvaluateOnNewDocument` time |
-| Lies > 0 in CreepJS | DOM | Polyfill leaks; check `Function.prototype.toString` proxy |
+| Detector signal                                | Layer       | Likely fix                                                                       |
+| ---------------------------------------------- | ----------- | -------------------------------------------------------------------------------- |
+| `webdriver`                                    | Launch      | Strip `--enable-automation`, add `--disable-blink-features=AutomationControlled` |
+| `HeadlessChrome` UA                            | Launch      | Apply persona via `emulate`                                                      |
+| `chrome.runtime` shape                         | DOM         | Update polyfill to track Patchright                                              |
+| WebGL software vendor                          | Fingerprint | Run on GPU host or apply WebGL polyfills                                         |
+| Timezone / locale mismatch                     | Fingerprint | `emulate` with locale + timezone bundled                                         |
+| `webdriver` descriptor present (value `false`) | DOM         | Remove descriptor at `addScriptToEvaluateOnNewDocument` time                     |
+| Lies > 0 in CreepJS                            | DOM         | Polyfill leaks; check `Function.prototype.toString` proxy                        |
 
 ## Tips
 

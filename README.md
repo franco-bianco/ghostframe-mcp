@@ -1,6 +1,6 @@
-# chrome-devtools-mcp-stealth
+# ghostframe-mcp
 
-Private stealth fork of [`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp). Default-on stealth posture for browser automation against bot-managed sites. Coexists with the upstream package on the same machine.
+Private stealth browser-automation MCP server. Forked from [`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp); default-on stealth posture for driving bot-managed sites. Coexists with upstream `chrome-devtools-mcp` on the same machine.
 
 Not published to npm (`"private": true` in `package.json`). Local install only.
 
@@ -31,7 +31,7 @@ Trade-off: `list_console_messages` and `get_console_message` return empty under 
 - `--enable-automation` stripped from default args (zeros `navigator.webdriver`).
 - `--disable-blink-features=AutomationControlled` added.
 - Hardcoded `--screen-info=3840x2160` removed.
-- Default user-data-dir is `~/.cache/chrome-devtools-mcp-stealth/...`, distinct from upstream's `~/.cache/chrome-devtools-mcp/...` so cookies, Cloudflare reputation, and the profile lock don't collide.
+- Default user-data-dir is `~/.cache/ghostframe-mcp/...`, distinct from upstream's `~/.cache/chrome-devtools-mcp/...` so cookies, Cloudflare reputation, and the profile lock don't collide.
 - `pipe: true` is kept (over the detectable `--remote-debugging-port`).
 
 ### Tool changes
@@ -49,13 +49,13 @@ Trade-off: `list_console_messages` and `get_console_message` return empty under 
 
 - `--usage-statistics` defaults to `false`. Sending stealth-config telemetry to Google's Clearcut endpoint contradicts the fork posture.
 - `--proxy-server` accepts authenticated proxies — see [Proxy](#proxy).
-- Package marked private; npm name is `chrome-devtools-mcp-stealth`; bin entries are `chrome-devtools-mcp-stealth` and `chrome-devtools-stealth` (so a global install never shadows upstream).
+- Package marked private; npm name is `ghostframe-mcp`; bin entries are `ghostframe-mcp` (server) and `ghostframe` (CLI). Names are distinct from upstream `chrome-devtools-mcp` / `chrome-devtools` so a global install never shadows upstream.
 
 ## Setup
 
 ```bash
-git clone <fork-url> ~/Documents/chromedevtools-mcp-stealth
-cd ~/Documents/chromedevtools-mcp-stealth
+git clone <fork-url> ~/Documents/ghostframe-mcp
+cd ~/Documents/ghostframe-mcp
 npm install
 npm run build
 ```
@@ -63,8 +63,8 @@ npm run build
 Register with Claude Code (user-scoped):
 
 ```bash
-claude mcp add -s user chrome-devtools-stealth -- \
-  node /absolute/path/to/chromedevtools-mcp-stealth/build/src/bin/chrome-devtools-mcp.js
+claude mcp add -s user ghostframe -- \
+  node /absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js
 ```
 
 Or as JSON in your MCP client config:
@@ -72,10 +72,10 @@ Or as JSON in your MCP client config:
 ```json
 {
   "mcpServers": {
-    "chrome-devtools-stealth": {
+    "ghostframe": {
       "command": "node",
       "args": [
-        "/absolute/path/to/chromedevtools-mcp-stealth/build/src/bin/chrome-devtools-mcp.js"
+        "/absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js"
       ]
     }
   }
@@ -97,10 +97,10 @@ The fork's npm name, bin entries, and default user-data-dir are all distinct fro
       "command": "npx",
       "args": ["-y", "chrome-devtools-mcp@latest"]
     },
-    "chrome-devtools-stealth": {
+    "ghostframe": {
       "command": "node",
       "args": [
-        "/absolute/path/to/chromedevtools-mcp-stealth/build/src/bin/chrome-devtools-mcp.js"
+        "/absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js"
       ]
     }
   }
@@ -109,7 +109,7 @@ The fork's npm name, bin entries, and default user-data-dir are all distinct fro
 
 Pick which to invoke per task:
 
-- `chrome-devtools-stealth` — sites with bot management (Cloudflare, DataDome, AXS-style ticketing), anything where `navigator.webdriver=true` would block, work that benefits from clean per-session state.
+- `ghostframe` — sites with bot management (Cloudflare, DataDome, AXS-style ticketing), anything where `navigator.webdriver=true` would block, work that benefits from clean per-session state.
 - `chrome-devtools` (upstream) — Lighthouse audits, performance tracing, heap snapshots, accessibility audits, trusted local pages.
 
 ## Proxy
@@ -130,12 +130,12 @@ Authenticated proxies use Puppeteer's `page.authenticate()` to answer the 407 ch
 To bake a proxy into the global MCP config, register a separate variant alongside the default:
 
 ```bash
-claude mcp add -s user chrome-devtools-stealth-proxied -- \
-  node /absolute/path/to/build/src/bin/chrome-devtools-mcp.js \
+claude mcp add -s user ghostframe-proxied -- \
+  node /absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js \
   --proxy-server=203.0.113.7:8888:user:pass
 ```
 
-Then you have both `chrome-devtools-stealth` (no proxy) and `chrome-devtools-stealth-proxied` registered, and pick which to invoke per task. Credential rotation requires re-running `claude mcp add`; consider this trade-off before baking creds into the config.
+Then you have both `ghostframe` (no proxy) and `ghostframe-proxied` registered, and pick which to invoke per task. Credential rotation requires re-running `claude mcp add`; consider this trade-off before baking creds into the config.
 
 ## Tools
 
@@ -217,7 +217,7 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md). Slim mode (3
   - **Type:** boolean
 
 - **`--userDataDir`/ `--user-data-dir`**
-  Path to the user data directory for Chrome. Default is $HOME/.cache/chrome-devtools-mcp-stealth/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE.
+  Path to the user data directory for Chrome. Default is $HOME/.cache/ghostframe-mcp/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE.
   - **Type:** string
 
 - **`--channel`**
@@ -258,11 +258,11 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md). Slim mode (3
   - **Type:** boolean
 
 - **`--chromeArg`/ `--chrome-arg`**
-  Additional arguments for Chrome. Only applies when Chrome is launched by chrome-devtools-mcp.
+  Additional arguments for Chrome. Only applies when Chrome is launched by ghostframe-mcp.
   - **Type:** array
 
 - **`--ignoreDefaultChromeArg`/ `--ignore-default-chrome-arg`**
-  Explicitly disable default arguments for Chrome. Only applies when Chrome is launched by chrome-devtools-mcp.
+  Explicitly disable default arguments for Chrome. Only applies when Chrome is launched by ghostframe-mcp.
   - **Type:** array
 
 - **`--categoryEmulation`/ `--category-emulation`**
@@ -306,7 +306,7 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md). Slim mode (3
 
 <!-- END AUTO GENERATED OPTIONS -->
 
-Pass options via the `args` array in the MCP JSON config. Run `node build/src/bin/chrome-devtools-mcp.js --help` to print the full list.
+Pass options via the `args` array in the MCP JSON config. Run `node build/src/bin/ghostframe-mcp.js --help` to print the full list.
 
 ## Connecting to a running Chrome instance
 
@@ -334,7 +334,7 @@ When connecting to a running Chrome, the fork does not launch its own browser, a
 - [`skills/diagnose-bot-block/`](./skills/diagnose-bot-block/) — six-layer walk for "blocked but detectors pass".
 - [`skills/borrow-stealth-feature/`](./skills/borrow-stealth-feature/) — port workflow for borrowing primitives from `vibheksoni/stealth-browser-mcp` and `nodriver`.
 - [`skills/humanized-input/`](./skills/humanized-input/) — humanisation distributions and persona-coherence callouts.
-- [`skills/chrome-devtools/`](./skills/chrome-devtools/), [`skills/chrome-devtools-cli/`](./skills/chrome-devtools-cli/), [`skills/troubleshooting/`](./skills/troubleshooting/) — adapted from upstream.
+- [`skills/ghostframe/`](./skills/ghostframe/), [`skills/ghostframe-cli/`](./skills/ghostframe-cli/), [`skills/troubleshooting/`](./skills/troubleshooting/) — adapted from upstream.
 
 ## Disclaimer
 

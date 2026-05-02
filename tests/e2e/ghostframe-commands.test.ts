@@ -14,7 +14,7 @@ import {
   runCli,
 } from '../utils.js';
 
-describe('chrome-devtools', () => {
+describe('ghostframe', () => {
   let sessionId: string;
 
   beforeEach(async () => {
@@ -85,7 +85,7 @@ describe('chrome-devtools', () => {
       'error message is unexpected: ' + result.stdout,
     );
     assert(
-      result.stdout.includes('chrome-devtools start --categoryNetwork=true'),
+      result.stdout.includes('ghostframe start --categoryNetwork=true'),
       'restart command suggestion is missing: ' + result.stdout,
     );
   });
@@ -102,7 +102,7 @@ describe('chrome-devtools', () => {
       'error message is unexpected: ' + result.stdout,
     );
     assert(
-      result.stdout.includes('chrome-devtools start --experimentalVision=true'),
+      result.stdout.includes('ghostframe start --experimentalVision=true'),
       'restart command suggestion is miss: ' + result.stdout,
     );
   });

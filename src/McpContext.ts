@@ -854,5 +854,4 @@ export class McpContext implements Context {
     const pptrExtensions = await this.browser.extensions();
     return pptrExtensions.get(id);
   }
-
 }

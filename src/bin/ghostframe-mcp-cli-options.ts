@@ -106,7 +106,7 @@ export const cliOptions = {
   userDataDir: {
     type: 'string',
     description:
-      'Path to the user data directory for Chrome. Default is $HOME/.cache/chrome-devtools-mcp-stealth/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE.',
+      'Path to the user data directory for Chrome. Default is $HOME/.cache/ghostframe-mcp/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE.',
     conflicts: ['browserUrl', 'wsEndpoint', 'isolated'],
   },
   channel: {
@@ -142,7 +142,7 @@ export const cliOptions = {
   proxyServer: {
     type: 'string',
     description:
-      'Proxy server for Chrome to route all browser traffic through. Accepts: `host:port` (no auth), `host:port:user:pass` (with basic auth — common proxy-list format), `http://host:port`, `http://user:pass@host:port`, `socks5://host:port`, or `socks5://user:pass@host:port`. Authenticated proxies use Puppeteer\'s page.authenticate() to answer the 407 challenge — Chrome strips inline credentials from --proxy-server for security, so credentials are applied at the page-event layer, not on the command line.',
+      "Proxy server for Chrome to route all browser traffic through. Accepts: `host:port` (no auth), `host:port:user:pass` (with basic auth — common proxy-list format), `http://host:port`, `http://user:pass@host:port`, `socks5://host:port`, or `socks5://user:pass@host:port`. Authenticated proxies use Puppeteer's page.authenticate() to answer the 407 challenge — Chrome strips inline credentials from --proxy-server for security, so credentials are applied at the page-event layer, not on the command line.",
   },
   acceptInsecureCerts: {
     type: 'boolean',
@@ -209,12 +209,12 @@ export const cliOptions = {
   chromeArg: {
     type: 'array',
     describe:
-      'Additional arguments for Chrome. Only applies when Chrome is launched by chrome-devtools-mcp.',
+      'Additional arguments for Chrome. Only applies when Chrome is launched by ghostframe-mcp.',
   },
   ignoreDefaultChromeArg: {
     type: 'array',
     describe:
-      'Explicitly disable default arguments for Chrome. Only applies when Chrome is launched by chrome-devtools-mcp.',
+      'Explicitly disable default arguments for Chrome. Only applies when Chrome is launched by ghostframe-mcp.',
   },
   categoryEmulation: {
     type: 'boolean',
@@ -295,7 +295,7 @@ export type ParsedArguments = ReturnType<typeof parseArguments>;
 
 export function parseArguments(version: string, argv = process.argv) {
   const yargsInstance = yargs(hideBin(argv))
-    .scriptName('npx chrome-devtools-mcp@latest')
+    .scriptName('ghostframe-mcp')
     .options(cliOptions)
     .check(args => {
       // We can't set default in the options else

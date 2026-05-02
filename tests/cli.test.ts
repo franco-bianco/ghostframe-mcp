@@ -7,7 +7,7 @@
 import assert from 'node:assert';
 import {describe, it} from 'node:test';
 
-import {parseArguments} from '../src/bin/chrome-devtools-mcp-cli-options.js';
+import {parseArguments} from '../src/bin/ghostframe-mcp-cli-options.js';
 
 describe('cli args parsing', () => {
   const defaultArgs = {
@@ -37,7 +37,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       channel: 'stable',
     });
   });
@@ -53,7 +53,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       'browser-url': 'http://localhost:3000',
       browserUrl: 'http://localhost:3000',
       u: 'http://localhost:3000',
@@ -71,7 +71,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       channel: 'stable',
       'user-data-dir': '/tmp/chrome-profile',
       userDataDir: '/tmp/chrome-profile',
@@ -89,7 +89,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       'browser-url': undefined,
       browserUrl: undefined,
       u: undefined,
@@ -108,7 +108,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       'executable-path': '/tmp/test 123/chrome',
       e: '/tmp/test 123/chrome',
       executablePath: '/tmp/test 123/chrome',
@@ -126,7 +126,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       channel: 'stable',
       viewport: {
         width: 888,
@@ -146,7 +146,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       channel: 'stable',
       'chrome-arg': ['--no-sandbox', '--disable-setuid-sandbox'],
       chromeArg: ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -164,7 +164,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       channel: 'stable',
       'ignore-default-chrome-arg': [
         '--disable-extensions',
@@ -188,7 +188,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       'ws-endpoint': 'ws://127.0.0.1:9222/devtools/browser/abc123',
       wsEndpoint: 'ws://127.0.0.1:9222/devtools/browser/abc123',
       w: 'ws://127.0.0.1:9222/devtools/browser/abc123',
@@ -206,7 +206,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       'ws-endpoint': 'wss://example.com:9222/devtools/browser/abc123',
       wsEndpoint: 'wss://example.com:9222/devtools/browser/abc123',
       w: 'wss://example.com:9222/devtools/browser/abc123',
@@ -238,7 +238,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       channel: 'stable',
       'category-emulation': false,
       categoryEmulation: false,
@@ -250,7 +250,7 @@ describe('cli args parsing', () => {
       ...defaultArgs,
       _: [],
       headless: false,
-      $0: 'npx chrome-devtools-mcp@latest',
+      $0: 'ghostframe-mcp',
       channel: 'stable',
       'auto-connect': true,
       autoConnect: true,

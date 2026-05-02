@@ -3,6 +3,8 @@ name: humanized-input
 description: Operate the humanized-input subsystem. Use when authoring stealth interaction scripts, when input timing is suspected as the failing layer in `diagnose-bot-block`, or when running deterministic tests that need timings off. Defaults are on; one global off-switch exists; per-call overrides do not exist.
 ---
 
+# Humanized input
+
 `click`, `hover`, `type_text`, `drag` produce input events with humanized timing by default. The intent is to make input look like a person used it, not a script.
 
 For the underlying signal model and the empirical distribution citations, see [`docs/detection-signals.md#behavioral-layer`](../../docs/detection-signals.md#behavioral-layer).
@@ -26,7 +28,7 @@ These distributions are seeded from human-typing studies cited in [`docs/detecti
 Stealth runs require it on. The fork has not yet completed humanization migration on every tool — current inherited code paths have zero humanization at `src/tools/input.ts:67-69,105,141,214,272,344,434-438`. Treat the global flag as default-off and verify per tool until the migration lands.
 
 ```bash
-chrome-devtools status
+ghostframe status
 ```
 
 The status output names the active config. If you cannot tell from `status`, run a probe: type 50 characters into a focused input and time the call. Sub-second indicates humanization is off.
@@ -41,14 +43,14 @@ The off-switch exists for tests that must not have non-determinism. Pre-test:
 
 ```bash
 # off-switch flag name TBD; current planned posture is a single global config
-chrome-devtools start --no-humanize
+ghostframe start --no-humanize
 ```
 
 Post-test, restart with humanization on:
 
 ```bash
-chrome-devtools stop
-chrome-devtools start
+ghostframe stop
+ghostframe start
 ```
 
 Do not run stealth-sensitive flows with `--no-humanize` enabled.

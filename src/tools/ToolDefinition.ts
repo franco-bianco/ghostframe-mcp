@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {ParsedArguments} from '../bin/chrome-devtools-mcp-cli-options.js';
+import type {ParsedArguments} from '../bin/ghostframe-mcp-cli-options.js';
 import type {McpPage} from '../McpPage.js';
 import {zod} from '../third_party/index.js';
 import type {
@@ -14,7 +14,6 @@ import type {
   Page,
   ScreenRecorder,
   Viewport,
-  DevTools,
 } from '../third_party/index.js';
 import type {
   TextSnapshotNode,

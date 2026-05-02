@@ -14,7 +14,6 @@ import type {
   WebMCPTool,
 } from './third_party/index.js';
 import type {ToolGroup, ToolDefinition} from './tools/inPage.js';
-import {DTMCP_SYMBOL_KEY} from './utils/dtmcpState.js';
 import {takeSnapshot} from './tools/snapshot.js';
 import type {
   ContextPage,
@@ -26,6 +25,7 @@ import type {
   GeolocationOptions,
   TextSnapshotNode,
 } from './types.js';
+import {DTMCP_SYMBOL_KEY} from './utils/dtmcpState.js';
 import {
   getNetworkMultiplierFromString,
   WaitForHelper,

@@ -17,7 +17,7 @@ import {TestServer} from '../build/tests/server.js';
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '..');
 const SCENARIOS_DIR = path.join(import.meta.dirname, 'eval_scenarios');
-const SKILL_PATH = path.join(ROOT_DIR, 'skills', 'chrome-devtools', 'SKILL.md');
+const SKILL_PATH = path.join(ROOT_DIR, 'skills', 'ghostframe', 'SKILL.md');
 
 // Define schema for our test scenarios
 export interface CapturedFunctionCall {
@@ -99,10 +99,7 @@ async function runSingleScenario(
     }
 
     // Path to the compiled MCP server
-    const serverPath = path.join(
-      ROOT_DIR,
-      'build/src/bin/chrome-devtools-mcp.js',
-    );
+    const serverPath = path.join(ROOT_DIR, 'build/src/bin/ghostframe-mcp.js');
     if (!fs.existsSync(serverPath)) {
       throw new Error(
         `MCP server not found at ${serverPath}. Please run 'npm run build' first.`,

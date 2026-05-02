@@ -3,6 +3,8 @@ name: stealth-launch
 description: Pre-flight verification for a stealth-mode browser launch. Use when starting a session against a target site that watches for bots, after changing launch flags, after switching Chrome channel, or when reusing vs creating a profile dir. Confirms the launch posture before the first sensitive navigation.
 ---
 
+# Stealth launch pre-flight
+
 A pre-flight checklist. Run before navigating to a site that uses Cloudflare, DataDome, Akamai, PerimeterX, Imperva, or Kasada — first-navigation detection is hard to recover from in the same session.
 
 For the configuration backing each step, see [`docs/stealth-configuration.md`](../../docs/stealth-configuration.md).
@@ -16,7 +18,7 @@ Operates on the currently selected page after the daemon launches Chrome. If the
 ### 1. Confirm launch path
 
 ```bash
-chrome-devtools status
+ghostframe status
 ```
 
 If output shows `connecting to existing Chrome`: skip step 2 (you cannot affect launch flags). Otherwise the daemon is launching its own Chrome and step 2 applies.
@@ -26,8 +28,8 @@ If output shows `connecting to existing Chrome`: skip step 2 (you cannot affect 
 Open a neutral page and inspect:
 
 ```bash
-chrome-devtools new_page "about:blank"
-chrome-devtools evaluate_script "() => ({
+ghostframe new_page "about:blank"
+ghostframe evaluate_script "() => ({
   webdriver: navigator.webdriver,
   ua: navigator.userAgent,
   pluginsLen: navigator.plugins.length,
@@ -49,7 +51,7 @@ If any check fails, see [`docs/troubleshooting.md`](../../docs/troubleshooting.m
 Verify the Universe gate is in effect — `Runtime.enable` should not be held open across attaches. The cheap probe:
 
 ```bash
-chrome-devtools evaluate_script "() => {
+ghostframe evaluate_script "() => {
   const obj = {};
   Object.defineProperty(obj, 'foo', {
     get() { window.__leaked = true; return 'bar'; }
@@ -68,7 +70,7 @@ If returns `true`: a CDP listener is attached to console events and ran the form
 If `emulate` has been applied:
 
 ```bash
-chrome-devtools evaluate_script "() => ({
+ghostframe evaluate_script "() => ({
   ua: navigator.userAgent,
   uaCH: navigator.userAgentData?.toJSON(),
   langs: navigator.languages,
@@ -81,8 +83,8 @@ chrome-devtools evaluate_script "() => ({
 All values must agree with the persona you set. Independently, verify the proxy egress IP's geo aligns:
 
 ```bash
-chrome-devtools navigate_page --url "https://ipinfo.io/json"
-chrome-devtools evaluate_script "() => document.body.innerText"
+ghostframe navigate_page --url "https://ipinfo.io/json"
+ghostframe evaluate_script "() => document.body.innerText"
 ```
 
 A timezone-IP mismatch is a stronger signal than any single attribute disagreement.
@@ -90,7 +92,7 @@ A timezone-IP mismatch is a stronger signal than any single attribute disagreeme
 ### 5. Confirm `webdriver` descriptor is absent
 
 ```bash
-chrome-devtools evaluate_script "() => Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')"
+ghostframe evaluate_script "() => Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')"
 ```
 
 Expected: `undefined`. If a descriptor is returned with `value: false`, the launch flag worked but the override is itself a signal — fix at launch by stripping `--enable-automation`, not by setting the value to `false` in JS.
@@ -98,7 +100,7 @@ Expected: `undefined`. If a descriptor is returned with `value: false`, the laun
 ### 6. Confirm WebGL is not the software fallback
 
 ```bash
-chrome-devtools evaluate_script "() => {
+ghostframe evaluate_script "() => {
   const c = document.createElement('canvas').getContext('webgl');
   if (!c) return 'no-webgl';
   const e = c.getExtension('WEBGL_debug_renderer_info');
@@ -119,9 +121,9 @@ Fix: either run on a host with a real GPU (or pass-through GPU), or apply WebGL 
 ### 7. Run a public detector before the target
 
 ```bash
-chrome-devtools navigate_page --url "https://bot.sannysoft.com"
-chrome-devtools take_screenshot --fullPage true --filePath sanny.png
-chrome-devtools take_snapshot --filePath sanny.txt
+ghostframe navigate_page --url "https://bot.sannysoft.com"
+ghostframe take_screenshot --fullPage true --filePath sanny.png
+ghostframe take_snapshot --filePath sanny.txt
 ```
 
 If the matrix shows fails: stop. Do not navigate to the target until the matrix passes. Hand off to `skills/detection-testing/` for the full sweep.

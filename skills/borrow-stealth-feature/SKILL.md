@@ -3,7 +3,9 @@ name: borrow-stealth-feature
 description: Port a single feature from a reference stealth project into this fork's TypeScript code. Use when you've identified a needed mitigation in `vibheksoni/stealth-browser-mcp`, `nodriver`, or another reference repo and need to bring it across without copy-pasting unsafe patterns. Teaches the workflow; the seed examples are starting points, not a static port list.
 ---
 
-This skill teaches *how to borrow*, not *what to borrow*. Detection signals shift; the borrow targets that matter today differ from the ones that matter next quarter.
+# Borrow a stealth feature
+
+This skill teaches _how to borrow_, not _what to borrow_. Detection signals shift; the borrow targets that matter today differ from the ones that matter next quarter.
 
 The reference repo most directly aligned with our scope is `vibheksoni/stealth-browser-mcp` (Python). Pin to commit `17311be7b0f6b879644c39ec5e8f0dc8a9dd920c` when reading; the project moves fast and `main` may have diverged.
 
@@ -35,19 +37,19 @@ Read the source, not just the README. Read the commit message and any linked iss
 
 For each candidate, decide:
 
-| Classification | Meaning | Action |
-|---|---|---|
-| Port-as-is | TS-equivalent semantics, low integration risk | Translate Python → TypeScript line-by-line, preserve comments |
-| Adapt-for-TS | Behavior identical but Python idiom doesn't map (dynamic types, `exec`, decorators) | Rewrite in idiomatic TS; cite the source for parity reference |
-| Use upstream npm | Equivalent npm package exists | Use the package; do not re-implement |
-| Don't port | Source has a footgun (see [Negative examples](#negative-examples)) | Leave it. Document why in the port PR |
+| Classification   | Meaning                                                                             | Action                                                        |
+| ---------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Port-as-is       | TS-equivalent semantics, low integration risk                                       | Translate Python → TypeScript line-by-line, preserve comments |
+| Adapt-for-TS     | Behavior identical but Python idiom doesn't map (dynamic types, `exec`, decorators) | Rewrite in idiomatic TS; cite the source for parity reference |
+| Use upstream npm | Equivalent npm package exists                                                       | Use the package; do not re-implement                          |
+| Don't port       | Source has a footgun (see [Negative examples](#negative-examples))                  | Leave it. Document why in the port PR                         |
 
 ### 4. Implement with parity in mind
 
 When porting, capture for each function:
 
 - The exact CDP method called (e.g. `Network.setBlockedURLs`, `Page.addScriptToEvaluateOnNewDocument`, `Network.setExtraHTTPHeaders`).
-- The exact polyfill string injected, byte-for-byte if possible. Polyfills are detected by their *shape*; reformat carefully.
+- The exact polyfill string injected, byte-for-byte if possible. Polyfills are detected by their _shape_; reformat carefully.
 - The order of operations. Many stealth techniques are order-sensitive (e.g. `addScriptToEvaluateOnNewDocument` must run before any navigation).
 
 ### 5. Verify parity
@@ -71,22 +73,22 @@ Add to the port PR description:
 
 From `vibheksoni/stealth-browser-mcp` at the pinned commit:
 
-| Feature | Source path | Layer addressed | Classification |
-|---|---|---|---|
-| `Network.setBlockedURLs` | `src/network_interceptor.py:43-77` | Network | Port-as-is |
-| `Network.setExtraHTTPHeaders` | `src/server.py:965-984` | Fingerprint (header coherence) | Port-as-is |
-| `Page.addScriptToEvaluateOnNewDocument` polyfill injection | `src/server.py:2440-2461` | DOM | Port-as-is, but treat each polyfill as a separate borrow with its own parity check |
-| Authenticated-proxy forwarder | `src/proxy_forwarder.py:1-439` | Network (auth proxy support) | Use upstream npm — `proxy-chain` covers this without rewriting 400 lines |
+| Feature                                                    | Source path                        | Layer addressed                | Classification                                                                     |
+| ---------------------------------------------------------- | ---------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------- |
+| `Network.setBlockedURLs`                                   | `src/network_interceptor.py:43-77` | Network                        | Port-as-is                                                                         |
+| `Network.setExtraHTTPHeaders`                              | `src/server.py:965-984`            | Fingerprint (header coherence) | Port-as-is                                                                         |
+| `Page.addScriptToEvaluateOnNewDocument` polyfill injection | `src/server.py:2440-2461`          | DOM                            | Port-as-is, but treat each polyfill as a separate borrow with its own parity check |
+| Authenticated-proxy forwarder                              | `src/proxy_forwarder.py:1-439`     | Network (auth proxy support)   | Use upstream npm — `proxy-chain` covers this without rewriting 400 lines           |
 
 ## Negative examples
 
 Do not port these. The reason they exist in the reference does not generalize to TS.
 
-| Source | Why not |
-|---|---|
-| `dynamic_hook_ai_interface.py`, `hook_learning_system.py` | AI-codegen executing `exec()` of LLM-generated Python. We are TypeScript; eval'd-string injection paths are a code-injection footgun without an equivalent runtime sandbox |
-| `--single-process` container heuristic | The flag itself is detectable via `crossOriginIsolated` shape. Borrowing it adds detection signal |
-| `nodriver`'s default `--disable-features=IsolateOrigins,site-per-process` | Cloudflare BM Enterprise probes `crossOriginIsolated`; inheriting this default adds signal |
+| Source                                                                    | Why not                                                                                                                                                                    |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dynamic_hook_ai_interface.py`, `hook_learning_system.py`                 | AI-codegen executing `exec()` of LLM-generated Python. We are TypeScript; eval'd-string injection paths are a code-injection footgun without an equivalent runtime sandbox |
+| `--single-process` container heuristic                                    | The flag itself is detectable via `crossOriginIsolated` shape. Borrowing it adds detection signal                                                                          |
+| `nodriver`'s default `--disable-features=IsolateOrigins,site-per-process` | Cloudflare BM Enterprise probes `crossOriginIsolated`; inheriting this default adds signal                                                                                 |
 
 ## Tips
 
@@ -98,5 +100,5 @@ Do not port these. The reason they exist in the reference does not generalize to
 ## What NOT to do
 
 - Do not bulk-port "the stealth file" from the reference repo. Each feature has its own trade-off; borrow incrementally.
-- Do not skip the negative-examples list. Two of those entries are *more* detectable than the inherited posture.
+- Do not skip the negative-examples list. Two of those entries are _more_ detectable than the inherited posture.
 - Do not port a polyfill you don't understand. If you can't articulate which detector row it fixes, you can't tell when it stops working.

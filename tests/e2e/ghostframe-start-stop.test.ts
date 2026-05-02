@@ -17,7 +17,7 @@ import {
   runCli,
 } from '../utils.js';
 
-describe('chrome-devtools', () => {
+describe('ghostframe', () => {
   let sessionId: string;
 
   beforeEach(async () => {
@@ -56,7 +56,7 @@ describe('chrome-devtools', () => {
   it('can start the daemon with userDataDir', async () => {
     const userDataDir = path.join(
       os.tmpdir(),
-      `chrome-devtools-test-${crypto.randomUUID()}`,
+      `ghostframe-test-${crypto.randomUUID()}`,
     );
     fs.mkdirSync(userDataDir, {recursive: true});
 

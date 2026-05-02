@@ -270,9 +270,7 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       // ($HOME/.cache/chrome-devtools-mcp/...) so this fork can be installed
       // alongside the upstream package without contending for the same Chrome
       // profile or fighting over the user-data-dir lock.
-      options.viaCli
-        ? 'chrome-devtools-mcp-stealth-cli'
-        : 'chrome-devtools-mcp-stealth',
+      options.viaCli ? 'ghostframe-cli' : 'ghostframe-mcp',
       profileDirName,
     );
     await fs.promises.mkdir(userDataDir, {
@@ -329,7 +327,11 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       await installStealthInitScript(browser);
     }
     if (options.proxyUsername && options.proxyPassword) {
-      await installProxyAuth(browser, options.proxyUsername, options.proxyPassword);
+      await installProxyAuth(
+        browser,
+        options.proxyUsername,
+        options.proxyPassword,
+      );
     }
     if (options.viewport) {
       const [page] = await browser.pages();

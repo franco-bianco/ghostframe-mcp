@@ -11,8 +11,8 @@ import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 import type {Tool} from '@modelcontextprotocol/sdk/types.js';
 import {get_encoding} from 'tiktoken';
 
-import {cliOptions} from '../build/src/bin/chrome-devtools-mcp-cli-options.js';
-import type {ParsedArguments} from '../build/src/bin/chrome-devtools-mcp-cli-options.js';
+import {cliOptions} from '../build/src/bin/ghostframe-mcp-cli-options.js';
+import type {ParsedArguments} from '../build/src/bin/ghostframe-mcp-cli-options.js';
 import {buildFlag} from '../build/src/index.js';
 import {
   ToolCategory,
@@ -29,7 +29,7 @@ async function measureServer(args: string[]) {
   // 1. Connect to your actual MCP server
   const transport = new StdioClientTransport({
     command: 'node',
-    args: ['./build/src/bin/chrome-devtools-mcp.js', ...args], // Point to your built MCP server
+    args: ['./build/src/bin/ghostframe-mcp.js', ...args], // Point to your built MCP server
   });
 
   const client = new Client(

@@ -3,6 +3,8 @@ name: diagnose-bot-block
 description: Investigate why a specific site blocks automation when the four public detectors pass. Use when a target site (Cloudflare/DataDome/Akamai/PerimeterX/Imperva/Kasada) returns 403 / interstitial / CAPTCHA on first navigation but `bot.sannysoft.com`, `arh.antoinevastel.com`, `creepjs`, and `pixelscan` all pass. Walks the six detection layers from the cheapest probe to the most expensive.
 ---
 
+# Diagnose a bot block
+
 When the public detectors pass but a target still blocks, the target is checking something the detectors don't. Walk the six layers in [`docs/detection-signals.md`](../../docs/detection-signals.md) in order of cost.
 
 ## Default scope
@@ -16,10 +18,10 @@ Operates on the currently selected page after a failed navigation to the target.
 Reproduce on a fresh page so you have a clean response:
 
 ```bash
-chrome-devtools new_page "<target URL>"
-chrome-devtools list_network_requests --resourceTypes Document
-chrome-devtools get_network_request --reqid <id of the document request> --requestFilePath block-req.md --responseFilePath block-res.md
-chrome-devtools take_screenshot --fullPage true --filePath block.png
+ghostframe new_page "<target URL>"
+ghostframe list_network_requests --resourceTypes Document
+ghostframe get_network_request --reqid <id of the document request> --requestFilePath block-req.md --responseFilePath block-res.md
+ghostframe take_screenshot --fullPage true --filePath block.png
 ```
 
 Read `block-res.md` for:
@@ -35,7 +37,7 @@ Read `block-req.md` for:
 ### 2. Six danger signs (cheapest probe, do these first)
 
 ```bash
-chrome-devtools evaluate_script "() => ({
+ghostframe evaluate_script "() => ({
   webdriver: navigator.webdriver,
   webdriverDescriptor: Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver'),
   ua: navigator.userAgent,
@@ -62,7 +64,7 @@ Six tells:
 ### 3. CDP layer probe
 
 ```bash
-chrome-devtools evaluate_script "() => {
+ghostframe evaluate_script "() => {
   const obj = {};
   Object.defineProperty(obj, 'foo', {
     get() { window.__leaked = true; return 'bar'; }
@@ -79,7 +81,7 @@ chrome-devtools evaluate_script "() => {
 Compare polyfilled surface against real Chrome. Probe the polyfilled functions:
 
 ```bash
-chrome-devtools evaluate_script "() => ({
+ghostframe evaluate_script "() => ({
   chromeRuntime: typeof chrome !== 'undefined' && typeof chrome.runtime !== 'undefined',
   notif: Notification.permission,
   perm: navigator.permissions ? 'present' : 'absent',
@@ -127,14 +129,14 @@ Do not attempt to mitigate at the network layer from MCP. Document the constrain
 
 Build a one-line summary per layer indicating pass / fail / unknown. The first failing layer is the next target.
 
-| Layer | State | Next |
-|---|---|---|
-| CDP | pass | — |
-| Launch | pass | — |
-| DOM | fail (chrome.runtime polyfill `toString` leak) | Fix polyfill `Function.prototype.toString` proxy |
-| Fingerprint | pass | — |
-| Behavioral | unknown | Re-run with humanization confirmed-on |
-| Network | pass (pass-through proxy) | — |
+| Layer       | State                                          | Next                                             |
+| ----------- | ---------------------------------------------- | ------------------------------------------------ |
+| CDP         | pass                                           | —                                                |
+| Launch      | pass                                           | —                                                |
+| DOM         | fail (chrome.runtime polyfill `toString` leak) | Fix polyfill `Function.prototype.toString` proxy |
+| Fingerprint | pass                                           | —                                                |
+| Behavioral  | unknown                                        | Re-run with humanization confirmed-on            |
+| Network     | pass (pass-through proxy)                      | —                                                |
 
 Hand to the relevant mitigation skill:
 

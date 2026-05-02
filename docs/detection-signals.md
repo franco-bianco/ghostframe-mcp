@@ -2,20 +2,20 @@
 
 A concepts page. The six layers a bot detector watches, what each layer measures, what we control, and what we cannot.
 
-Configuration that responds to these signals lives in [`stealth-configuration.md`](./stealth-configuration.md). This page is the *why*.
+Configuration that responds to these signals lives in [`stealth-configuration.md`](./stealth-configuration.md). This page is the _why_.
 
 ## Signal layers
 
 A detector composes a verdict from multiple layers. A single layer rarely flips the verdict; coherence across layers does.
 
-| Layer | What it measures | Where we mitigate |
-| --- | --- | --- |
-| CDP | Whether the browser has CDP attached and what domains are enabled | `docs/stealth-configuration.md#cdp-routing` |
-| Launch | Process flags, command-line shape, parent process | `docs/stealth-configuration.md#browser-launch` |
-| DOM | JS-visible objects, properties, and method shapes | `docs/stealth-configuration.md#dom-polyfills` |
-| Fingerprint | UA, UA-CH, Intl, navigator, WebGL, canvas, audio | `docs/stealth-configuration.md#fingerprint-coherence` |
-| Behavioral | Mouse paths, key cadence, scroll, focus changes | `docs/stealth-configuration.md#humanized-input` |
-| Network | TLS handshake, JA3/JA4, HTTP/2 settings, header order | Inherited from Chrome via CDP — see [Network](#network-layer) |
+| Layer       | What it measures                                                  | Where we mitigate                                             |
+| ----------- | ----------------------------------------------------------------- | ------------------------------------------------------------- |
+| CDP         | Whether the browser has CDP attached and what domains are enabled | `docs/stealth-configuration.md#cdp-routing`                   |
+| Launch      | Process flags, command-line shape, parent process                 | `docs/stealth-configuration.md#browser-launch`                |
+| DOM         | JS-visible objects, properties, and method shapes                 | `docs/stealth-configuration.md#dom-polyfills`                 |
+| Fingerprint | UA, UA-CH, Intl, navigator, WebGL, canvas, audio                  | `docs/stealth-configuration.md#fingerprint-coherence`         |
+| Behavioral  | Mouse paths, key cadence, scroll, focus changes                   | `docs/stealth-configuration.md#humanized-input`               |
+| Network     | TLS handshake, JA3/JA4, HTTP/2 settings, header order             | Inherited from Chrome via CDP — see [Network](#network-layer) |
 
 ## CDP layer
 
@@ -70,7 +70,7 @@ Examples:
 
 ### The arms-race caveat
 
-DOM polyfills are detected by their *shape*, not by their absence. A polyfill of `chrome.runtime` is itself a fingerprint: the property descriptor, prototype chain, enumeration order, getter behavior, and `toString` output are all probed.
+DOM polyfills are detected by their _shape_, not by their absence. A polyfill of `chrome.runtime` is itself a fingerprint: the property descriptor, prototype chain, enumeration order, getter behavior, and `toString` output are all probed.
 
 Stealth-plugin (`puppeteer-extra-plugin-stealth`) is at this point fingerprinted across the industry. Patchright is the current reference. Expect Patchright's shape to be detected eventually; track upstream and update.
 
@@ -113,7 +113,7 @@ Mitigation: persona-coherent `emulate` (see [`stealth-configuration.md#fingerpri
 
 ## Behavioral layer
 
-How the page is *used*. Mouse paths, key timings, scroll deltas, focus changes, time-on-page.
+How the page is _used_. Mouse paths, key timings, scroll deltas, focus changes, time-on-page.
 
 Examples:
 
@@ -134,7 +134,7 @@ Mitigation: humanized input defaults in [`stealth-configuration.md#humanized-inp
 
 ## Network layer
 
-TLS handshake (JA3/JA4), HTTP/2 SETTINGS frame, header order, ALPN negotiation. These are *not* MCP-controllable in any meaningful way.
+TLS handshake (JA3/JA4), HTTP/2 SETTINGS frame, header order, ALPN negotiation. These are _not_ MCP-controllable in any meaningful way.
 
 Stance: this fork inherits Chrome's network stack via CDP. Chrome speaks TLS, not us. As long as we drive a real Chrome binary, our JA4 is Chrome's JA4. This is a stealth feature.
 
