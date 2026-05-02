@@ -127,6 +127,7 @@ export type SupportedExtensions =
  */
 export type Context = Readonly<{
   validatePath(filePath?: string): void;
+  getStealth(): boolean;
   getPageById(pageId: number): ContextPage;
   newPage(
     background?: boolean,

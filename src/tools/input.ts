@@ -9,11 +9,23 @@ import type {McpContext} from '../McpContext.js';
 import {zod} from '../third_party/index.js';
 import type {ElementHandle, KeyInput} from '../third_party/index.js';
 import type {TextSnapshotNode} from '../types.js';
+import {
+  humanizedClick,
+  humanizedDragStep,
+  humanizedHover,
+  humanizedKeyPress,
+  humanizedType,
+  jitter as jitterDelay,
+} from '../utils/humanInput.js';
 import {parseKey} from '../utils/keyboard.js';
 
 import {ToolCategory} from './categories.js';
-import type {ContextPage} from './ToolDefinition.js';
+import type {Context, ContextPage} from './ToolDefinition.js';
 import {definePageTool} from './ToolDefinition.js';
+
+function isStealthDisabled(context: Context): boolean {
+  return !context.getStealth();
+}
 
 const dblClickSchema = zod
   .boolean()
@@ -59,14 +71,20 @@ export const click = definePageTool({
     includeSnapshot: includeSnapshotSchema,
   },
   blockedByDialog: true,
-  handler: async (request, response) => {
+  handler: async (request, response, context) => {
     const uid = request.params.uid;
     const handle = await request.page.getElementByUid(uid);
+    const disabled = isStealthDisabled(context);
     try {
       await request.page.waitForEventsAfterAction(async () => {
-        await handle.asLocator().click({
-          count: request.params.dblClick ? 2 : 1,
-        });
+        await humanizedClick(
+          request.page.pptrPage,
+          {type: 'handle', handle},
+          {
+            count: request.params.dblClick ? 2 : 1,
+            disabled,
+          },
+        );
       });
       response.appendResponseLine(
         request.params.dblClick
@@ -99,12 +117,18 @@ export const clickAt = definePageTool({
     includeSnapshot: includeSnapshotSchema,
   },
   blockedByDialog: true,
-  handler: async (request, response) => {
+  handler: async (request, response, context) => {
     const page = request.page;
+    const disabled = isStealthDisabled(context);
     await page.waitForEventsAfterAction(async () => {
-      await page.pptrPage.mouse.click(request.params.x, request.params.y, {
-        clickCount: request.params.dblClick ? 2 : 1,
-      });
+      await humanizedClick(
+        page.pptrPage,
+        {type: 'xy', x: request.params.x, y: request.params.y},
+        {
+          count: request.params.dblClick ? 2 : 1,
+          disabled,
+        },
+      );
     });
     response.appendResponseLine(
       request.params.dblClick
@@ -133,12 +157,13 @@ export const hover = definePageTool({
     includeSnapshot: includeSnapshotSchema,
   },
   blockedByDialog: true,
-  handler: async (request, response) => {
+  handler: async (request, response, context) => {
     const uid = request.params.uid;
     const handle = await request.page.getElementByUid(uid);
+    const disabled = isStealthDisabled(context);
     try {
       await request.page.waitForEventsAfterAction(async () => {
-        await handle.asLocator().hover();
+        await humanizedHover(request.page.pptrPage, handle, {disabled});
       });
       response.appendResponseLine(`Successfully hovered over the element`);
       if (request.params.includeSnapshot) {
@@ -266,13 +291,20 @@ export const typeText = definePageTool({
     submitKey: submitKeySchema,
   },
   blockedByDialog: true,
-  handler: async (request, response) => {
+  handler: async (request, response, context) => {
     const page = request.page;
+    const disabled = isStealthDisabled(context);
     await page.waitForEventsAfterAction(async () => {
-      await page.pptrPage.keyboard.type(request.params.text);
+      await humanizedType(page.pptrPage, request.params.text, {disabled});
       if (request.params.submitKey) {
+        // Defer key validation to Puppeteer so error messages match the
+        // existing behavior (`Unknown key: "..."`).  The submit key is a
+        // single key, not a modifier combination, so we don't run it
+        // through `parseKey`.
+        const delay = disabled ? undefined : jitterDelay(40, 120);
         await page.pptrPage.keyboard.press(
           request.params.submitKey as KeyInput,
+          delay !== undefined ? {delay} : undefined,
         );
       }
     });
@@ -295,15 +327,16 @@ export const drag = definePageTool({
     includeSnapshot: includeSnapshotSchema,
   },
   blockedByDialog: true,
-  handler: async (request, response) => {
+  handler: async (request, response, context) => {
     const fromHandle = await request.page.getElementByUid(
       request.params.from_uid,
     );
     const toHandle = await request.page.getElementByUid(request.params.to_uid);
+    const disabled = isStealthDisabled(context);
     try {
       await request.page.waitForEventsAfterAction(async () => {
         await fromHandle.drag(toHandle);
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await humanizedDragStep(request.page.pptrPage, {disabled});
         await toHandle.drop(fromHandle);
       });
       response.appendResponseLine(`Successfully dragged an element`);
@@ -424,19 +457,15 @@ export const pressKey = definePageTool({
     includeSnapshot: includeSnapshotSchema,
   },
   blockedByDialog: true,
-  handler: async (request, response) => {
+  handler: async (request, response, context) => {
     const page = request.page;
-    const tokens = parseKey(request.params.key);
-    const [key, ...modifiers] = tokens;
+    // Validate the key syntax up-front so we surface parse errors with the
+    // same shape as before, regardless of stealth mode.
+    parseKey(request.params.key);
+    const disabled = isStealthDisabled(context);
 
     await page.waitForEventsAfterAction(async () => {
-      for (const modifier of modifiers) {
-        await page.pptrPage.keyboard.down(modifier);
-      }
-      await page.pptrPage.keyboard.press(key);
-      for (const modifier of modifiers.toReversed()) {
-        await page.pptrPage.keyboard.up(modifier);
-      }
+      await humanizedKeyPress(page.pptrPage, request.params.key, {disabled});
     });
 
     response.appendResponseLine(

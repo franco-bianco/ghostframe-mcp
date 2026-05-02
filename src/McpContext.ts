@@ -57,6 +57,8 @@ interface McpContextOptions {
   // because it forces Runtime.enable + Debugger.enable on every page and is
   // not covered by the rebrowser-puppeteer-core drop-in. Trade-off:
   // list_console_messages / get_console_message return empty results.
+  // Also globally toggles stealth-mode behaviors elsewhere (e.g. humanized
+  // input).
   stealth: boolean;
 }
 
@@ -463,6 +465,10 @@ export class McpContext implements Context {
     data: {recorder: ScreenRecorder; filePath: string} | null,
   ): void {
     this.#screenRecorderData = data;
+  }
+
+  getStealth(): boolean {
+    return this.#options.stealth;
   }
 
   getSelectedPptrPage(): Page {
