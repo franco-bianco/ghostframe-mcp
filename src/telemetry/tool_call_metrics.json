@@ -85,6 +85,18 @@
       {
         "name": "viewport_length",
         "argType": "number"
+      },
+      {
+        "name": "user_agent_metadata_length",
+        "argType": "number"
+      },
+      {
+        "name": "locale_length",
+        "argType": "number"
+      },
+      {
+        "name": "timezone_length",
+        "argType": "number"
       }
     ]
   },

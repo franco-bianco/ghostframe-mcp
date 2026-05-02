@@ -148,6 +148,24 @@ export const commands: Commands = {
         "description": "User agent to emulate. Set to empty string to clear the user agent override.",
         "required": false
       },
+      "userAgentMetadata": {
+        "name": "userAgentMetadata",
+        "type": "string",
+        "description": "User-Agent Client Hints metadata sent alongside the UA override, encoded as a JSON object string. Recognized keys: brands (array of {brand, version}), fullVersionList (array of {brand, version}), fullVersion, platform, platformVersion, architecture, model, mobile (bool), bitness, wow64 (bool). Used to keep `navigator.userAgent` and `Sec-CH-UA-*` headers in sync. Omit to clear when no userAgent is provided.",
+        "required": false
+      },
+      "locale": {
+        "name": "locale",
+        "type": "string",
+        "description": "Locale (e.g. `en-US`, `de-DE`) to use for `navigator.language`, `Intl` APIs, and the `Accept-Language` header. Omit to clear the locale override.",
+        "required": false
+      },
+      "timezone": {
+        "name": "timezone",
+        "type": "string",
+        "description": "IANA timezone identifier (e.g. `America/Los_Angeles`) used to override the page's timezone. Omit to clear the timezone override.",
+        "required": false
+      },
       "colorScheme": {
         "name": "colorScheme",
         "type": "string",

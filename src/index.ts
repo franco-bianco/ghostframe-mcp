@@ -225,12 +225,10 @@ export async function createMcpServer(
             devtools,
             enableExtensions: serverArgs.categoryExtensions,
             viaCli: serverArgs.viaCli,
-            // The McpContext-level stealth default (true) does not propagate
-            // to launch automatically; we forward the CLI flag explicitly
-            // here. The cast keeps this chunk independent of the chunk that
-            // adds the `--stealth` yargs option.
-            stealth:
-              (serverArgs as {stealth?: boolean}).stealth ?? false,
+            // The McpContext-level stealth default does not propagate to
+            // launch automatically; forward the CLI flag explicitly so the
+            // Patchright-shape DOM polyfills are installed at launch time.
+            stealth: serverArgs.stealth,
           });
 
     if (context?.browser !== browser) {

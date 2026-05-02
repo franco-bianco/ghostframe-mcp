@@ -1,6 +1,6 @@
 <!-- AUTO GENERATED DO NOT EDIT - run 'npm run gen' to update-->
 
-# Chrome DevTools MCP Tool Reference (~6021 cl100k_base tokens)
+# Chrome DevTools MCP Tool Reference (~6250 cl100k_base tokens)
 
 - **[Input automation](#input-automation)** (9 tools)
   - [`click`](#click)
@@ -224,8 +224,11 @@
 - **colorScheme** (enum: "dark", "light", "auto") _(optional)_: [`Emulate`](#emulate) the dark or the light mode. Set to "auto" to reset to the default.
 - **cpuThrottlingRate** (number) _(optional)_: Represents the CPU slowdown factor. Omit or set the rate to 1 to disable throttling
 - **geolocation** (string) _(optional)_: Geolocation (`&lt;latitude&gt;x&lt;longitude&gt;`) to [`emulate`](#emulate). Latitude between -90 and 90. Longitude between -180 and 180. Omit to clear the geolocation override.
+- **locale** (string) _(optional)_: Locale (e.g. `en-US`, `de-DE`) to use for `navigator.language`, `Intl` APIs, and the `Accept-Language` header. Omit to clear the locale override.
 - **networkConditions** (enum: "Offline", "Slow 3G", "Fast 3G", "Slow 4G", "Fast 4G") _(optional)_: Throttle network. Omit to disable throttling.
+- **timezone** (string) _(optional)_: IANA timezone identifier (e.g. `America/Los_Angeles`) used to override the page's timezone. Omit to clear the timezone override.
 - **userAgent** (string) _(optional)_: User agent to [`emulate`](#emulate). Set to empty string to clear the user agent override.
+- **userAgentMetadata** (string) _(optional)_: User-Agent Client Hints metadata sent alongside the UA override, encoded as a JSON object string. Recognized keys: brands (array of {brand, version}), fullVersionList (array of {brand, version}), fullVersion, platform, platformVersion, architecture, model, mobile (bool), bitness, wow64 (bool). Used to keep `navigator.userAgent` and `Sec-CH-UA-*` headers in sync. Omit to clear when no userAgent is provided.
 - **viewport** (string) _(optional)_: [`Emulate`](#emulate) device viewports '&lt;width&gt;x&lt;height&gt;x&lt;devicePixelRatio&gt;[,mobile][,touch][,landscape]'. 'touch' and 'mobile' to [`emulate`](#emulate) mobile devices. 'landscape' to [`emulate`](#emulate) landscape mode.
 
 ---
