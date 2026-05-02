@@ -34,7 +34,7 @@ Trade-off: `list_console_messages` and `get_console_message` return empty under 
 - Default user-data-dir is `~/.cache/chrome-devtools-mcp-stealth/...`, distinct from upstream's `~/.cache/chrome-devtools-mcp/...` so cookies, Cloudflare reputation, and the profile lock don't collide.
 - `pipe: true` is kept (over the detectable `--remote-debugging-port`).
 
-### Tools
+### Tool changes
 
 **Added:** `set_blocked_urls` (CDP `Network.setBlockedURLs`).
 
@@ -116,7 +116,7 @@ Pick which to invoke per task:
 
 Proxies are off by default. Pass one with `--proxy-server`:
 
-```
+```text
 --proxy-server=203.0.113.7:8888                         no auth
 --proxy-server=203.0.113.7:8888:user:pass               with basic auth (proxy-list format)
 --proxy-server=http://203.0.113.7:8888                  no auth, explicit scheme
