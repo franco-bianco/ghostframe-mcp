@@ -636,5 +636,14 @@
       }
     ],
     "isDeprecated": true
+  },
+  {
+    "name": "set_blocked_urls",
+    "args": [
+      {
+        "name": "patterns_count",
+        "argType": "number"
+      }
+    ]
   }
 ]

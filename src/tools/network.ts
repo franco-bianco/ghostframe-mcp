@@ -87,6 +87,49 @@ export const listNetworkRequests = definePageTool({
   },
 });
 
+export const setBlockedUrls = definePageTool({
+  name: 'set_blocked_urls',
+  description: `Block requests for URLs matching any of the given patterns. Patterns may include the * wildcard. Pass an empty array to clear all blocks. Useful for blocking trackers, ad networks, or fingerprint-collection endpoints during stealth runs.`,
+  annotations: {
+    category: ToolCategory.NETWORK,
+    readOnlyHint: false,
+  },
+  schema: {
+    patterns: zod
+      .array(zod.string())
+      .describe(
+        'URL patterns to block. Wildcard `*` matches any character sequence. Examples: "*.doubleclick.net*", "https://example.com/track/*". Pass an empty array to clear.',
+      ),
+  },
+  blockedByDialog: false,
+  handler: async (request, response) => {
+    const page = request.page.pptrPage;
+    // Network.setBlockedURLs is per-session; the most reliable way to set it
+    // for the page is via the primary CDP session. Use createCDPSession +
+    // detach to keep the additional session out of long-lived state, matching
+    // the pattern used elsewhere for one-shot CDP overrides.
+    const client = await page.createCDPSession();
+    try {
+      await client.send('Network.enable');
+      await client.send('Network.setBlockedURLs', {
+        urls: request.params.patterns,
+      });
+    } finally {
+      await client.detach();
+    }
+    if (request.params.patterns.length === 0) {
+      response.appendResponseLine('Cleared all blocked URL patterns.');
+    } else {
+      response.appendResponseLine(
+        `Blocking ${request.params.patterns.length} URL pattern(s):`,
+      );
+      for (const pattern of request.params.patterns) {
+        response.appendResponseLine(`- ${pattern}`);
+      }
+    }
+  },
+});
+
 export const getNetworkRequest = definePageTool({
   name: 'get_network_request',
   description: `Gets a network request by an optional reqid, if omitted returns the currently selected request in the DevTools Network panel.`,

@@ -591,6 +591,18 @@ export const commands: Commands = {
       }
     }
   },
+  "set_blocked_urls": {
+    "description": "Block requests for URLs matching any of the given patterns. Patterns may include the * wildcard. Pass an empty array to clear all blocks. Useful for blocking trackers, ad networks, or fingerprint-collection endpoints during stealth runs.",
+    "category": "Network",
+    "args": {
+      "patterns": {
+        "name": "patterns",
+        "type": "array",
+        "description": "URL patterns to block. Wildcard `*` matches any character sequence. Examples: \"*.doubleclick.net*\", \"https://example.com/track/*\". Pass an empty array to clear.",
+        "required": true
+      }
+    }
+  },
   "take_screenshot": {
     "description": "Take a screenshot of the page or element.",
     "category": "Debugging",

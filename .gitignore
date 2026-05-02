@@ -148,4 +148,7 @@ build/
 
 log.txt
 
-.DS_Store.claude/worktrees/
+.DS_Store
+
+# Claude Code agent worktrees
+.claude/worktrees/

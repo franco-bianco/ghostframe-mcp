@@ -1,6 +1,6 @@
 <!-- AUTO GENERATED DO NOT EDIT - run 'npm run gen' to update-->
 
-# Chrome DevTools MCP Tool Reference (~6250 cl100k_base tokens)
+# Chrome DevTools MCP Tool Reference (~6472 cl100k_base tokens)
 
 - **[Input automation](#input-automation)** (9 tools)
   - [`click`](#click)
@@ -22,9 +22,10 @@
 - **[Emulation](#emulation)** (2 tools)
   - [`emulate`](#emulate)
   - [`resize_page`](#resize_page)
-- **[Network](#network)** (2 tools)
+- **[Network](#network)** (3 tools)
   - [`get_network_request`](#get_network_request)
   - [`list_network_requests`](#list_network_requests)
+  - [`set_blocked_urls`](#set_blocked_urls)
 - **[Debugging](#debugging)** (5 tools)
   - [`evaluate_script`](#evaluate_script)
   - [`get_console_message`](#get_console_message)
@@ -268,6 +269,16 @@
 - **pageIdx** (integer) _(optional)_: Page number to return (0-based). When omitted, returns the first page.
 - **pageSize** (integer) _(optional)_: Maximum number of requests to return. When omitted, returns all requests.
 - **resourceTypes** (array) _(optional)_: Filter requests to only return requests of the specified resource types. When omitted or empty, returns all requests.
+
+---
+
+### `set_blocked_urls`
+
+**Description:** Block requests for URLs matching any of the given patterns. Patterns may include the * wildcard. Pass an empty array to clear all blocks. Useful for blocking trackers, ad networks, or fingerprint-collection endpoints during stealth runs.
+
+**Parameters:**
+
+- **patterns** (array) **(required)**: URL patterns to block. Wildcard `*` matches any character sequence. Examples: "*.doubleclick.net*", "https://example.com/track/*". Pass an empty array to clear.
 
 ---
 
