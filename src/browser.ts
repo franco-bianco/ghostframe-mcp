@@ -159,6 +159,14 @@ interface McpLaunchOptions {
    * here automatically and must be plumbed in by the caller.
    */
   stealth?: boolean;
+  /**
+   * Username/password for an authenticated proxy. Chrome strips inline
+   * credentials from `--proxy-server`, so we answer the 407 challenge via
+   * Puppeteer's `page.authenticate()` on every existing and future page
+   * instead.
+   */
+  proxyUsername?: string;
+  proxyPassword?: string;
 }
 
 export function detectDisplay(): void {
@@ -208,6 +216,40 @@ async function installStealthInitScript(browser: Browser): Promise<void> {
       await page.evaluateOnNewDocument(script);
     } catch (err) {
       logger('Failed to install stealth init script on existing page', err);
+    }
+  }
+}
+
+/**
+ * Register Puppeteer's basic-auth handler on every current and future page so
+ * authenticated proxies (HTTP 407 / SOCKS auth) get answered without exposing
+ * the credentials to the page realm. Chrome strips inline `user:pass@` from
+ * `--proxy-server` for security, so the only safe path is `page.authenticate`.
+ */
+async function installProxyAuth(
+  browser: Browser,
+  username: string,
+  password: string,
+): Promise<void> {
+  const auth = async (target: Target): Promise<void> => {
+    try {
+      const page = await target.page();
+      if (!page) {
+        return;
+      }
+      await page.authenticate({username, password});
+    } catch (err) {
+      logger('Failed to install proxy authentication', err);
+    }
+  };
+  browser.on('targetcreated', target => {
+    void auth(target);
+  });
+  for (const page of await browser.pages()) {
+    try {
+      await page.authenticate({username, password});
+    } catch (err) {
+      logger('Failed to install proxy authentication on existing page', err);
     }
   }
 }
@@ -285,6 +327,9 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
     }
     if (options.stealth) {
       await installStealthInitScript(browser);
+    }
+    if (options.proxyUsername && options.proxyPassword) {
+      await installProxyAuth(browser, options.proxyUsername, options.proxyPassword);
     }
     if (options.viewport) {
       const [page] = await browser.pages();

@@ -570,7 +570,15 @@ The Chrome DevTools MCP server supports the following configuration option:
   - **Type:** string
 
 - **`--proxyServer`/ `--proxy-server`**
-  Proxy server configuration for Chrome passed as --proxy-server when launching the browser. See https://www.chromium.org/developers/design-documents/network-settings/ for details.
+  Proxy server for Chrome to route all browser traffic through. Accepts:
+- host:port                         (no auth)
+- host:port:user:pass               (with basic auth — common proxy-list format)
+- http://host:port                  (no auth, explicit scheme)
+- http://user:pass@host:port        (with auth, embedded creds)
+- socks5://host:port                (no auth, SOCKS5)
+Authenticated proxies use Puppeteer's page.authenticate() to answer the 407
+challenge — Chrome itself strips inline credentials from --proxy-server, so the
+credentials are applied at the page-event layer, not on the command line.
   - **Type:** string
 
 - **`--acceptInsecureCerts`/ `--accept-insecure-certs`**

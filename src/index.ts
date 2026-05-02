@@ -9,6 +9,7 @@ import type fs from 'node:fs';
 import type {parseArguments} from './bin/chrome-devtools-mcp-cli-options.js';
 import type {Channel} from './browser.js';
 import {ensureBrowserConnected, ensureBrowserLaunched} from './browser.js';
+import {parseProxy} from './utils/proxy.js';
 import {loadIssueDescriptions} from './issue-descriptions.js';
 import {logger} from './logger.js';
 import {McpContext} from './McpContext.js';
@@ -194,8 +195,9 @@ export async function createMcpServer(
     const ignoreDefaultChromeArgs: string[] = (
       serverArgs.ignoreDefaultChromeArg ?? []
     ).map(String);
-    if (serverArgs.proxyServer) {
-      chromeArgs.push(`--proxy-server=${serverArgs.proxyServer}`);
+    const proxy = parseProxy(serverArgs.proxyServer);
+    if (proxy) {
+      chromeArgs.push(`--proxy-server=${proxy.server}`);
     }
     const devtools = serverArgs.experimentalDevtools ?? false;
     const browser =
@@ -229,6 +231,8 @@ export async function createMcpServer(
             // launch automatically; forward the CLI flag explicitly so the
             // Patchright-shape DOM polyfills are installed at launch time.
             stealth: serverArgs.stealth,
+            proxyUsername: proxy?.username,
+            proxyPassword: proxy?.password,
           });
 
     if (context?.browser !== browser) {
