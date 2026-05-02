@@ -24,11 +24,33 @@ export interface GeolocationOptions {
   longitude: number;
 }
 
+/**
+ * User-Agent Client Hints metadata, mirroring CDP's
+ * `Emulation.UserAgentMetadata`. Bundling this with the UA string keeps
+ * `navigator.userAgent` and the `Sec-CH-UA-*` request headers consistent so
+ * anti-bot vendors can't trivially spot the desync.
+ */
+export interface UserAgentMetadata {
+  brands?: Array<{brand: string; version: string}>;
+  fullVersionList?: Array<{brand: string; version: string}>;
+  fullVersion?: string;
+  platform?: string;
+  platformVersion?: string;
+  architecture?: string;
+  model?: string;
+  mobile?: boolean;
+  bitness?: string;
+  wow64?: boolean;
+}
+
 export interface EmulationSettings {
   networkConditions?: string;
   cpuThrottlingRate?: number;
   geolocation?: GeolocationOptions;
   userAgent?: string;
+  userAgentMetadata?: UserAgentMetadata;
+  locale?: string;
+  timezone?: string;
   colorScheme?: 'dark' | 'light';
   viewport?: Viewport;
 }

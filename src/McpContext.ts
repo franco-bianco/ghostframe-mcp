@@ -40,6 +40,7 @@ import type {Context, SupportedExtensions} from './tools/ToolDefinition.js';
 import type {
   EmulationSettings,
   GeolocationOptions,
+  UserAgentMetadata,
   ExtensionServiceWorker,
 } from './types.js';
 import {ensureExtension, getTempFilePath} from './utils/files.js';
@@ -304,6 +305,9 @@ export class McpContext implements Context {
       cpuThrottlingRate?: number;
       geolocation?: GeolocationOptions;
       userAgent?: string;
+      userAgentMetadata?: UserAgentMetadata;
+      locale?: string;
+      timezone?: string;
       colorScheme?: 'dark' | 'light' | 'auto';
       viewport?: Viewport;
     },
@@ -357,12 +361,64 @@ export class McpContext implements Context {
       newSettings.geolocation = options.geolocation;
     }
 
+    // UA + UA Client-Hints + locale + timezone all ride on the page's primary
+    // CDP session so we can carry `userAgentMetadata` and have the overrides
+    // apply to the existing connection (puppeteer's `setUserAgent` drops the
+    // metadata, which desyncs `navigator.userAgent` from `Sec-CH-UA-*`).
+    // CDP overrides are per-session; we must send on the same session
+    // puppeteer uses for `Page.evaluate` etc., not a freshly attached one.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const primaryClient = (page as any)._client() as {
+      send: (method: string, params?: unknown) => Promise<unknown>;
+    };
+    const send = primaryClient.send.bind(primaryClient) as (
+      method: string,
+      params?: unknown,
+    ) => Promise<unknown>;
+
     if (!options.userAgent) {
-      await page.setUserAgent({userAgent: undefined});
+      await send('Emulation.setUserAgentOverride', {userAgent: ''});
       delete newSettings.userAgent;
+      delete newSettings.userAgentMetadata;
     } else {
-      await page.setUserAgent({userAgent: options.userAgent});
+      const uaParams: {
+        userAgent: string;
+        userAgentMetadata?: UserAgentMetadata;
+      } = {userAgent: options.userAgent};
+      if (options.userAgentMetadata) {
+        uaParams.userAgentMetadata = options.userAgentMetadata;
+      }
+      await send('Emulation.setUserAgentOverride', uaParams);
       newSettings.userAgent = options.userAgent;
+      if (options.userAgentMetadata) {
+        newSettings.userAgentMetadata = options.userAgentMetadata;
+      } else {
+        delete newSettings.userAgentMetadata;
+      }
+    }
+
+    if (!options.locale) {
+      // `Emulation.setLocaleOverride` with no `locale` clears the override.
+      await send('Emulation.setLocaleOverride', {});
+      await send('Network.setExtraHTTPHeaders', {headers: {}});
+      delete newSettings.locale;
+    } else {
+      await send('Emulation.setLocaleOverride', {locale: options.locale});
+      await send('Network.setExtraHTTPHeaders', {
+        headers: {'Accept-Language': options.locale},
+      });
+      newSettings.locale = options.locale;
+    }
+
+    if (!options.timezone) {
+      // `Emulation.setTimezoneOverride` with empty string clears the override.
+      await send('Emulation.setTimezoneOverride', {timezoneId: ''});
+      delete newSettings.timezone;
+    } else {
+      await send('Emulation.setTimezoneOverride', {
+        timezoneId: options.timezone,
+      });
+      newSettings.timezone = options.timezone;
     }
 
     if (!options.colorScheme || options.colorScheme === 'auto') {

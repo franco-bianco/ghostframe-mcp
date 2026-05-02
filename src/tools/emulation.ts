@@ -6,6 +6,7 @@
  */
 
 import {zod, PredefinedNetworkConditions} from '../third_party/index.js';
+import type {UserAgentMetadata} from '../types.js';
 
 import {ToolCategory} from './categories.js';
 import {
@@ -18,6 +19,28 @@ const throttlingOptions: [string, ...string[]] = [
   'Offline',
   ...Object.keys(PredefinedNetworkConditions),
 ];
+
+function userAgentMetadataTransform(
+  arg: string | undefined,
+): UserAgentMetadata | undefined {
+  if (!arg) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(arg);
+  } catch (err) {
+    throw new Error(
+      `userAgentMetadata must be valid JSON: ${(err as Error).message}`,
+    );
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('userAgentMetadata must be a JSON object');
+  }
+  // The shape is intentionally loose; CDP rejects unknown keys, which we
+  // surface to the caller verbatim rather than silently filtering.
+  return parsed as UserAgentMetadata;
+}
 
 export const emulate = definePageTool({
   name: 'emulate',
@@ -51,6 +74,25 @@ export const emulate = definePageTool({
       .optional()
       .describe(
         'User agent to emulate. Set to empty string to clear the user agent override.',
+      ),
+    userAgentMetadata: zod
+      .string()
+      .optional()
+      .transform(userAgentMetadataTransform)
+      .describe(
+        'User-Agent Client Hints metadata sent alongside the UA override, encoded as a JSON object string. Recognized keys: brands (array of {brand, version}), fullVersionList (array of {brand, version}), fullVersion, platform, platformVersion, architecture, model, mobile (bool), bitness, wow64 (bool). Used to keep `navigator.userAgent` and `Sec-CH-UA-*` headers in sync. Omit to clear when no userAgent is provided.',
+      ),
+    locale: zod
+      .string()
+      .optional()
+      .describe(
+        'Locale (e.g. `en-US`, `de-DE`) to use for `navigator.language`, `Intl` APIs, and the `Accept-Language` header. Omit to clear the locale override.',
+      ),
+    timezone: zod
+      .string()
+      .optional()
+      .describe(
+        'IANA timezone identifier (e.g. `America/Los_Angeles`) used to override the page\'s timezone. Omit to clear the timezone override.',
       ),
     colorScheme: zod
       .enum(['dark', 'light', 'auto'])
