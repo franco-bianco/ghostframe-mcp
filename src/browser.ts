@@ -224,7 +224,13 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
     userDataDir = path.join(
       os.homedir(),
       '.cache',
-      options.viaCli ? 'chrome-devtools-mcp-cli' : 'chrome-devtools-mcp',
+      // Distinct from upstream chrome-devtools-mcp's default
+      // ($HOME/.cache/chrome-devtools-mcp/...) so this fork can be installed
+      // alongside the upstream package without contending for the same Chrome
+      // profile or fighting over the user-data-dir lock.
+      options.viaCli
+        ? 'chrome-devtools-mcp-stealth-cli'
+        : 'chrome-devtools-mcp-stealth',
       profileDirName,
     );
     await fs.promises.mkdir(userDataDir, {
