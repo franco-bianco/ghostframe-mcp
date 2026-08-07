@@ -49,7 +49,7 @@ Permitted in containers where the host already provides isolation. Not a stealth
 
 ### Authenticated proxies
 
-`--proxy-server` accepts `host:port:user:pass` and URL forms with embedded credentials. Chrome strips inline `user:pass@` from the flag for security; the fork answers the 407 challenge via Puppeteer's `page.authenticate()` on every existing and future page (`src/browser.ts:223-256`). See README "Proxy" for the supported formats.
+HTTP proxy credentials are read from `GHOSTFRAME_PROXY_USERNAME` and `GHOSTFRAME_PROXY_PASSWORD`. Embedded credentials require `--allow-legacy-proxy-credentials`; authenticated SOCKS proxies are rejected because Chrome does not support them. See README "Proxy" for examples.
 
 ## CDP routing
 
@@ -120,7 +120,7 @@ A mismatch on any one is a detection. A US/Pacific timezone behind a Frankfurt e
 
 ## Humanized input
 
-Default-on for `click`, `click_at`, `hover`, `type_text`, `drag`, `press_key` (`src/utils/humanInput.ts`, wired in `src/tools/input.ts`). One global off-switch via `--no-stealth` — no per-call timing overrides. Per-call overrides fragment the persona and are explicitly not exposed.
+Default-on for `click`, `click_at`, `hover`, `fill`, `fill_form`, `type_text`, `drag`, and `press_key` (`src/utils/humanInput.ts`, wired in `src/tools/input.ts`). One global off-switch is available through `--no-stealth`.
 
 Distributions:
 
@@ -129,9 +129,9 @@ Distributions:
 - **Drag** — 80–280 ms randomized inter-step.
 - **Modifier keys** — 30–80 ms dwell.
 
-`fill` and `fill_form` remain atomic value-sets (no per-character humanization) — long-form fills would time out test suites and the use case is "set a value", not "key it in".
+`fill` and `fill_form` use focus, selection, clearing, and per-character typing for text controls. Native select elements retain their selection behavior.
 
-The submit-key in `type_text` (`{submitKey: 'Enter'}`) is intentionally pressed via the un-humanized `keyboard.press` directly to preserve the existing `Unknown key: "..."` error shape from the existing test for invalid submit keys.
+The submit key in `type_text` uses a randomized down-to-up dwell while preserving Puppeteer's validation behavior.
 
 See [`skills/humanized-input/SKILL.md`](../skills/humanized-input/SKILL.md) for the operational guide.
 
@@ -143,7 +143,8 @@ Shipped polyfills:
 
 - `chrome.runtime` / `chrome.loadTimes` / `chrome.csi` stubs (`src/init-scripts/chrome-globals.ts`).
 - `Notification.permission` aligned with `Permissions.query({name:'notifications'})` (`src/init-scripts/permissions.ts`).
-- `WebGLRenderingContext.prototype.getParameter` for `UNMASKED_VENDOR_WEBGL` (37445) and `UNMASKED_RENDERER_WEBGL` (37446) — returns `Intel Inc.` / `Intel Iris OpenGL Engine` (`src/init-scripts/webgl.ts`).
-- `Function.prototype.toString` Proxy preserving `function NAME() { [native code] }` for any function tagged with `Symbol.for('__cdtmcp_native__')` (`src/init-scripts/native-toString.ts`). The four shim functions above are tagged at registration time.
+- `Function.prototype.toString` Proxy preserving `function NAME() { [native code] }` for shim functions tracked in a private `WeakMap` (`src/init-scripts/native-toString.ts`).
+
+WebGL is not patched. Chrome reports its actual vendor and renderer to avoid a fixed cross-device fingerprint.
 
 Read the arms-race caveat in [`detection-signals.md#dom-layer`](./detection-signals.md#dom-layer) before adding new polyfills.

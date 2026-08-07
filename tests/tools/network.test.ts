@@ -10,6 +10,7 @@ import {describe, it} from 'node:test';
 import {
   getNetworkRequest,
   listNetworkRequests,
+  setBlockedUrls,
 } from '../../src/tools/network.js';
 import {serverHooks} from '../server.js';
 import {
@@ -21,6 +22,50 @@ import {
 
 describe('network', () => {
   const server = serverHooks();
+  describe('set_blocked_urls', () => {
+    it('persists across navigation and can be cleared', async () => {
+      let requestCount = 0;
+      server.addHtmlRoute('/block-page', html`<main>block test</main>`);
+      server.addRoute('/blocked-resource', async (_req, res) => {
+        requestCount++;
+        res.end('loaded');
+      });
+
+      await withMcpContext(async (response, context) => {
+        const mcpPage = context.getSelectedMcpPage();
+        const page = mcpPage.pptrPage;
+        await setBlockedUrls.handler(
+          {
+            params: {patterns: [`${server.getRoute('/blocked-resource')}*`]},
+            page: mcpPage,
+          },
+          response,
+          context,
+        );
+        await page.goto(server.getRoute('/block-page'));
+        const blocked = await page.evaluate(async () => {
+          return fetch('/blocked-resource').then(
+            () => false,
+            () => true,
+          );
+        });
+        assert.strictEqual(blocked, true);
+        assert.strictEqual(requestCount, 0);
+
+        await setBlockedUrls.handler(
+          {params: {patterns: []}, page: mcpPage},
+          response,
+          context,
+        );
+        const body = await page.evaluate(async () => {
+          return fetch('/blocked-resource').then(result => result.text());
+        });
+        assert.strictEqual(body, 'loaded');
+        assert.strictEqual(requestCount, 1);
+      });
+    });
+  });
+
   describe('network_list_requests', () => {
     it('list requests', async () => {
       await withMcpContext(async (response, context) => {

@@ -18,7 +18,7 @@ describe('McpContext Roots', () => {
       context.setRoots([]);
       const tmpPath = path.join(os.tmpdir(), 'test-file.txt');
       // This should not throw
-      context.validatePath(tmpPath);
+      await context.validatePath(tmpPath);
     });
   });
 
@@ -33,17 +33,17 @@ describe('McpContext Roots', () => {
 
       const tmpPath = path.join(os.tmpdir(), 'test-file.txt');
       // This should not throw.
-      context.validatePath(tmpPath);
+      await context.validatePath(tmpPath);
 
       // Other root should also be allowed.
-      context.validatePath(path.join(otherRoot, 'file.txt'));
+      await context.validatePath(path.join(otherRoot, 'file.txt'));
 
       // Outside should still be denied. Use a path that is definitely not a root or temp dir.
       const outsidePath = path.resolve(
         os.homedir(),
         'a_very_unlikely_path_name_12345',
       );
-      assert.throws(() => context.validatePath(outsidePath), /Access denied/);
+      await assert.rejects(context.validatePath(outsidePath), /Access denied/);
     });
   });
 });

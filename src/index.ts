@@ -30,6 +30,7 @@ import type {DefinedPageTool, ToolDefinition} from './tools/ToolDefinition.js';
 import {pageIdSchema} from './tools/ToolDefinition.js';
 import {createTools} from './tools/tools.js';
 import {parseProxy} from './utils/proxy.js';
+import {redactSensitiveValues} from './utils/redact.js';
 import {VERSION} from './version.js';
 
 export function buildFlag(category: ToolCategory) {
@@ -195,7 +196,11 @@ export async function createMcpServer(
     const ignoreDefaultChromeArgs: string[] = (
       serverArgs.ignoreDefaultChromeArg ?? []
     ).map(String);
-    const proxy = parseProxy(serverArgs.proxyServer);
+    const proxy = parseProxy(serverArgs.proxyServer, {
+      username: process.env.GHOSTFRAME_PROXY_USERNAME,
+      password: process.env.GHOSTFRAME_PROXY_PASSWORD,
+      allowLegacyCredentials: serverArgs.allowLegacyProxyCredentials,
+    });
     if (proxy) {
       chromeArgs.push(`--proxy-server=${proxy.server}`);
     }
@@ -212,6 +217,7 @@ export async function createMcpServer(
               : undefined,
             userDataDir: serverArgs.userDataDir,
             devtools,
+            enableExtensions: serverArgs.categoryExtensions,
           })
         : await ensureBrowserLaunched({
             headless: serverArgs.headless,
@@ -240,6 +246,7 @@ export async function createMcpServer(
         experimentalDevToolsDebugging: devtools,
         experimentalIncludeAllPages: serverArgs.experimentalIncludeAllPages,
         stealth: serverArgs.stealth,
+        allowUnrestrictedPaths: serverArgs.allowUnrestrictedPaths,
       });
       await updateRoots();
     }
@@ -290,7 +297,9 @@ export async function createMcpServer(
         const startTime = Date.now();
         let success = false;
         try {
-          logger(`${tool.name} request: ${JSON.stringify(params, null, '  ')}`);
+          logger(
+            `${tool.name} request: ${JSON.stringify(redactSensitiveValues(params), null, '  ')}`,
+          );
           const context = await getContext();
           logger(`${tool.name} context: resolved`);
           await context.detectOpenDevToolsWindows();

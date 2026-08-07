@@ -4,11 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import {constants} from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
+import {installStealthOnPage} from './browser.js';
 import type {TargetUniverse} from './DevtoolsUtils.js';
 import {UniverseManager} from './DevtoolsUtils.js';
 import {McpPage} from './McpPage.js';
@@ -47,23 +49,22 @@ import {ensureExtension, getTempFilePath} from './utils/files.js';
 import {getNetworkMultiplierFromString} from './WaitForHelper.js';
 
 interface McpContextOptions {
-  // Whether the DevTools windows are exposed as pages for debugging of DevTools.
   experimentalDevToolsDebugging: boolean;
-  // Whether all page-like targets are exposed as pages.
   experimentalIncludeAllPages?: boolean;
-  // When true, skip initialization of the DevTools Universe and the
-  // console/pageerror/Runtime.exceptionThrown listeners that implicitly enable
-  // the Runtime CDP domain. The Universe is the single largest CDP fingerprint
-  // because it forces Runtime.enable + Debugger.enable on every page and is
-  // not covered by the rebrowser-puppeteer-core drop-in. Trade-off:
-  // list_console_messages / get_console_message return empty results.
-  // Also globally toggles stealth-mode behaviors elsewhere (e.g. humanized
-  // input).
   stealth: boolean;
+  allowUnrestrictedPaths: boolean;
 }
 
 const DEFAULT_TIMEOUT = 5_000;
 const NAVIGATION_TIMEOUT = 10_000;
+const TEMP_ROOTS: Root[] = [
+  ...new Set(os.platform() === 'win32' ? [os.tmpdir()] : [os.tmpdir(), '/tmp']),
+].map((rootPath, index) => {
+  return {
+    uri: pathToFileURL(rootPath).href,
+    name: index === 0 ? 'temp' : 'system-temp',
+  };
+});
 
 export class McpContext implements Context {
   browser: Browser;
@@ -130,11 +131,6 @@ export class McpContext implements Context {
     await this.createExtensionServiceWorkersSnapshot();
     await this.#networkCollector.init(pages);
     if (!this.#options.stealth) {
-      // Console + Universe init force Runtime.enable + Debugger.enable on every
-      // page (page.on('console'|'pageerror') and createCDPSession +
-      // DebuggerModel observer). The console.groupEnd Proxy-trap family of
-      // detectors looks for exactly that. Skip both when stealth is on; tools
-      // that depend on collected console data will return empty results.
       await this.#consoleCollector.init(pages);
       await this.#devtoolsUniverseManager.init(pages);
     }
@@ -170,33 +166,30 @@ export class McpContext implements Context {
     if (this.#roots === undefined) {
       return undefined;
     }
-    return [
-      ...this.#roots,
-      {
-        uri: pathToFileURL(os.tmpdir()).href,
-        name: 'temp',
-      },
-    ];
+    return [...this.#roots, ...TEMP_ROOTS];
   }
 
   setRoots(roots: Root[] | undefined): void {
     this.#roots = roots;
   }
 
-  validatePath(filePath?: string): void {
+  async validatePath(filePath?: string): Promise<void> {
     if (filePath === undefined) {
       return;
     }
-    const roots = this.roots();
-    if (roots === undefined) {
+    if (this.#options.allowUnrestrictedPaths) {
       return;
     }
-    const absolutePath = path.resolve(filePath);
+    const roots = this.roots() ?? TEMP_ROOTS;
+    const absolutePath = await this.#canonicalizePath(filePath);
     for (const root of roots) {
-      const rootPath = path.resolve(fileURLToPath(root.uri));
+      const rootPath = await this.#canonicalizePath(fileURLToPath(root.uri));
+      const relative = path.relative(rootPath, absolutePath);
       if (
-        absolutePath === rootPath ||
-        absolutePath.startsWith(rootPath + path.sep)
+        relative === '' ||
+        (relative !== '..' &&
+          !relative.startsWith(`..${path.sep}`) &&
+          !path.isAbsolute(relative))
       ) {
         return;
       }
@@ -204,6 +197,30 @@ export class McpContext implements Context {
     throw new Error(
       `Access denied: path ${filePath} is not within any of the workspace roots ${JSON.stringify(roots)}.`,
     );
+  }
+
+  async #canonicalizePath(filePath: string): Promise<string> {
+    let current = path.resolve(filePath);
+    const missing: string[] = [];
+    while (true) {
+      try {
+        return path.join(await fs.realpath(current), ...missing.toReversed());
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          !('code' in error) ||
+          error.code !== 'ENOENT'
+        ) {
+          throw error;
+        }
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        throw new Error(`Could not resolve path ${filePath}.`);
+      }
+      missing.push(path.basename(current));
+      current = parent;
+    }
   }
 
   resolveCdpRequestId(page: McpPage, cdpRequestId: string): number | undefined {
@@ -274,10 +291,15 @@ export class McpContext implements Context {
     } else {
       page = await this.browser.newPage({background});
     }
+    if (this.#options.stealth) {
+      await installStealthOnPage(page);
+    }
     await this.createPagesSnapshot();
     this.selectPage(this.#getMcpPage(page));
     this.#networkCollector.addPage(page);
-    this.#consoleCollector.addPage(page);
+    if (!this.#options.stealth) {
+      this.#consoleCollector.addPage(page);
+    }
     return this.#getMcpPage(page);
   }
   async closePage(pageId: number): Promise<void> {
@@ -751,9 +773,21 @@ export class McpContext implements Context {
     filename: string,
   ): Promise<{filepath: string}> {
     const filepath = await getTempFilePath(filename);
-    this.validatePath(filepath);
+    await this.validatePath(filepath);
     try {
-      await fs.writeFile(filepath, data);
+      const file = await fs.open(
+        filepath,
+        constants.O_WRONLY |
+          constants.O_CREAT |
+          constants.O_TRUNC |
+          constants.O_NOFOLLOW,
+        0o600,
+      );
+      try {
+        await file.writeFile(data);
+      } finally {
+        await file.close();
+      }
     } catch (err) {
       throw new Error('Could not save a file', {cause: err});
     }
@@ -765,14 +799,27 @@ export class McpContext implements Context {
     clientProvidedFilePath: string,
     extension: SupportedExtensions,
   ): Promise<{filename: string}> {
-    this.validatePath(clientProvidedFilePath);
     try {
       const filePath = ensureExtension(
         path.resolve(clientProvidedFilePath),
         extension,
       );
+      await this.validatePath(filePath);
       await fs.mkdir(path.dirname(filePath), {recursive: true});
-      await fs.writeFile(filePath, data);
+      await this.validatePath(filePath);
+      const file = await fs.open(
+        filePath,
+        constants.O_WRONLY |
+          constants.O_CREAT |
+          constants.O_TRUNC |
+          constants.O_NOFOLLOW,
+        0o600,
+      );
+      try {
+        await file.writeFile(data);
+      } finally {
+        await file.close();
+      }
       return {filename: filePath};
     } catch (err) {
       this.logger(err);
@@ -827,7 +874,7 @@ export class McpContext implements Context {
   }
 
   async installExtension(extensionPath: string): Promise<string> {
-    this.validatePath(extensionPath);
+    await this.validatePath(extensionPath);
     const id = await this.browser.installExtension(extensionPath);
     return id;
   }

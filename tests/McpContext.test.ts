@@ -5,6 +5,7 @@
  */
 
 import assert from 'node:assert';
+import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach, describe, it} from 'node:test';
@@ -88,6 +89,45 @@ describe('McpContext', () => {
       {
         autoOpenDevTools: true,
       },
+    );
+  });
+
+  it('keeps stealth enabled for newly created pages', async () => {
+    await withMcpContext(
+      async (_response, context) => {
+        const page = await context.newPage();
+        await page.pptrPage.goto('data:text/html,<title>stealth</title>');
+        await page.pptrPage.evaluate(() => {
+          console.log('not collected');
+        });
+
+        assert.deepStrictEqual(context.getConsoleData(page), []);
+        const result = await page.pptrPage.evaluate(() => {
+          const webglGetParameter =
+            WebGLRenderingContext.prototype.getParameter;
+          return {
+            chromeRuntime:
+              window.chrome !== undefined && 'runtime' in window.chrome,
+            marker: Object.hasOwn(
+              navigator.permissions.query,
+              Symbol.for('__cdtmcp_native__'),
+            ),
+            webglMarker: Object.hasOwn(
+              webglGetParameter,
+              Symbol.for('__cdtmcp_native__'),
+            ),
+            webglNative: webglGetParameter.toString().includes('[native code]'),
+          };
+        });
+
+        assert.deepStrictEqual(result, {
+          chromeRuntime: true,
+          marker: false,
+          webglMarker: false,
+          webglNative: true,
+        });
+      },
+      {stealth: true},
     );
   });
   it('resolves uid from a non-selected page snapshot', async () => {
@@ -230,31 +270,66 @@ describe('McpContext', () => {
       ];
       context.setRoots(roots);
       // Valid path within root
-      context.validatePath(path.join(workspacePath, 'test.txt'));
-      context.validatePath(workspacePath);
+      await context.validatePath(path.join(workspacePath, 'test.txt'));
+      await context.validatePath(workspacePath);
 
       // Invalid path outside root and outside temp dir
       const outsidePath = path.resolve(os.homedir(), 'outside-test.txt');
-      assert.throws(() => context.validatePath(outsidePath), /Access denied/);
+      await assert.rejects(context.validatePath(outsidePath), /Access denied/);
     });
   });
 
-  it('validatePath allows all paths if roots are undefined (legacy)', async () => {
+  it('validatePath uses the temporary directory when roots are undefined', async () => {
     await withMcpContext(async (_response, context) => {
       context.setRoots(undefined);
-      context.validatePath(path.resolve(os.homedir(), 'anywhere.txt'));
+      await context.validatePath(path.join(os.tmpdir(), 'test.txt'));
+      await assert.rejects(
+        context.validatePath(path.resolve(os.homedir(), 'anywhere.txt')),
+        /Access denied/,
+      );
     });
+  });
+
+  it('validatePath supports explicit unrestricted compatibility', async () => {
+    await withMcpContext(
+      async (_response, context) => {
+        context.setRoots(undefined);
+        await context.validatePath(path.resolve(os.homedir(), 'anywhere.txt'));
+      },
+      {allowUnrestrictedPaths: true},
+    );
   });
 
   it('validatePath denies paths outside os.tmpdir() if roots list is empty', async () => {
     await withMcpContext(async (_response, context) => {
       context.setRoots([]);
       // Should allow temp dir
-      context.validatePath(path.join(os.tmpdir(), 'test.txt'));
+      await context.validatePath(path.join(os.tmpdir(), 'test.txt'));
 
       // Should deny outside temp dir
-      assert.throws(
-        () => context.validatePath(path.resolve(os.homedir(), 'anywhere.txt')),
+      await assert.rejects(
+        context.validatePath(path.resolve(os.homedir(), 'anywhere.txt')),
+        /Access denied/,
+      );
+    });
+  });
+
+  it('validatePath rejects symlinks that escape a root', async t => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ghostframe-root-'));
+    const outside = await fs.mkdtemp(
+      path.join(process.cwd(), '.ghostframe-outside-'),
+    );
+    t.after(async () => {
+      await fs.rm(root, {recursive: true, force: true});
+      await fs.rm(outside, {recursive: true, force: true});
+    });
+    await fs.writeFile(path.join(outside, 'secret.txt'), 'secret');
+    await fs.symlink(outside, path.join(root, 'escape'));
+
+    await withMcpContext(async (_response, context) => {
+      context.setRoots([{uri: pathToFileURL(root).href, name: 'workspace'}]);
+      await assert.rejects(
+        context.validatePath(path.join(root, 'escape', 'secret.txt')),
         /Access denied/,
       );
     });

@@ -78,7 +78,7 @@ Concretely, polyfills we ship and maintain:
 
 - `chrome.runtime`, `chrome.loadTimes`, `chrome.csi`
 - `Notification.permission` ↔ `Permissions.query` coherence
-- WebGL `UNMASKED_VENDOR_WEBGL` / `UNMASKED_RENDERER_WEBGL` returning hardware-plausible strings
+- WebGL is left unmodified so it remains coherent with the actual browser and GPU
 - `Function.prototype.toString` Proxy preserving `[native code]` for polyfilled functions
 
 References:

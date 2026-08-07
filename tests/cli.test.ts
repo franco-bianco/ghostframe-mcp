@@ -13,8 +13,6 @@ describe('cli args parsing', () => {
   const defaultArgs = {
     'category-emulation': true,
     categoryEmulation: true,
-    'category-performance': true,
-    categoryPerformance: true,
     'category-network': true,
     categoryNetwork: true,
     'category-extensions': false,
@@ -23,10 +21,13 @@ describe('cli args parsing', () => {
     categoryExperimentalInPage: false,
     'auto-connect': undefined,
     autoConnect: undefined,
-    'performance-crux': true,
-    performanceCrux: true,
-    'usage-statistics': true,
-    usageStatistics: true,
+    stealth: true,
+    'usage-statistics': false,
+    usageStatistics: false,
+    'allow-legacy-proxy-credentials': false,
+    allowLegacyProxyCredentials: false,
+    'allow-unrestricted-paths': false,
+    allowUnrestrictedPaths: false,
     'redact-network-headers': false,
     redactNetworkHeaders: false,
   };
@@ -258,11 +259,9 @@ describe('cli args parsing', () => {
   });
 
   it('parses usage statistics flag', async () => {
-    // Test default (should be true).
     const defaultArgs = parseArguments('1.0.0', ['node', 'main.js']);
-    assert.strictEqual(defaultArgs.usageStatistics, true);
+    assert.strictEqual(defaultArgs.usageStatistics, false);
 
-    // Test enabling it
     const enabledArgs = parseArguments('1.0.0', [
       'node',
       'main.js',
@@ -270,32 +269,11 @@ describe('cli args parsing', () => {
     ]);
     assert.strictEqual(enabledArgs.usageStatistics, true);
 
-    // Test disabling it
     const disabledArgs = parseArguments('1.0.0', [
       'node',
       'main.js',
       '--no-usage-statistics',
     ]);
     assert.strictEqual(disabledArgs.usageStatistics, false);
-  });
-
-  it('parses performance crux flag', async () => {
-    const defaultArgs = parseArguments('1.0.0', ['node', 'main.js']);
-    assert.strictEqual(defaultArgs.performanceCrux, true);
-
-    // force enable
-    const enabledArgs = parseArguments('1.0.0', [
-      'node',
-      'main.js',
-      '--performance-crux',
-    ]);
-    assert.strictEqual(enabledArgs.performanceCrux, true);
-
-    const disabledArgs = parseArguments('1.0.0', [
-      'node',
-      'main.js',
-      '--no-performance-crux',
-    ]);
-    assert.strictEqual(disabledArgs.performanceCrux, false);
   });
 });

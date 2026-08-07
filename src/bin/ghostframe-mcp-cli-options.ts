@@ -142,7 +142,19 @@ export const cliOptions = {
   proxyServer: {
     type: 'string',
     description:
-      "Proxy server for Chrome to route all browser traffic through. Accepts: `host:port` (no auth), `host:port:user:pass` (with basic auth — common proxy-list format), `http://host:port`, `http://user:pass@host:port`, `socks5://host:port`, or `socks5://user:pass@host:port`. Authenticated proxies use Puppeteer's page.authenticate() to answer the 407 challenge — Chrome strips inline credentials from --proxy-server for security, so credentials are applied at the page-event layer, not on the command line.",
+      'Proxy server for Chrome. Use GHOSTFRAME_PROXY_USERNAME and GHOSTFRAME_PROXY_PASSWORD for HTTP proxy authentication. SOCKS proxies must be unauthenticated.',
+  },
+  allowLegacyProxyCredentials: {
+    type: 'boolean',
+    default: false,
+    description:
+      'Allow credentials embedded in --proxy-server. This may expose secrets through process listings and is disabled by default.',
+  },
+  allowUnrestrictedPaths: {
+    type: 'boolean',
+    default: false,
+    description:
+      'Allow file access outside client workspace roots and the system temporary directory. Disabled by default.',
   },
   acceptInsecureCerts: {
     type: 'boolean',
@@ -221,11 +233,6 @@ export const cliOptions = {
     default: true,
     describe: 'Set to false to exclude tools related to emulation.',
   },
-  categoryPerformance: {
-    type: 'boolean',
-    default: true,
-    describe: 'Set to false to exclude tools related to performance.',
-  },
   categoryNetwork: {
     type: 'boolean',
     default: true,
@@ -236,7 +243,7 @@ export const cliOptions = {
     hidden: false,
     default: false,
     describe:
-      'Set to true to include tools related to extensions. Note: This feature is currently only supported with a pipe connection. autoConnect, browserUrl, and wsEndpoint are not supported with this feature until 149 will be released.',
+      'Set to true to include extension tools. This requires a browser launched through the pipe connection.',
   },
   categoryExperimentalInPage: {
     type: 'boolean',
@@ -298,8 +305,14 @@ export function parseArguments(version: string, argv = process.argv) {
     .scriptName('ghostframe-mcp')
     .options(cliOptions)
     .check(args => {
-      // We can't set default in the options else
-      // Yargs will complain
+      if (
+        args.categoryExtensions &&
+        (args.autoConnect || args.browserUrl || args.wsEndpoint)
+      ) {
+        throw new Error(
+          'categoryExtensions cannot be used with autoConnect, browserUrl, or wsEndpoint.',
+        );
+      }
       if (
         !args.channel &&
         !args.browserUrl &&
@@ -342,10 +355,6 @@ export function parseArguments(version: string, argv = process.argv) {
         'Disable the default arguments provided by Puppeteer. Use with caution.',
       ],
       ['$0 --no-category-emulation', 'Disable tools in the emulation category'],
-      [
-        '$0 --no-category-performance',
-        'Disable tools in the performance category',
-      ],
       ['$0 --no-category-network', 'Disable tools in the network category'],
       [
         '$0 --user-data-dir=/tmp/user-data-dir',
@@ -362,10 +371,6 @@ export function parseArguments(version: string, argv = process.argv) {
       [
         '$0 --no-usage-statistics',
         'Do not send usage statistics https://github.com/ChromeDevTools/chrome-devtools-mcp#usage-statistics.',
-      ],
-      [
-        '$0 --no-performance-crux',
-        'Disable CrUX (field data) integration in performance tools.',
       ],
       [
         '$0 --slim',

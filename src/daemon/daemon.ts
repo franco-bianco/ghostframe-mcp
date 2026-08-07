@@ -17,6 +17,7 @@ import {
   PipeTransport,
   StdioClientTransport,
 } from '../third_party/index.js';
+import {redactCommandLineArgs} from '../utils/redact.js';
 import {VERSION} from '../version.js';
 
 import type {DaemonMessage} from './types.js';
@@ -119,7 +120,7 @@ async function handleRequest(msg: DaemonMessage) {
           socketPath,
           startDate: startDate.toISOString(),
           version: VERSION,
-          args: mcpServerArgs,
+          args: redactCommandLineArgs(mcpServerArgs),
         }),
       };
     }

@@ -15,6 +15,7 @@ import type {
   Browser,
   ChromeReleaseChannel,
   LaunchOptions,
+  Page,
   Target,
 } from './third_party/index.js';
 import {puppeteer} from './third_party/index.js';
@@ -119,7 +120,7 @@ export async function ensureBrowserConnected(options: {
     );
   }
 
-  logger('Connecting Puppeteer to ', JSON.stringify(connectOptions));
+  logger('Connecting Puppeteer');
   try {
     browser = await puppeteer.connect(connectOptions);
   } catch (err) {
@@ -151,20 +152,7 @@ interface McpLaunchOptions {
   devtools: boolean;
   enableExtensions?: boolean;
   viaCli?: boolean;
-  /**
-   * When true, install the Patchright-shape DOM polyfills (see
-   * `src/init-scripts/`) on every page via
-   * `Page.addScriptToEvaluateOnNewDocument`. Defaults to false at the launch
-   * layer; the McpContext-level `stealth` default of true does NOT propagate
-   * here automatically and must be plumbed in by the caller.
-   */
   stealth?: boolean;
-  /**
-   * Username/password for an authenticated proxy. Chrome strips inline
-   * credentials from `--proxy-server`, so we answer the 407 challenge via
-   * Puppeteer's `page.authenticate()` on every existing and future page
-   * instead.
-   */
   proxyUsername?: string;
   proxyPassword?: string;
 }
@@ -187,23 +175,19 @@ export function detectDisplay(): void {
   }
 }
 
-/**
- * Install the Patchright-shape stealth init script so it runs on every new
- * document for every current and future page. The script must execute in the
- * page's main world (no `worldName`) — running it in an isolated world would
- * leave `window.chrome`, `WebGLRenderingContext.prototype.getParameter`, etc.
- * untouched from the perspective of detector scripts that themselves run in
- * the main world. See `src/init-scripts/` for the polyfill bodies.
- */
+/** Installs the main-world stealth script before future documents load. */
+export async function installStealthOnPage(page: Page): Promise<void> {
+  await page.evaluateOnNewDocument(getStealthInitScript());
+}
+
 async function installStealthInitScript(browser: Browser): Promise<void> {
-  const script = getStealthInitScript();
   const inject = async (target: Target): Promise<void> => {
     try {
       const page = await target.page();
       if (!page) {
         return;
       }
-      await page.evaluateOnNewDocument(script);
+      await installStealthOnPage(page);
     } catch (err) {
       logger('Failed to install stealth init script', err);
     }
@@ -213,19 +197,14 @@ async function installStealthInitScript(browser: Browser): Promise<void> {
   });
   for (const page of await browser.pages()) {
     try {
-      await page.evaluateOnNewDocument(script);
+      await installStealthOnPage(page);
     } catch (err) {
       logger('Failed to install stealth init script on existing page', err);
     }
   }
 }
 
-/**
- * Register Puppeteer's basic-auth handler on every current and future page so
- * authenticated proxies (HTTP 407 / SOCKS auth) get answered without exposing
- * the credentials to the page realm. Chrome strips inline `user:pass@` from
- * `--proxy-server` for security, so the only safe path is `page.authenticate`.
- */
+/** Registers HTTP proxy authentication on current and future pages. */
 async function installProxyAuth(
   browser: Browser,
   username: string,
@@ -326,7 +305,10 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
     if (options.stealth) {
       await installStealthInitScript(browser);
     }
-    if (options.proxyUsername && options.proxyPassword) {
+    if (
+      options.proxyUsername !== undefined &&
+      options.proxyPassword !== undefined
+    ) {
       await installProxyAuth(
         browser,
         options.proxyUsername,

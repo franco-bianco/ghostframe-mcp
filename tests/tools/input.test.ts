@@ -23,6 +23,7 @@ import {
   clickAt,
   typeText,
 } from '../../src/tools/input.js';
+import {setHumanInputTestHooks} from '../../src/utils/humanInput.js';
 import {parseKey} from '../../src/utils/keyboard.js';
 import {serverHooks} from '../server.js';
 import {html, withMcpContext} from '../utils.js';
@@ -31,6 +32,50 @@ describe('input', () => {
   const server = serverHooks();
 
   describe('click', () => {
+    it('moves through multiple points before a stealth click', async () => {
+      const restore = setHumanInputTestHooks({
+        random: () => 0.5,
+        sleep: () => Promise.resolve(),
+      });
+      try {
+        await withMcpContext(
+          async (response, context) => {
+            const page = context.getSelectedPptrPage();
+            await page.setContent(
+              html`<button>test</button>
+                <script>
+                  document.body.dataset.moves = '0';
+                  document.addEventListener('mousemove', () => {
+                    document.body.dataset.moves = String(
+                      Number(document.body.dataset.moves) + 1,
+                    );
+                  });
+                </script>`,
+            );
+            context.getSelectedMcpPage().textSnapshot =
+              await TextSnapshot.create(context.getSelectedMcpPage());
+
+            await click.handler(
+              {
+                params: {uid: '1_1'},
+                page: context.getSelectedMcpPage(),
+              },
+              response,
+              context,
+            );
+
+            const moves = await page.evaluate(() => {
+              return Number(document.body.dataset.moves);
+            });
+            assert(moves > 1);
+          },
+          {stealth: true},
+        );
+      } finally {
+        restore();
+      }
+    });
+
     it('clicks', async () => {
       await withMcpContext(async (response, context) => {
         const page = context.getSelectedPptrPage();
@@ -326,6 +371,56 @@ describe('input', () => {
   });
 
   describe('fill', () => {
+    it('types each character when stealth is enabled', async () => {
+      const restore = setHumanInputTestHooks({
+        random: () => 0.5,
+        sleep: () => Promise.resolve(),
+      });
+      try {
+        await withMcpContext(
+          async (response, context) => {
+            const page = context.getSelectedPptrPage();
+            await page.setContent(
+              html`<input value="old" />
+                <script>
+                  document.body.dataset.inputs = '0';
+                  document
+                    .querySelector('input')
+                    .addEventListener('input', () => {
+                      document.body.dataset.inputs = String(
+                        Number(document.body.dataset.inputs) + 1,
+                      );
+                    });
+                </script>`,
+            );
+            context.getSelectedMcpPage().textSnapshot =
+              await TextSnapshot.create(context.getSelectedMcpPage());
+
+            await fill.handler(
+              {
+                params: {uid: '1_1', value: 'test'},
+                page: context.getSelectedMcpPage(),
+              },
+              response,
+              context,
+            );
+
+            const result = await page.evaluate(() => {
+              const input = document.querySelector('input');
+              return {
+                value: input?.value,
+                events: Number(document.body.dataset.inputs),
+              };
+            });
+            assert.deepStrictEqual(result, {value: 'test', events: 5});
+          },
+          {stealth: true},
+        );
+      } finally {
+        restore();
+      }
+    });
+
     it('fills out an input', async () => {
       await withMcpContext(async (response, context) => {
         const page = context.getSelectedPptrPage();

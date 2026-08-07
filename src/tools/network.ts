@@ -103,20 +103,7 @@ export const setBlockedUrls = definePageTool({
   },
   blockedByDialog: false,
   handler: async (request, response) => {
-    const page = request.page.pptrPage;
-    // Network.setBlockedURLs is per-session; the most reliable way to set it
-    // for the page is via the primary CDP session. Use createCDPSession +
-    // detach to keep the additional session out of long-lived state, matching
-    // the pattern used elsewhere for one-shot CDP overrides.
-    const client = await page.createCDPSession();
-    try {
-      await client.send('Network.enable');
-      await client.send('Network.setBlockedURLs', {
-        urls: request.params.patterns,
-      });
-    } finally {
-      await client.detach();
-    }
+    await request.page.setBlockedUrls(request.params.patterns);
     if (request.params.patterns.length === 0) {
       response.appendResponseLine('Cleared all blocked URL patterns.');
     } else {
@@ -159,8 +146,8 @@ export const getNetworkRequest = definePageTool({
   },
   blockedByDialog: true,
   handler: async (request, response, context) => {
-    context.validatePath(request.params.requestFilePath);
-    context.validatePath(request.params.responseFilePath);
+    await context.validatePath(request.params.requestFilePath);
+    await context.validatePath(request.params.responseFilePath);
     if (request.params.reqid) {
       response.attachNetworkRequest(request.params.reqid, {
         requestFilePath: request.params.requestFilePath,

@@ -32,36 +32,46 @@ await checkForUpdates(
 );
 
 async function start(args: string[], sessionId: string) {
-  const combinedArgs = [...args, ...defaultArgs];
+  const hasProfileMode = args.some(arg => {
+    return [
+      '--isolated',
+      '--no-isolated',
+      '--user-data-dir',
+      '--auto-connect',
+      '--browser-url',
+      '--ws-endpoint',
+    ].some(option => arg === option || arg.startsWith(`${option}=`));
+  });
+  const combinedArgs = [
+    ...defaultArgs,
+    ...(hasProfileMode ? [] : ['--isolated']),
+    ...args,
+  ];
   await startDaemon(combinedArgs, sessionId);
   logDisclaimers(parseArguments(VERSION, combinedArgs));
 }
 
-const defaultArgs = ['--viaCli', '--experimentalStructuredContent'];
+const defaultArgs = [
+  '--viaCli',
+  '--experimentalStructuredContent',
+  '--headless',
+  '--category-extensions',
+];
 
-const startCliOptions = {
+const startCliOptions: Partial<typeof cliOptions> = {
   ...cliOptions,
-} as Partial<typeof cliOptions>;
-
-// Not supported in CLI on purpose.
-delete startCliOptions.autoConnect;
-// Missing CLI serialization.
+  headless: {...cliOptions.headless, default: true},
+  isolated: {
+    ...cliOptions.isolated,
+    description:
+      'Create a temporary user-data-dir. Defaults to true unless userDataDir is provided.',
+  },
+};
 delete startCliOptions.viewport;
 
-// Change the defaults for the CLI.
 delete startCliOptions.experimentalStructuredContent;
 delete startCliOptions.experimentalInteropTools;
 delete startCliOptions.experimentalPageIdRouting;
-if (!('default' in cliOptions.headless)) {
-  throw new Error('headless cli option unexpectedly does not have a default');
-}
-if ('default' in cliOptions.isolated) {
-  throw new Error('isolated cli option unexpectedly has a default');
-}
-startCliOptions.headless!.default = true;
-startCliOptions.isolated!.description =
-  'If specified, creates a temporary user-data-dir that is automatically cleaned up after the browser is closed. Defaults to true unless userDataDir is provided.';
-startCliOptions.categoryExtensions!.default = true;
 
 const y = yargs(hideBin(process.argv))
   .scriptName('ghostframe')
@@ -86,6 +96,17 @@ y.command(
   y =>
     y
       .options(startCliOptions)
+      .check(argv => {
+        if (
+          argv.categoryExtensions &&
+          (argv.autoConnect || argv.browserUrl || argv.wsEndpoint)
+        ) {
+          throw new Error(
+            'categoryExtensions cannot be used with autoConnect, browserUrl, or wsEndpoint.',
+          );
+        }
+        return true;
+      })
       .example(
         '$0 start --browserUrl http://localhost:9222',
         'Start the server connecting to an existing browser',
@@ -95,12 +116,29 @@ y.command(
     if (isDaemonRunning(argv.sessionId)) {
       await stopDaemon(argv.sessionId);
     }
-    // Defaults but we do not want to affect the yargs conflict resolution.
-    if (argv.isolated === undefined && argv.userDataDir === undefined) {
+    if (
+      argv.isolated === undefined &&
+      !argv.userDataDir &&
+      !argv.autoConnect &&
+      !argv.browserUrl &&
+      !argv.wsEndpoint
+    ) {
       argv.isolated = true;
     }
-    if (argv.headless === undefined) {
-      argv.headless = true;
+    const categoryExtensionsSpecified = hideBin(process.argv).some(arg => {
+      return (
+        arg === '--category-extensions' ||
+        arg === '--categoryExtensions' ||
+        arg === '--no-category-extensions' ||
+        arg === '--no-categoryExtensions'
+      );
+    });
+    if (!categoryExtensionsSpecified) {
+      argv.categoryExtensions = !(
+        argv.autoConnect ||
+        argv.browserUrl ||
+        argv.wsEndpoint
+      );
     }
     const args = serializeArgs(cliOptions, argv);
     await start(args, argv.sessionId);

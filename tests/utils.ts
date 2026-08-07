@@ -7,6 +7,7 @@
 import assert from 'node:assert';
 import {spawn} from 'node:child_process';
 import path from 'node:path';
+import {pathToFileURL} from 'node:url';
 
 import type {CallToolResult} from '@modelcontextprotocol/sdk/types.js';
 import logger from 'debug';
@@ -114,6 +115,8 @@ export async function withMcpContext(
     autoOpenDevTools?: boolean;
     executablePath?: string;
     args?: string[];
+    stealth?: boolean;
+    allowUnrestrictedPaths?: boolean;
   } = {},
   args: ParsedArguments = {} as ParsedArguments,
 ) {
@@ -131,10 +134,14 @@ export async function withMcpContext(
         // Tests opt out of stealth so the Universe + ConsoleCollector are
         // initialized and console-related expectations match upstream behavior.
         // Stealth-mode behavior is exercised by dedicated tests.
-        stealth: false,
+        stealth: options.stealth ?? false,
+        allowUnrestrictedPaths: options.allowUnrestrictedPaths ?? false,
       },
       Locator,
     );
+    context.setRoots([
+      {uri: pathToFileURL(process.cwd()).href, name: 'workspace'},
+    ]);
 
     response.setPage(context.getSelectedMcpPage());
 
@@ -356,7 +363,7 @@ export function getMockBrowser(): Browser {
   } as Browser;
 }
 
-export const CLI_PATH = path.resolve('build/src/bin/chrome-devtools.js');
+export const CLI_PATH = path.resolve('build/src/bin/ghostframe.js');
 
 export async function runCli(
   args: string[],

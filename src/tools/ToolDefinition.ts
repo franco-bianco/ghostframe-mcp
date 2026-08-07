@@ -125,8 +125,9 @@ export type SupportedExtensions =
  * Only add methods used by tools/*.
  */
 export type Context = Readonly<{
-  validatePath(filePath?: string): void;
+  validatePath(filePath?: string): Promise<void>;
   getStealth(): boolean;
+  getAXNodeByUid(uid: string): TextSnapshotNode | undefined;
   getPageById(pageId: number): ContextPage;
   newPage(
     background?: boolean,
@@ -190,6 +191,7 @@ export type ContextPage = Readonly<{
   readonly pptrPage: Page;
   getAXNodeByUid(uid: string): TextSnapshotNode | undefined;
   getElementByUid(uid: string): Promise<ElementHandle<Element>>;
+  setBlockedUrls(patterns: string[]): Promise<void>;
 
   getDialog(): Dialog | undefined;
   clearDialog(): void;

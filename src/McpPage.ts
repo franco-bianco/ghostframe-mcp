@@ -7,6 +7,7 @@
 import {logger} from './logger.js';
 import {TextSnapshot} from './TextSnapshot.js';
 import type {
+  CDPSession,
   Dialog,
   ElementHandle,
   Page,
@@ -58,6 +59,7 @@ export class McpPage implements ContextPage {
   // Dialog
   #dialog?: Dialog;
   #dialogHandler: (dialog: Dialog) => void;
+  #networkSession?: CDPSession;
 
   inPageTools: ToolGroup<ToolDefinition> | undefined;
 
@@ -92,6 +94,14 @@ export class McpPage implements ContextPage {
 
   getInPageTools(): ToolGroup<ToolDefinition> | undefined {
     return this.inPageTools;
+  }
+
+  async setBlockedUrls(patterns: string[]): Promise<void> {
+    if (!this.#networkSession) {
+      this.#networkSession = await this.pptrPage.createCDPSession();
+      await this.#networkSession.send('Network.enable');
+    }
+    await this.#networkSession.send('Network.setBlockedURLs', {urls: patterns});
   }
 
   getWebMcpTools(): WebMCPTool[] {
@@ -143,6 +153,14 @@ export class McpPage implements ContextPage {
 
   dispose(): void {
     this.pptrPage.off('dialog', this.#dialogHandler);
+    try {
+      void this.#networkSession?.detach().catch(error => {
+        logger('Failed to detach network session', error);
+      });
+    } catch (error) {
+      logger('Failed to detach network session', error);
+    }
+    this.#networkSession = undefined;
   }
 
   async executeInPageTool(

@@ -5,13 +5,13 @@
  */
 
 import {logger} from '../logger.js';
-import type {McpContext} from '../McpContext.js';
 import {zod} from '../third_party/index.js';
 import type {ElementHandle, KeyInput} from '../third_party/index.js';
 import type {TextSnapshotNode} from '../types.js';
 import {
   humanizedClick,
   humanizedDragStep,
+  humanizedFill,
   humanizedHover,
   humanizedKeyPress,
   humanizedType,
@@ -221,7 +221,7 @@ function hasOptionChildren(aXNode: TextSnapshotNode) {
 async function fillFormElement(
   uid: string,
   value: string,
-  context: McpContext,
+  context: Context,
   page: ContextPage,
 ) {
   const handle = await page.getElementByUid(uid);
@@ -236,7 +236,11 @@ async function fillFormElement(
       const timeoutPerChar = 10; // ms
       const fillTimeout =
         page.pptrPage.getDefaultTimeout() + value.length * timeoutPerChar;
-      await handle.asLocator().setTimeout(fillTimeout).fill(value);
+      if (isStealthDisabled(context)) {
+        await handle.asLocator().setTimeout(fillTimeout).fill(value);
+      } else {
+        await humanizedFill(page.pptrPage, handle, value);
+      }
     }
   } catch (error) {
     handleActionError(error, uid);
@@ -268,7 +272,7 @@ export const fill = definePageTool({
       await fillFormElement(
         request.params.uid,
         request.params.value,
-        context as McpContext,
+        context,
         page,
       );
     });
@@ -374,12 +378,7 @@ export const fillForm = definePageTool({
     const page = request.page;
     for (const element of request.params.elements) {
       await page.waitForEventsAfterAction(async () => {
-        await fillFormElement(
-          element.uid,
-          element.value,
-          context as McpContext,
-          page,
-        );
+        await fillFormElement(element.uid, element.value, context, page);
       });
     }
     response.appendResponseLine(`Successfully filled out the form`);
@@ -408,7 +407,7 @@ export const uploadFile = definePageTool({
   blockedByDialog: true,
   handler: async (request, response, context) => {
     const {uid, filePath} = request.params;
-    context.validatePath(filePath);
+    await context.validatePath(filePath);
     const handle = (await request.page.getElementByUid(
       uid,
     )) as ElementHandle<HTMLInputElement>;

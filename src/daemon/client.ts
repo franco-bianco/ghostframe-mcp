@@ -12,6 +12,8 @@ import {logger} from '../logger.js';
 import type {CallToolResult} from '../third_party/index.js';
 import {PipeTransport} from '../third_party/index.js';
 import {getTempFilePath} from '../utils/files.js';
+import {parseProxy} from '../utils/proxy.js';
+import {redactCommandLineArgs} from '../utils/redact.js';
 
 import type {DaemonMessage, DaemonResponse} from './types.js';
 import {
@@ -79,11 +81,41 @@ export async function startDaemon(mcpArgs: string[] = [], sessionId: string) {
     fs.unlinkSync(pidFilePath);
   }
 
-  logger('Starting daemon...', ...mcpArgs);
-  const child = spawn(process.execPath, [DAEMON_SCRIPT_PATH, ...mcpArgs], {
+  const daemonArgs = [...mcpArgs];
+  const proxyNameIndex = daemonArgs.findIndex(arg => arg === '--proxy-server');
+  const proxyValueIndex =
+    proxyNameIndex === -1
+      ? daemonArgs.findIndex(arg => arg.startsWith('--proxy-server='))
+      : proxyNameIndex + 1;
+  const proxyValue = daemonArgs[proxyValueIndex];
+  const environment = {...process.env};
+  if (proxyValue !== undefined) {
+    const inlineValue = proxyValue.startsWith('--proxy-server=')
+      ? proxyValue.slice('--proxy-server='.length)
+      : proxyValue;
+    const proxy = parseProxy(inlineValue, {
+      username: environment.GHOSTFRAME_PROXY_USERNAME,
+      password: environment.GHOSTFRAME_PROXY_PASSWORD,
+      allowLegacyCredentials: daemonArgs.includes(
+        '--allow-legacy-proxy-credentials',
+      ),
+    });
+    if (proxy) {
+      daemonArgs[proxyValueIndex] = proxyValue.startsWith('--proxy-server=')
+        ? `--proxy-server=${proxy.server}`
+        : proxy.server;
+      if (proxy.username !== undefined && proxy.password !== undefined) {
+        environment.GHOSTFRAME_PROXY_USERNAME = proxy.username;
+        environment.GHOSTFRAME_PROXY_PASSWORD = proxy.password;
+      }
+    }
+  }
+
+  logger('Starting daemon...', ...redactCommandLineArgs(daemonArgs));
+  const child = spawn(process.execPath, [DAEMON_SCRIPT_PATH, ...daemonArgs], {
     detached: true,
     stdio: 'ignore',
-    env: {...process.env, CHROME_DEVTOOLS_MCP_SESSION_ID: sessionId},
+    env: {...environment, CHROME_DEVTOOLS_MCP_SESSION_ID: sessionId},
     cwd: process.cwd(),
     windowsHide: true,
   });

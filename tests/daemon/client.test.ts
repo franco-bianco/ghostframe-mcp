@@ -10,6 +10,7 @@ import {describe, it, afterEach, beforeEach} from 'node:test';
 
 import {
   handleResponse,
+  sendCommand,
   startDaemon,
   stopDaemon,
 } from '../../src/daemon/client.js';
@@ -68,6 +69,22 @@ describe('daemon client', () => {
         !isDaemonRunning(sessionId),
         'Daemon should still not be running',
       );
+    });
+
+    it('redacts legacy proxy credentials from daemon status', async () => {
+      await startDaemon(
+        [
+          '--allow-legacy-proxy-credentials',
+          '--proxy-server',
+          '127.0.0.1:8080:user:pass',
+        ],
+        sessionId,
+      );
+      const response = await sendCommand({method: 'status'}, sessionId);
+      assert.strictEqual(response.success, true);
+      assert(!response.result.includes('user'));
+      assert(!response.result.includes('pass'));
+      assert(response.result.includes('[REDACTED]'));
     });
   });
 
