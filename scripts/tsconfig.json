@@ -19,5 +19,6 @@
     "noEmit": true,
     "useUnknownInCatchVariables": false
   },
-  "include": ["./**/*.ts", "./**/*.js", "./**/*.mjs"]
+  "include": ["./**/*.ts", "./**/*.js", "./**/*.mjs"],
+  "files": []
 }
