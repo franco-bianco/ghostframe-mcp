@@ -7,6 +7,16 @@ description: Verify the stealth config against public bot detectors. Use after c
 
 Sweep four public detector pages in order. Each tests a different signal mix; the union covers most of the layers in [`docs/detection-signals.md`](~/ghostframe-mcp/docs/detection-signals.md).
 
+## How to run these
+
+Use the `mcp__ghostframe__*` tools, one call per step. The snippets below are shown as
+CLI commands for readability; the tool takes the same arguments. Only shell out to
+`ghostframe <tool>` if you are working outside an MCP session — it costs a process
+spawn per call and shell-quoted JavaScript breaks easily.
+
+`navigator.userAgentData` is gated to secure contexts. Read it on an HTTPS page, never
+on `about:blank`, or it comes back empty and looks like a failure it is not.
+
 ## Default scope
 
 Operates on the currently selected page. Apply your persona via `emulate` _before_ starting the sweep — detectors that recognize a clean stock-Chrome fingerprint will not flag anything, but the test is whether the persona you intend to ship looks human.
@@ -32,12 +42,12 @@ Bundle locale, timezone, and geolocation through the same `emulate` call (see [`
 
 Verify coherence once:
 
-```bash
-ghostframe evaluate_script "() => ({
+```javascript
+() => ({
   ua: navigator.userAgent,
   tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-  langs: navigator.languages
-})"
+  langs: navigator.languages,
+});
 ```
 
 ### 2. bot.sannysoft.com

@@ -7,6 +7,16 @@ description: Investigate why a specific site blocks automation when the four pub
 
 When the public detectors pass but a target still blocks, the target is checking something the detectors don't. Walk the six layers in [`docs/detection-signals.md`](~/ghostframe-mcp/docs/detection-signals.md) in order of cost.
 
+## How to run these
+
+Use the `mcp__ghostframe__*` tools, one call per step. The snippets below are shown as
+CLI commands for readability; the tool takes the same arguments. Only shell out to
+`ghostframe <tool>` if you are working outside an MCP session — it costs a process
+spawn per call and shell-quoted JavaScript breaks easily.
+
+`navigator.userAgentData` is gated to secure contexts. Read it on an HTTPS page, never
+on `about:blank`, or it comes back empty and looks like a failure it is not.
+
 ## Default scope
 
 Operates on the currently selected page after a failed navigation to the target. Capture the failure response first; the body and headers are evidence.
@@ -36,10 +46,13 @@ Read `block-req.md` for:
 
 ### 2. Six danger signs (cheapest probe, do these first)
 
-```bash
-ghostframe evaluate_script "() => ({
+```javascript
+() => ({
   webdriver: navigator.webdriver,
-  webdriverDescriptor: Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver'),
+  webdriverDescriptor: Object.getOwnPropertyDescriptor(
+    Navigator.prototype,
+    'webdriver',
+  ),
   ua: navigator.userAgent,
   uaCH: navigator.userAgentData?.toJSON(),
   tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -47,9 +60,12 @@ ghostframe evaluate_script "() => ({
     const c = document.createElement('canvas').getContext('webgl');
     if (!c) return null;
     const e = c.getExtension('WEBGL_debug_renderer_info');
-    return { vendor: c.getParameter(e.UNMASKED_VENDOR_WEBGL), renderer: c.getParameter(e.UNMASKED_RENDERER_WEBGL) };
-  })()
-})"
+    return {
+      vendor: c.getParameter(e.UNMASKED_VENDOR_WEBGL),
+      renderer: c.getParameter(e.UNMASKED_RENDERER_WEBGL),
+    };
+  })(),
+});
 ```
 
 Six tells:
@@ -63,8 +79,8 @@ Six tells:
 
 ### 3. CDP layer probe
 
-```bash
-ghostframe evaluate_script "() => {
+```javascript
+() => {
   const obj = {};
   Object.defineProperty(obj, 'foo', {
     get() { window.__leaked = true; return 'bar'; }
@@ -80,13 +96,14 @@ ghostframe evaluate_script "() => {
 
 Compare polyfilled surface against real Chrome. Probe the polyfilled functions:
 
-```bash
-ghostframe evaluate_script "() => ({
-  chromeRuntime: typeof chrome !== 'undefined' && typeof chrome.runtime !== 'undefined',
+```javascript
+() => ({
+  chromeRuntime:
+    typeof chrome !== 'undefined' && typeof chrome.runtime !== 'undefined',
   notif: Notification.permission,
   perm: navigator.permissions ? 'present' : 'absent',
-  toStringFootprint: navigator.permissions?.query?.toString?.()
-})"
+  toStringFootprint: navigator.permissions?.query?.toString?.(),
+});
 ```
 
 Bot tells:

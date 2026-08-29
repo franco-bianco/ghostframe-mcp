@@ -7,6 +7,16 @@ description: Diagnoses Chrome DevTools MCP failures in this stealth fork. Use wh
 
 You are diagnosing a failed call. Work the steps in order; do not skip ahead.
 
+## How to run these
+
+Use the `mcp__ghostframe__*` tools, one call per step. The snippets below are shown as
+CLI commands for readability; the tool takes the same arguments. Only shell out to
+`ghostframe <tool>` if you are working outside an MCP session — it costs a process
+spawn per call and shell-quoted JavaScript breaks easily.
+
+`navigator.userAgentData` is gated to secure contexts. Read it on an HTTPS page, never
+on `about:blank`, or it comes back empty and looks like a failure it is not.
+
 ## Step 1: Categorize the symptom
 
 Read the error or describe the unexpected behavior. Categorize as one of:
@@ -66,35 +76,33 @@ Map to the corresponding section in [`docs/troubleshooting.md`](~/ghostframe-mcp
 
 ## Step 2B: Target detects the browser
 
-Probable cause is launch posture, persona, or behavioral. Walk these in order:
+Probable cause is launch posture, persona, or behavioral. Read all three signals in
+one `evaluate_script`, on an HTTPS page:
 
-1. **Check `navigator.webdriver`.**
+```javascript
+() => {
+  const gl = document.createElement('canvas').getContext('webgl');
+  const dbg = gl && gl.getExtension('WEBGL_debug_renderer_info');
+  return {
+    webdriver: navigator.webdriver,
+    uaHasHeadless: /Headless/.test(navigator.userAgent),
+    renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'no-webgl',
+  };
+};
+```
 
-   ```bash
-   ghostframe evaluate_script "() => navigator.webdriver"
-   ```
+- **`webdriver` is `true`.** Launch flags are leaking — `--enable-automation` not
+  stripped, or `--disable-blink-features=AutomationControlled` missing. Fix at launch.
+  Do not set the property in JS; the override is itself the signal.
+- **`uaHasHeadless` is `true`.** The launcher rewrites a headless user agent, so this
+  means the init script did not run. Check the stealth install path before anything
+  else.
+- **`renderer` contains `SwiftShader`, or reads `Google Inc. (Google)`.** Software
+  rendering, which is a bot tell. Run on a host with GPU access.
 
-   If `true`: launch flags are leaking. `--enable-automation` not stripped, or `--disable-blink-features=AutomationControlled` missing. See [`docs/stealth-configuration.md#default-flag-posture`](~/ghostframe-mcp/docs/stealth-configuration.md#default-flag-posture).
-
-2. **Check the UA for `HeadlessChrome`.**
-
-   ```bash
-   ghostframe evaluate_script "() => navigator.userAgent"
-   ```
-
-   If present: running headless without a persona override. Apply `emulate` with a stealth persona, or run headed.
-
-3. **Check the WebGL renderer.**
-
-   ```bash
-   ghostframe evaluate_script "() => { const c=document.createElement('canvas').getContext('webgl'); const e=c.getExtension('WEBGL_debug_renderer_info'); return c.getParameter(e.UNMASKED_RENDERER_WEBGL); }"
-   ```
-
-   `SwiftShader` or `Google Inc. (Google)` indicates software rendering — a bot tell. Run on a host with GPU access or apply WebGL polyfills.
-
-4. **Run `bot.sannysoft.com`.** The matrix tells you which signal class flipped you. Hand off to `ghostframe-detect-test` for the full sweep.
-
-5. **If all four detectors pass and the target still blocks**, hand off to `ghostframe-diagnose-block`.
+If all three are clean, run `bot.sannysoft.com` — the matrix tells you which signal
+class flipped you. Hand off to `ghostframe-detect-test` for the full sweep, and to
+`ghostframe-diagnose-block` if all four detectors pass and the target still blocks.
 
 ## Step 2C: `evaluate_script` returns the wrong thing
 
@@ -113,15 +121,15 @@ See [`skills/ghostframe/SKILL.md`](../ghostframe/SKILL.md) for the routing rules
 
 Run the coherence probe:
 
-```bash
-ghostframe evaluate_script "() => ({
+```javascript
+() => ({
   ua: navigator.userAgent,
   uaCH: navigator.userAgentData?.toJSON(),
   langs: navigator.languages,
   platform: navigator.platform,
   tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-  locale: Intl.DateTimeFormat().resolvedOptions().locale
-})"
+  locale: Intl.DateTimeFormat().resolvedOptions().locale,
+});
 ```
 
 Then compare against:

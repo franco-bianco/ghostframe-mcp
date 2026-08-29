@@ -1,88 +1,87 @@
 ---
 name: ghostframe-launch
-description: Pre-flight verification for a stealth-mode browser launch. Use when starting a session against a target site that watches for bots, after changing launch flags, after switching Chrome channel, or when reusing vs creating a profile dir. Confirms the launch posture before the first sensitive navigation.
+description: Launch the stealth browser and verify it is safe to drive a bot-managed site. Use before navigating to a target behind Cloudflare, DataDome, Akamai, PerimeterX, Imperva or Kasada, after changing launch flags or Chrome channel, or after applying a persona. Runs automatically and reports one verdict.
 ---
 
-# Stealth launch pre-flight
+# Launch and verify
 
-A pre-flight checklist. Run before navigating to a site that uses Cloudflare, DataDome, Akamai, PerimeterX, Imperva, or Kasada — first-navigation detection is hard to recover from in the same session.
+Run this end to end without pausing. Two tool calls, then one verdict. Do not narrate
+between calls, do not read docs mid-run, and do not ask the user anything unless the
+verdict is FAIL.
 
-For the configuration backing each step, see [`docs/stealth-configuration.md`](~/ghostframe-mcp/docs/stealth-configuration.md).
+Use the `mcp__ghostframe__*` tools. Never shell out — the `ghostframe` CLI is only on
+PATH if someone ran `npm link`, and nothing here needs a shell.
 
-## What this does not check
+## Run
 
-These were checks in an earlier version and are now fixed by the launch itself, so
-they are not worth a round trip:
+**1.** `navigate_page` to `https://ipinfo.io/json`.
 
-- `navigator.webdriver` is `false`, and `Navigator.prototype.webdriver` keeps its
-  native getter. Both follow from the launch flags. Do not "fix" a present descriptor
-  — the native accessor is correct, and replacing it with your own is the leak.
+One HTTPS page satisfies everything at once. `navigator.userAgentData` is gated to
+secure contexts, so on `about:blank` it reads back empty and looks like a persona
+failure when it is not. This page also returns the egress geo.
+
+**2.** One `evaluate_script`:
+
+```javascript
+() => {
+  const gl = document.createElement('canvas').getContext('webgl');
+  const dbg = gl && gl.getExtension('WEBGL_debug_renderer_info');
+  return {
+    ua: navigator.userAgent,
+    uaCH: navigator.userAgentData?.toJSON() ?? null,
+    langs: navigator.languages,
+    platform: navigator.platform,
+    tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    locale: Intl.DateTimeFormat().resolvedOptions().locale,
+    webdriver: navigator.webdriver,
+    egress: JSON.parse(document.body.innerText),
+    webgl: dbg
+      ? {
+          vendor: gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL),
+          renderer: gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL),
+        }
+      : 'no-webgl',
+  };
+};
+```
+
+## Verdict
+
+Report PASS or FAIL in three lines or fewer. FAIL on any of:
+
+- **Split identity.** `ua`, `uaCH.platform`, `platform`, `langs`, `tz` and `locale` do
+  not describe one machine.
+- **Timezone against egress.** `tz` does not match the country in `egress`. This is the
+  heaviest signal here and the only one a persona cannot fix alone — it needs the right
+  proxy.
+- **Software rendering.** `webgl.renderer` contains `SwiftShader`, or vendor and
+  renderer are empty. Real hardware reads like
+  `ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max)`.
+- **`webdriver` is anything but `false`.**
+
+On PASS, say so and stop. The caller can navigate to the target.
+
+On FAIL, name the field and the fix, then stop. Do not attempt repairs on your own —
+a persona change mid-session is itself a signal.
+
+If no persona has been applied, the values are the host machine's. Say so in the
+verdict rather than treating it as a failure; it is fine for a throwaway session and
+wrong for a target that profiles you.
+
+## What this does not check, and why
+
+Fixed by the launch, so not worth a round trip:
+
+- `Navigator.prototype.webdriver` keeps its native getter. Do not "fix" a present
+  descriptor — the native accessor is correct, and replacing it is the leak.
 - The user agent does not say `HeadlessChrome`; the launcher rewrites it.
-- `navigator.plugins` is non-empty. Headless Chrome reports the same five entries as
-  headed.
+- `navigator.plugins` is non-empty. Headless reports the same five entries as headed.
 - Nothing holds a second CDP session or `Debugger.enable` open. The DevTools Universe
   was removed.
-- There is one launch path. Connect mode is gone, so there is no "attached to an
-  existing Chrome" case to branch on.
+- There is one launch path. Connect mode is gone.
 
-## Workflow
+## After a PASS
 
-### 1. Confirm persona coherence
-
-If `emulate` has been applied:
-
-```bash
-ghostframe evaluate_script "() => ({
-  ua: navigator.userAgent,
-  uaCH: navigator.userAgentData?.toJSON(),
-  langs: navigator.languages,
-  platform: navigator.platform,
-  tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-  locale: Intl.DateTimeFormat().resolvedOptions().locale
-})"
-```
-
-All values must agree with the persona you set. Independently, verify the proxy egress IP's geo aligns:
-
-```bash
-ghostframe navigate_page --url "https://ipinfo.io/json"
-ghostframe evaluate_script "() => document.body.innerText"
-```
-
-A timezone-IP mismatch is a stronger signal than any single attribute disagreement.
-
-### 2. Confirm WebGL is not the software fallback
-
-```bash
-ghostframe evaluate_script "() => {
-  const c = document.createElement('canvas').getContext('webgl');
-  if (!c) return 'no-webgl';
-  const e = c.getExtension('WEBGL_debug_renderer_info');
-  return {
-    vendor: c.getParameter(e.UNMASKED_VENDOR_WEBGL),
-    renderer: c.getParameter(e.UNMASKED_RENDERER_WEBGL)
-  };
-}"
-```
-
-Bot tells:
-
-- `vendor: 'Google Inc. (Google)'` and `renderer` containing `SwiftShader` (CPU fallback in headless without GPU).
-- Both empty.
-
-Fix: either run on a host with a real GPU (or pass-through GPU), or apply WebGL polyfills returning hardware-plausible vendor/renderer strings (see [`docs/stealth-configuration.md#dom-polyfills`](~/ghostframe-mcp/docs/stealth-configuration.md#dom-polyfills)).
-
-## Then run a detector
-
-Hand off to `ghostframe-detect-test` before the first sensitive navigation. Do not
-inline a detector page here — that skill reads the full matrix across four detectors.
-
-## What NOT to do
-
-- Do not skip the detector sweep because the two checks above passed. They probe
-  single attributes; a detector page integrates DOM, fingerprint and behavioral
-  signals.
-- Do not set `Object.defineProperty(navigator, 'webdriver', {value: false})`. The
-  override is itself the signal.
-- Do not run the WebGL check inside an isolated world — context creation can differ.
-  Use whatever the page would see.
+Hand off to `ghostframe-detect-test` before the first sensitive navigation if the
+target is high-value. Do not inline a detector page here; that skill reads the full
+matrix across four detectors.
