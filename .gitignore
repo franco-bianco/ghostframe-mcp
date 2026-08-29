@@ -152,3 +152,6 @@ log.txt
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# Subagent working notes
+.claude/agent-memory/

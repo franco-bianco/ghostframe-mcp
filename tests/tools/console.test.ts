@@ -9,7 +9,6 @@ import {before, describe, it} from 'node:test';
 
 import type {Dialog} from 'puppeteer-core';
 
-import type {ParsedArguments} from '../../src/bin/ghostframe-mcp-cli-options.js';
 import {loadIssueDescriptions} from '../../src/issue-descriptions.js';
 import {McpResponse} from '../../src/McpResponse.js';
 import {TextSnapshot} from '../../src/TextSnapshot.js';
@@ -39,6 +38,26 @@ describe('console', () => {
         );
         assert.ok(response.includeConsoleData);
       });
+    });
+
+    it('collects messages while stealth is enabled', async () => {
+      await withMcpContext(
+        async (response, context) => {
+          const page = context.getSelectedMcpPage();
+          await page.pptrPage.setContent(
+            '<script>console.error("stealth console check")</script>',
+          );
+          await listConsoleMessages().handler(
+            {params: {}, page: context.getSelectedMcpPage()},
+            response,
+            context,
+          );
+          const formattedResponse = await response.handle('test', context);
+          const textContent = getTextContent(formattedResponse.content[0]);
+          assert.ok(textContent.includes('stealth console check'));
+        },
+        {stealth: true},
+      );
     });
 
     it('lists error messages', async () => {
@@ -250,7 +269,7 @@ describe('console', () => {
             response,
             context,
           );
-          const response2 = new McpResponse({} as ParsedArguments);
+          const response2 = new McpResponse();
           response2.setPage(context.getSelectedMcpPage());
           await getConsoleMessage.handler(
             {params: {msgid: 1}, page: context.getSelectedMcpPage()},
@@ -306,7 +325,7 @@ describe('console', () => {
             response,
             context,
           );
-          const response2 = new McpResponse({} as ParsedArguments);
+          const response2 = new McpResponse();
           response2.setPage(context.getSelectedMcpPage());
           await getConsoleMessage.handler(
             {params: {msgid: id}, page: context.getSelectedMcpPage()},

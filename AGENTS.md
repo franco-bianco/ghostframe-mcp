@@ -1,6 +1,10 @@
-This repository contains an MCP server and CLI for Chrome DevTools.
+# ghostframe-mcp
 
-# Instructions
+A private stealth browser-automation MCP server and CLI, forked from
+chrome-devtools-mcp. Stealth is always on; see `README.md` for what diverges
+from upstream.
+
+## Instructions
 
 - Use only scripts from `package.json` to run commands.
 - Use `npm run build` to run tsc and test build.
@@ -15,5 +19,14 @@ This repository contains an MCP server and CLI for Chrome DevTools.
 - Do not use `!` operator for type assertion.
 - Do not use `// @ts-ignore` comments.
 - Do not use `// @ts-nocheck` comments.
+
+## Exception: internal CDP access
+
+Puppeteer does not expose a page's primary CDP session publicly, but input and
+emulation overrides must be sent on that exact session. Reaching it through
+`(page as any)._client()` with an `eslint-disable` is permitted. Existing
+precedents: `src/McpContext.ts`, `src/McpResponse.ts`, `src/PageCollector.ts`,
+`src/utils/humanInput.ts`.
+
 - Do not use `// @ts-expect-error` comments.
 - Prefer `for..of` instead of `forEach`.

@@ -11,8 +11,6 @@ import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
 import {installStealthOnPage} from './browser.js';
-import type {TargetUniverse} from './DevtoolsUtils.js';
-import {UniverseManager} from './DevtoolsUtils.js';
 import {McpPage} from './McpPage.js';
 import {
   NetworkCollector,
@@ -31,7 +29,6 @@ import {
   type Page,
   type ScreenRecorder,
   type Viewport,
-  type Target,
   type Extension,
   type Root,
   type DevTools,
@@ -43,16 +40,14 @@ import type {
   EmulationSettings,
   GeolocationOptions,
   UserAgentMetadata,
-  ExtensionServiceWorker,
 } from './types.js';
 import {ensureExtension, getTempFilePath} from './utils/files.js';
 import {getNetworkMultiplierFromString} from './WaitForHelper.js';
 
 interface McpContextOptions {
-  experimentalDevToolsDebugging: boolean;
-  experimentalIncludeAllPages?: boolean;
-  stealth: boolean;
   allowUnrestrictedPaths: boolean;
+  // Test-only escape hatch; production always runs stealthed.
+  stealth?: boolean;
 }
 
 const DEFAULT_TIMEOUT = 5_000;
@@ -76,22 +71,17 @@ export class McpContext implements Context {
   #nextIsolatedContextId = 1;
 
   #pages: Page[] = [];
-  #extensionServiceWorkers: ExtensionServiceWorker[] = [];
 
   #mcpPages = new Map<Page, McpPage>();
   #selectedPage?: McpPage;
   #networkCollector: NetworkCollector;
   #consoleCollector: ConsoleCollector;
-  #devtoolsUniverseManager: UniverseManager;
 
   #screenRecorderData: {recorder: ScreenRecorder; filePath: string} | null =
     null;
 
   #nextPageId = 1;
-  #extensionPages = new WeakMap<Target, Page>();
-
-  #extensionServiceWorkerMap = new WeakMap<Target, string>();
-  #nextExtensionServiceWorkerId = 1;
+  #sessionEmulation: EmulationSettings = {};
 
   #locatorClass: typeof Locator;
   #options: McpContextOptions;
@@ -123,23 +113,19 @@ export class McpContext implements Context {
         },
       } as ListenerMap;
     });
-    this.#devtoolsUniverseManager = new UniverseManager(this.browser);
   }
 
   async #init() {
     const pages = await this.createPagesSnapshot();
-    await this.createExtensionServiceWorkersSnapshot();
     await this.#networkCollector.init(pages);
-    if (!this.#options.stealth) {
-      await this.#consoleCollector.init(pages);
-      await this.#devtoolsUniverseManager.init(pages);
-    }
+    // Console capture rides the primary CDP session, where puppeteer has
+    // already enabled Runtime, so it costs no extra detection surface.
+    await this.#consoleCollector.init(pages);
   }
 
   dispose() {
     this.#networkCollector.dispose();
     this.#consoleCollector.dispose();
-    this.#devtoolsUniverseManager.dispose();
     for (const mcpPage of this.#mcpPages.values()) {
       mcpPage.dispose();
     }
@@ -259,10 +245,6 @@ export class McpContext implements Context {
     );
   }
 
-  getDevToolsUniverse(page: McpPage): TargetUniverse | null {
-    return this.#devtoolsUniverseManager.get(page.pptrPage);
-  }
-
   getConsoleMessageStableId(
     message: ConsoleMessage | Error | DevTools.AggregatedIssue | UncaughtError,
   ): number {
@@ -291,15 +273,13 @@ export class McpContext implements Context {
     } else {
       page = await this.browser.newPage({background});
     }
-    if (this.#options.stealth) {
+    if (this.getStealth()) {
       await installStealthOnPage(page);
     }
     await this.createPagesSnapshot();
     this.selectPage(this.#getMcpPage(page));
     this.#networkCollector.addPage(page);
-    if (!this.#options.stealth) {
-      this.#consoleCollector.addPage(page);
-    }
+    this.#consoleCollector.addPage(page);
     return this.#getMcpPage(page);
   }
   async closePage(pageId: number): Promise<void> {
@@ -318,9 +298,13 @@ export class McpContext implements Context {
     return this.#networkCollector.getById(page.pptrPage, reqid);
   }
 
-  async restoreEmulation(page: McpPage) {
-    const currentSetting = page.emulationSettings;
-    await this.emulate(currentSetting, page.pptrPage);
+  /** Applies the session persona to a page that has not been emulated yet. */
+  async #applySessionEmulation(page: Page): Promise<void> {
+    const persona = this.#sessionEmulation;
+    if (!Object.values(persona).some(value => value !== undefined)) {
+      return;
+    }
+    await this.emulate(persona, page);
   }
 
   async emulate(
@@ -475,6 +459,17 @@ export class McpContext implements Context {
     mcpPage.emulationSettings = Object.keys(newSettings).length
       ? newSettings
       : {};
+    // Only persona fields follow a page. Network and CPU throttling are
+    // debugging knobs and stay scoped to the page they were set on.
+    this.#sessionEmulation = {
+      userAgent: newSettings.userAgent,
+      userAgentMetadata: newSettings.userAgentMetadata,
+      locale: newSettings.locale,
+      timezone: newSettings.timezone,
+      viewport: newSettings.viewport,
+      colorScheme: newSettings.colorScheme,
+      geolocation: newSettings.geolocation,
+    };
 
     this.#updateSelectedPageTimeouts();
   }
@@ -490,7 +485,7 @@ export class McpContext implements Context {
   }
 
   getStealth(): boolean {
-    return this.#options.stealth;
+    return this.#options.stealth ?? true;
   }
 
   getSelectedPptrPage(): Page {
@@ -574,41 +569,6 @@ export class McpContext implements Context {
     return undefined;
   }
 
-  /**
-   * Creates a snapshot of the extension service workers.
-   */
-  async createExtensionServiceWorkersSnapshot(): Promise<
-    ExtensionServiceWorker[]
-  > {
-    const allTargets = await this.browser.targets();
-
-    const serviceWorkers = allTargets.filter(target => {
-      return (
-        target.type() === 'service_worker' &&
-        target.url().includes('chrome-extension://')
-      );
-    });
-
-    for (const serviceWorker of serviceWorkers) {
-      if (!this.#extensionServiceWorkerMap.has(serviceWorker)) {
-        this.#extensionServiceWorkerMap.set(
-          serviceWorker,
-          'sw-' + this.#nextExtensionServiceWorkerId++,
-        );
-      }
-    }
-
-    this.#extensionServiceWorkers = serviceWorkers.map(serviceWorker => {
-      return {
-        target: serviceWorker,
-        id: this.#extensionServiceWorkerMap.get(serviceWorker)!,
-        url: serviceWorker.url(),
-      };
-    });
-
-    return this.#extensionServiceWorkers;
-  }
-
   async createPagesSnapshot(): Promise<Page[]> {
     const {pages: allPages, isolatedContextNames} = await this.#getAllPages();
 
@@ -621,6 +581,11 @@ export class McpContext implements Context {
         void page.emulateFocusedPage(true).catch(error => {
           this.logger('Error turning on focused page emulation', error);
         });
+        try {
+          await this.#applySessionEmulation(page);
+        } catch (error) {
+          this.logger('Error applying session emulation to a new page', error);
+        }
       }
       mcpPage.isolatedContextName = isolatedContextNames.get(page);
     }
@@ -635,10 +600,7 @@ export class McpContext implements Context {
     }
 
     this.#pages = allPages.filter(page => {
-      return (
-        this.#options.experimentalDevToolsDebugging ||
-        !page.url().startsWith('devtools://')
-      );
+      return !page.url().startsWith('devtools://');
     });
 
     if (
@@ -659,39 +621,7 @@ export class McpContext implements Context {
     isolatedContextNames: Map<Page, string>;
   }> {
     const defaultCtx = this.browser.defaultBrowserContext();
-    const allPages = await this.browser.pages(
-      this.#options.experimentalIncludeAllPages,
-    );
-
-    const allTargets = this.browser.targets();
-    const extensionTargets = allTargets.filter(target => {
-      return (
-        target.url().startsWith('chrome-extension://') &&
-        target.type() === 'page'
-      );
-    });
-
-    for (const target of extensionTargets) {
-      // Right now target.page() returns null for popup and side panel pages.
-      let page = await target.page();
-      if (!page) {
-        // We need to cache pages instances for targets because target.asPage()
-        // returns a new page instance every time.
-        page = this.#extensionPages.get(target) ?? null;
-        if (!page) {
-          try {
-            page = await target.asPage();
-            this.#extensionPages.set(target, page);
-          } catch (e) {
-            this.logger('Failed to get page for extension target', e);
-          }
-        }
-      }
-
-      if (page && !allPages.includes(page)) {
-        allPages.push(page);
-      }
-    }
+    const allPages = await this.browser.pages();
 
     // Build a reverse lookup from BrowserContext instance → name.
     const contextToName = new Map<BrowserContext, string>();
@@ -748,16 +678,6 @@ export class McpContext implements Context {
         }
       }),
     );
-  }
-
-  getExtensionServiceWorkers(): ExtensionServiceWorker[] {
-    return this.#extensionServiceWorkers;
-  }
-
-  getExtensionServiceWorkerId(
-    extensionServiceWorker: ExtensionServiceWorker,
-  ): string | undefined {
-    return this.#extensionServiceWorkerMap.get(extensionServiceWorker.target);
   }
 
   getPages(): Page[] {

@@ -38,13 +38,9 @@ gf stop
 
 Pass to `<cmd> start`. Names and exact wiring evolve; check `--help` against the build you have.
 
-- **Stealth posture** — `--stealth` (default `true` in this fork). `--no-stealth` disables the Universe gate, polyfills, and humanizers; useful as a diagnostic when something breaks mysteriously.
 - **Profile lifecycle** — `--user-data-dir <path>` reuses or creates a Chrome profile dir. Default is `$HOME/.cache/ghostframe-cli/chrome-profile[-channel]` for the CLI path, `$HOME/.cache/ghostframe-mcp/...` for the MCP server. `--isolated` uses a temp dir, cleared at session end. See [`stealth-configuration.md#profile-lifecycle`](./stealth-configuration.md#profile-lifecycle).
 - **Channel** — `--channel <stable|beta|canary|dev>`. Default stable. Canary changes fingerprints often.
-- **Headless** — `--headless` / `--headed`. Headless ships `HeadlessChrome` in the UA unless an `emulate` persona override is in effect.
 - **Proxy** — `--proxy-server` accepts HTTP and unauthenticated SOCKS endpoints. HTTP credentials should use `GHOSTFRAME_PROXY_USERNAME` and `GHOSTFRAME_PROXY_PASSWORD`. `host:port:user:pass` requires `--allow-legacy-proxy-credentials`. See README "Proxy".
-- **Connect to running Chrome** — `--browser-url http://127.0.0.1:9222` or `--ws-endpoint ws://...` skips the launch path. Existing pages keep their launch posture; MCP-created pages receive the stealth init script before navigation.
-- **Auto-connect** — `--auto-connect` discovers a running Chrome via its `DevToolsActivePort` file. Requires Chrome 144+ already running with remote debugging enabled.
 
 The full server flag surface is documented in `<cmd> --help`. The CLI subcommand exposes a filtered subset (see `src/bin/ghostframe.ts`).
 
@@ -56,8 +52,6 @@ The full server flag surface is documented in `<cmd> --help`. The CLI subcommand
 
 - Required arguments: positional.
 - Optional arguments: flags (`--filePath`, `--fullPage`, etc.).
-
-Tools that take complex arguments are not exposed in the CLI (see `--category-extensions`).
 
 ### Examples
 
@@ -93,7 +87,7 @@ gf new_page "https://api.ipify.org/?format=json"
 gf evaluate_script '() => document.body.innerText'
 ```
 
-See [`skills/detection-testing/SKILL.md`](../skills/detection-testing/SKILL.md) for the full probe workflow.
+See the `ghostframe-detect-test` skill for the full probe workflow.
 
 ## Output format
 

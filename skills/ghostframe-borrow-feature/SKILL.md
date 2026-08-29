@@ -1,5 +1,5 @@
 ---
-name: borrow-stealth-feature
+name: ghostframe-borrow-feature
 description: Port a single feature from a reference stealth project into this fork's TypeScript code. Use when you've identified a needed mitigation in `vibheksoni/stealth-browser-mcp`, `nodriver`, or another reference repo and need to bring it across without copy-pasting unsafe patterns. Teaches the workflow; the seed examples are starting points, not a static port list.
 ---
 
@@ -9,7 +9,7 @@ This skill teaches _how to borrow_, not _what to borrow_. Detection signals shif
 
 The reference repo most directly aligned with our scope is `vibheksoni/stealth-browser-mcp` (Python). Pin to commit `17311be7b0f6b879644c39ec5e8f0dc8a9dd920c` when reading; the project moves fast and `main` may have diverged.
 
-For why each layer matters, see [`docs/detection-signals.md`](../../docs/detection-signals.md).
+For why each layer matters, see [`docs/detection-signals.md`](~/ghostframe-mcp/docs/detection-signals.md).
 
 ## Default scope
 
@@ -56,7 +56,7 @@ When porting, capture for each function:
 
 Before the port lands, verify:
 
-- Detector sweep passes the layer the borrow targets. Run `skills/detection-testing/` before and after; confirm the row that was red is now green.
+- Detector sweep passes the layer the borrow targets. Run `ghostframe-detect-test` before and after; confirm the row that was red is now green.
 - The borrowed feature does not regress another layer. CreepJS lies count must not increase. UA coherence checks must still match.
 - The behavior matches the source on a test page. If the reference repo ships a fixture, run against it.
 

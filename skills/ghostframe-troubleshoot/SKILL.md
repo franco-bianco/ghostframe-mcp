@@ -1,5 +1,5 @@
 ---
-name: troubleshooting
+name: ghostframe-troubleshoot
 description: Diagnoses Chrome DevTools MCP failures in this stealth fork. Use when a tool call fails (list_pages, new_page, navigate_page), the server won't start, the target site detects the browser as a bot, or `evaluate_script` results don't match what's on the page.
 ---
 
@@ -24,7 +24,6 @@ Each category has its own playbook below.
 Locate the MCP configuration first. Search the workspace for `.mcp.json`, `gemini-extension.json`, `.claude/settings.json`, `.vscode/launch.json`, `.gemini/settings.json`. Read for:
 
 - Incorrect args or flag names (typos like `--autoBronnect`).
-- `--autoConnect` in a sandboxed client.
 - Missing env vars referenced in args.
 
 If no config file is found, ask the user for theirs.
@@ -33,12 +32,9 @@ Then triage the error string:
 
 ### `Could not find DevToolsActivePort`
 
-Specific to `--autoConnect`. The MCP cannot find the file that a running, debuggable Chrome creates. In order:
-
 1. Confirm Chrome (right channel — Stable / Canary as the error mentions) is currently running.
 2. Instruct: open `chrome://inspect/#remote-debugging` and tick "Enable remote debugging".
 3. Run `list_pages`. Don't retry the original failed command yet.
-4. If `list_pages` still fails, fall back to `--browserUrl http://127.0.0.1:9222` or check sandboxing.
 
 ### `Target closed`
 
@@ -49,8 +45,6 @@ Browser failed to launch. Close existing Chrome instances, confirm Chrome instal
 Argument typo. Check flag spelling exactly.
 
 ### `ProtocolError: Network.enable timed out` / `socket connection was closed unexpectedly`
-
-`--autoConnect` handshake failure. Required:
 
 1. Chrome 144+ already running.
 2. Remote debugging enabled.
@@ -68,7 +62,7 @@ npm cache clean --force
 
 ### Sandboxing / Host validation / WSL / Windows-specific
 
-Map to the corresponding section in [`docs/troubleshooting.md`](../../docs/troubleshooting.md).
+Map to the corresponding section in [`docs/troubleshooting.md`](~/ghostframe-mcp/docs/troubleshooting.md).
 
 ## Step 2B: Target detects the browser
 
@@ -80,7 +74,7 @@ Probable cause is launch posture, persona, or behavioral. Walk these in order:
    ghostframe evaluate_script "() => navigator.webdriver"
    ```
 
-   If `true`: launch flags are leaking. `--enable-automation` not stripped, or `--disable-blink-features=AutomationControlled` missing. See [`docs/stealth-configuration.md#default-flag-posture`](../../docs/stealth-configuration.md#default-flag-posture).
+   If `true`: launch flags are leaking. `--enable-automation` not stripped, or `--disable-blink-features=AutomationControlled` missing. See [`docs/stealth-configuration.md#default-flag-posture`](~/ghostframe-mcp/docs/stealth-configuration.md#default-flag-posture).
 
 2. **Check the UA for `HeadlessChrome`.**
 
@@ -98,9 +92,9 @@ Probable cause is launch posture, persona, or behavioral. Walk these in order:
 
    `SwiftShader` or `Google Inc. (Google)` indicates software rendering — a bot tell. Run on a host with GPU access or apply WebGL polyfills.
 
-4. **Run `bot.sannysoft.com`.** The matrix tells you which signal class flipped you. Hand off to `skills/detection-testing/` for the full sweep.
+4. **Run `bot.sannysoft.com`.** The matrix tells you which signal class flipped you. Hand off to `ghostframe-detect-test` for the full sweep.
 
-5. **If all four detectors pass and the target still blocks**, hand off to `skills/diagnose-bot-block/`.
+5. **If all four detectors pass and the target still blocks**, hand off to `ghostframe-diagnose-block`.
 
 ## Step 2C: `evaluate_script` returns the wrong thing
 
@@ -139,14 +133,13 @@ A US-Pacific timezone behind a Frankfurt egress IP is a stronger detection signa
 
 ## Step 2E: Tool not found
 
-- The fork strips `lighthouse_audit`, `take_memory_snapshot`, `performance_start_trace`, `performance_stop_trace`, `performance_analyze_insight`. They are intentionally absent. Do not request them.
-- `--slim` mode exposes only navigation and screenshot tools. Confirm the client isn't running slim.
-- If the tool is `install_extension` or other extension tooling, the server needs `--categoryExtensions` and (for Chrome <149) must launch Chrome itself rather than connect.
+- The fork removes Lighthouse, memory, performance, extension, in-page and WebMCP
+  tools. They are intentionally absent. Do not request them.
 - Some MCP clients enforce read-only mode and hide tools annotated `readOnlyHint: false`. The full set requires turning off the client's read-only / plan-mode setting.
 
 ## Step 3: Read upstream known issues
 
-Map remaining symptoms to [`docs/troubleshooting.md`](../../docs/troubleshooting.md). It has the inherited environment cases (sandboxing, WSL, Windows shell wrapping, Web Bluetooth on macOS).
+Map remaining symptoms to [`docs/troubleshooting.md`](~/ghostframe-mcp/docs/troubleshooting.md). It has the inherited environment cases (sandboxing, WSL, Windows shell wrapping, Web Bluetooth on macOS).
 
 ## Step 4: Capture verbose logs
 
@@ -159,7 +152,7 @@ DEBUG=* node /absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js --
 Read the log for:
 
 - Launch flags actually applied (compare against expected stealth posture).
-- CDP domains enabled at startup (Universe gate verification).
+- CDP domains enabled at startup.
 - Persona application (one `emulate` call should produce multiple CDP calls; confirm all of them happened).
 
 ## Step 5: Confirm with diagnostics

@@ -1,16 +1,30 @@
 ---
 name: ghostframe-cli
-description: Drives stealth-mode Chrome DevTools from the shell. Use when writing shell scripts that automate browser actions, running a quick stealth probe, or driving a one-off CDP-mediated workflow without an MCP client. Does not apply to `--slim` mode.
+description: Drive the ghostframe stealth browser from the terminal, and orient to how this fork differs from a general-purpose browser MCP. Use when running `ghostframe <tool>` commands, choosing an isolated vs main world for evaluate_script, applying a persona, or running concurrent browser instances. Stealth is always on and has no off-switch.
 ---
 
-# Stealth CLI
+# Ghostframe CLI
 
-The `ghostframe` CLI talks to the same MCP server as an IDE client. Stealth posture, persona handling, and isolated-world routing all apply identically.
+The `ghostframe` CLI talks to the same MCP server as an IDE client. Stealth posture,
+persona handling, and isolated-world routing apply identically either way.
 
 For deeper details, see:
 
-- [`docs/cli.md`](../../docs/cli.md) — CLI flag surface and stealth-relevant flags.
-- [`docs/stealth-configuration.md`](../../docs/stealth-configuration.md) — what changes vs upstream.
+- `~/ghostframe-mcp/docs/cli.md` — CLI flag surface and stealth-relevant flags.
+- `~/ghostframe-mcp/docs/stealth-configuration.md` — what changes vs upstream.
+
+## How this fork differs
+
+- **Stealth is always on.** There is no `--stealth` flag and no off-switch. Launch
+  strips `--enable-automation`, adds `--disable-blink-features=AutomationControlled`,
+  uses pipe transport, and rewrites a headless UA so it does not say `HeadlessChrome`.
+- **Isolated worlds by default.** `evaluate_script` defaults to `world: "isolated"`.
+- **Humanized input, always.** No global switch, no per-call override.
+- **Personas follow new tabs.** `emulate` bundles UA, UA-CH, locale, timezone,
+  geolocation and viewport, and the persona is reapplied to pages opened later in the
+  session so two tabs cannot disagree.
+- **Removed tools.** Lighthouse, memory, performance, extensions, in-page tools and
+  WebMCP are gone. They need CDP domains or page-visible state that leaks.
 
 ## Setup
 
@@ -55,7 +69,9 @@ ghostframe type_text "hello" --submitKey "Enter"
 ghostframe upload_file "1_4" "file.txt"
 ```
 
-All input tools run with humanized timing by default. There is no per-call override flag — see `skills/humanized-input/SKILL.md` for the global off-switch.
+All input tools run with humanized timing. There is no override and no way to turn it
+off. Distributions are documented in
+`~/ghostframe-mcp/docs/detection-signals.md#behavioral-layer`.
 
 ## Navigation
 
@@ -112,7 +128,21 @@ ghostframe list_console_messages --types error
 ghostframe get_console_message 1
 ```
 
-`evaluate_script` defaults to `world: "isolated"`. Pass `world: "main"` only when the script needs to read or write page-set globals or dispatch events the page's JS listens for. See `skills/ghostframe/SKILL.md` for the routing rules.
+### Choosing a world for `evaluate_script`
+
+Default is `isolated`. Pass `world: "main"` only when one of these applies:
+
+1. **Read-only DOM access?** → isolated. Querying, walking elements, returning text.
+2. **Need a `window.*` global the page set?** → main. Isolated worlds cannot see them.
+3. **Sets state the page reads?** → main. Dispatching events the page listens for,
+   writing `localStorage` the page reads, calling page-defined functions.
+4. **Passing element UIDs via `--args`?** → main is selected automatically. Element
+   handles only evaluate in the realm that created them.
+
+```bash
+ghostframe evaluate_script "() => document.title"                       # isolated
+ghostframe evaluate_script "() => window.__APP__?.router.currentRoute" --world main
+```
 
 ## Stealth probe (typical flow)
 
@@ -127,22 +157,28 @@ ghostframe new_page "https://abrahamjuliot.github.io/creepjs/"
 ghostframe take_screenshot --fullPage true --filePath creep.png
 ```
 
-Then read the snapshot and the screenshot for the failed signal categories. Full workflow in `skills/detection-testing/SKILL.md`.
+Then read the snapshot and the screenshot for the failed signal categories. Full workflow in ``ghostframe-detect-test``.
 
 ## Service management
 
 ```bash
-ghostframe start                # start the daemon
-ghostframe start --headless     # headless launch
-ghostframe start --userDataDir /tmp/profile  # explicit profile dir
+ghostframe start                             # start the daemon
+ghostframe start --no-headless               # headed launch (CLI defaults headless)
+ghostframe start --userDataDir /tmp/persona-a  # explicit profile dir
+ghostframe start --isolated                  # throwaway profile
 ghostframe status
 ghostframe stop
 ```
 
-`start --help` shows the supported subset of server flags. Stealth-relevant flags are listed in [`docs/cli.md`](../../docs/cli.md#stealth-relevant-flags).
+`start --help` shows the supported subset of server flags. Stealth-relevant flags are listed in [`docs/cli.md`](~/ghostframe-mcp/docs/cli.md#stealth-relevant-flags).
 
 ## What NOT to do
 
 - Do not pipe `take_snapshot` output back into `click` arguments via shell parsing — UIDs change across snapshots. Capture the snapshot, then issue the click as a separate command using a UID you read.
 - Do not script `--output-format=json | jq` parsers for tools whose JSON shape isn't documented; the shape can change.
-- Do not call `evaluate_script` with `--world main` from a shell script that hasn't been reviewed for what it touches in the page's globals. Isolated is the default for a reason.
+- Do not call `evaluate_script` with `--world main` from a shell script that hasn't
+  been reviewed for what it touches in the page's globals. Isolated is the default
+  for a reason.
+- Do not mix two personas in one session. Pick one and hold it.
+- Do not run two instances against the same `--userDataDir`; Chrome refuses. Give each
+  concurrent instance its own profile directory, or pass `--isolated`.

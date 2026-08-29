@@ -159,6 +159,29 @@ async function getTargetPoint(handle: ElementHandle<Element>): Promise<Point> {
   };
 }
 
+/** Presses or releases the left button with the pressure a real mouse reports. */
+async function dispatchMouseButton(
+  page: Page,
+  type: 'mousePressed' | 'mouseReleased',
+  point: Point,
+  clickCount: number,
+): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const client = (page as any)._client() as {
+    send: (method: string, params?: unknown) => Promise<unknown>;
+  };
+  await client.send('Input.dispatchMouseEvent', {
+    type,
+    x: point.x,
+    y: point.y,
+    button: 'left',
+    buttons: type === 'mousePressed' ? 1 : 0,
+    clickCount,
+    pointerType: 'mouse',
+    force: type === 'mousePressed' ? 0.5 : 0,
+  });
+}
+
 /** Clicks after a Bezier move and randomized dwell. */
 export async function humanizedClick(
   page: Page,
@@ -181,16 +204,16 @@ export async function humanizedClick(
       : {x: target.x, y: target.y};
   await bezierMoveTo(page, point.x, point.y);
   await sleep(jitter(80, 250));
-  if (target.type === 'handle') {
-    await target.handle.asLocator().click({
-      count,
-      delay: jitter(40, 180),
-    });
-  } else {
-    await page.mouse.click(point.x, point.y, {
-      count,
-      delay: jitter(40, 180),
-    });
+
+  // Press at the jittered point rather than delegating to Locator.click,
+  // which would re-derive the element centre and teleport there first.
+  for (let i = 0; i < count; i++) {
+    if (i > 0) {
+      await sleep(jitter(60, 140));
+    }
+    await dispatchMouseButton(page, 'mousePressed', point, i + 1);
+    await sleep(jitter(40, 180));
+    await dispatchMouseButton(page, 'mouseReleased', point, i + 1);
   }
 }
 

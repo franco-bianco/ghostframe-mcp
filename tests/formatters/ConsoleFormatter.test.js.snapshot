@@ -275,7 +275,7 @@ at schedule (util.ts:5:2)
 Note: line and column numbers use 1-based indexing
 `;
 
-exports[`ConsoleFormatter > toStringDetailed/toJSONDetailed > handles \"Execution context is not available\" error in args toJSONDetailed 1`] = `
+exports[`ConsoleFormatter > toStringDetailed/toJSONDetailed > handles "Execution context is not available" error in args toJSONDetailed 1`] = `
 {
   "id": 6,
   "type": "log",
@@ -287,7 +287,7 @@ exports[`ConsoleFormatter > toStringDetailed/toJSONDetailed > handles \"Executio
 }
 `;
 
-exports[`ConsoleFormatter > toStringDetailed/toJSONDetailed > handles \"Execution context is not available\" error in args toStringDetailed 1`] = `
+exports[`ConsoleFormatter > toStringDetailed/toJSONDetailed > handles "Execution context is not available" error in args toStringDetailed 1`] = `
 ID: 6
 Message: log> Processing file:
 ### Arguments

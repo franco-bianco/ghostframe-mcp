@@ -1,11 +1,11 @@
 ---
-name: detection-testing
-description: Verify the stealth config against public bot detectors. Use after changing launch flags, polyfills, persona, or humanization defaults; before shipping a config change; or as the next step when `stealth-launch` flagged a problem. Manual visual review of detector pages — not an automated test suite.
+name: ghostframe-detect-test
+description: Verify the stealth config against public bot detectors. Use after changing launch flags, polyfills, persona, or before shipping a config change; or as the next step when `ghostframe-launch` flagged a problem. Manual visual review of detector pages — not an automated test suite.
 ---
 
 # Detection testing
 
-Sweep four public detector pages in order. Each tests a different signal mix; the union covers most of the layers in [`docs/detection-signals.md`](../../docs/detection-signals.md).
+Sweep four public detector pages in order. Each tests a different signal mix; the union covers most of the layers in [`docs/detection-signals.md`](~/ghostframe-mcp/docs/detection-signals.md).
 
 ## Default scope
 
@@ -28,7 +28,7 @@ Operates on the currently selected page. Apply your persona via `emulate` _befor
 ghostframe emulate --userAgent "<persona UA>" --viewport "<persona viewport>"
 ```
 
-Bundle locale, timezone, and geolocation through the same `emulate` call (see [`docs/stealth-configuration.md#emulate-bundles-a-persona`](../../docs/stealth-configuration.md#emulate-bundles-a-persona)).
+Bundle locale, timezone, and geolocation through the same `emulate` call (see [`docs/stealth-configuration.md#emulate-bundles-a-persona`](~/ghostframe-mcp/docs/stealth-configuration.md#emulate-bundles-a-persona)).
 
 Verify coherence once:
 
@@ -57,7 +57,7 @@ Read `sanny.png` for the test matrix. Common red rows:
 - `Languages` — empty or mismatched.
 - `WebGL Vendor`, `WebGL Renderer` — software fallback.
 
-For each red row, map to the layer in [`docs/detection-signals.md`](../../docs/detection-signals.md) and the fix in [`docs/stealth-configuration.md`](../../docs/stealth-configuration.md).
+For each red row, map to the layer in [`docs/detection-signals.md`](~/ghostframe-mcp/docs/detection-signals.md) and the fix in [`docs/stealth-configuration.md`](~/ghostframe-mcp/docs/stealth-configuration.md).
 
 ### 3. arh.antoinevastel.com
 
@@ -121,7 +121,9 @@ For each detector that flagged, map the failed signal to a layer:
 
 - Capture screenshots, not just snapshots. Detector results are visual; the matrix layout matters for triage.
 - Run the sweep in this order. Sannysoft is fast and cheap; pixelscan can be slow.
-- Compare to a baseline: run the sweep with the global humanization off-switch in both states, with the persona on and off, and with the polyfills disabled and enabled. Build a relative picture, not an absolute pass/fail.
+- Compare to a baseline: run the sweep with the persona applied and unapplied, and
+  before and after a config change. Build a relative picture, not an absolute
+  pass/fail. Humanization cannot be toggled, so it is not a variable here.
 
 ## What NOT to do
 

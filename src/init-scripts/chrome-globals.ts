@@ -82,11 +82,16 @@ export const chromeGlobalsScript = String.raw`(() => {
       });
     }
 
+    // Anchored to the real navigation so loadTimes() and csi() agree with
+    // performance.timing instead of drifting from it.
+    const originMs =
+      (w.performance && w.performance.timeOrigin) || Date.now();
+
     // --- chrome.loadTimes() ------------------------------------------------
     // Deprecated but still callable in stable Chrome. Returning a plausible
     // object beats returning undefined.
     if (typeof chrome.loadTimes !== 'function') {
-      const startMs = Date.now() / 1000 - Math.random() * 2;
+      const startMs = originMs / 1000;
       const loadTimes = function loadTimes() {
         return {
           requestTime: startMs,
@@ -115,12 +120,14 @@ export const chromeGlobalsScript = String.raw`(() => {
     // --- chrome.csi() ------------------------------------------------------
     // Same story as loadTimes(): legacy but present in real Chrome.
     if (typeof chrome.csi !== 'function') {
+      const startE = Math.floor(originMs);
+      const onloadT = Math.floor(originMs + 200);
       const csi = function csi() {
-        const now = Date.now();
+        // pageT grows with the document in real Chrome; the rest stay fixed.
         return {
-          startE: now - Math.floor(Math.random() * 1000),
-          onloadT: now - Math.floor(Math.random() * 200),
-          pageT: Math.random() * 5000,
+          startE: startE,
+          onloadT: onloadT,
+          pageT: w.performance ? w.performance.now() : 0,
           tran: 15,
         };
       };

@@ -1,11 +1,11 @@
 ---
-name: diagnose-bot-block
+name: ghostframe-diagnose-block
 description: Investigate why a specific site blocks automation when the four public detectors pass. Use when a target site (Cloudflare/DataDome/Akamai/PerimeterX/Imperva/Kasada) returns 403 / interstitial / CAPTCHA on first navigation but `bot.sannysoft.com`, `arh.antoinevastel.com`, `creepjs`, and `pixelscan` all pass. Walks the six detection layers from the cheapest probe to the most expensive.
 ---
 
 # Diagnose a bot block
 
-When the public detectors pass but a target still blocks, the target is checking something the detectors don't. Walk the six layers in [`docs/detection-signals.md`](../../docs/detection-signals.md) in order of cost.
+When the public detectors pass but a target still blocks, the target is checking something the detectors don't. Walk the six layers in [`docs/detection-signals.md`](~/ghostframe-mcp/docs/detection-signals.md) in order of cost.
 
 ## Default scope
 
@@ -59,7 +59,7 @@ Six tells:
 3. `Sec-CH-UA-*` headers don't match `userAgent` string — UA-CH desync. Inspect `block-req.md` headers.
 4. `Intl.DateTimeFormat().resolvedOptions().timeZone` doesn't match the proxy egress IP geo. Cross-check with `https://ipinfo.io/json`.
 5. WebGL renderer reports `SwiftShader` or `Google Inc. (Google)`.
-6. The cursor reaches its target in one frame (humanization off-switch left on).
+6. The cursor reaches its target in one frame.
 
 ### 3. CDP layer probe
 
@@ -114,7 +114,10 @@ Verify:
 - The cursor path included `mousemove` events between origin and target, not a teleport.
 - Time between click and navigation isn't sub-100ms.
 
-The off-switch should be off for stealth runs. If you cannot recall, take a `take_snapshot` and re-do the navigation with humanization confirmed-on.
+Humanized input is always on and cannot be disabled, so it is not a variable to rule
+out here. Confirm instead that interactions went through the tools (`click`, `fill`,
+`type_text`) rather than a hand-rolled `evaluate_script` dispatch, which bypasses the
+humanized path entirely.
 
 ### 7. Network / TLS layer
 
@@ -140,9 +143,9 @@ Build a one-line summary per layer indicating pass / fail / unknown. The first f
 
 Hand to the relevant mitigation skill:
 
-- DOM polyfill changes: `skills/borrow-stealth-feature/` to port a known-good shape.
-- Behavioral: `skills/humanized-input/`.
-- Persona: re-apply `emulate` from [`docs/stealth-configuration.md#fingerprint-coherence`](../../docs/stealth-configuration.md#fingerprint-coherence).
+- DOM polyfill changes: `ghostframe-borrow-feature` to port a known-good shape.
+- Behavioral: `ghostframe-mcp/docs/detection-signals.md`.
+- Persona: re-apply `emulate` from [`docs/stealth-configuration.md#fingerprint-coherence`](~/ghostframe-mcp/docs/stealth-configuration.md#fingerprint-coherence).
 
 ## Tips
 

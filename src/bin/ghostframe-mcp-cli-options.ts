@@ -8,85 +8,6 @@ import type {YargsOptions} from '../third_party/index.js';
 import {yargs, hideBin} from '../third_party/index.js';
 
 export const cliOptions = {
-  autoConnect: {
-    type: 'boolean',
-    description:
-      'If specified, automatically connects to a browser (Chrome 144+) running locally from the user data directory identified by the channel param (default channel is stable). Requires the remote debugging server to be started in the Chrome instance via chrome://inspect/#remote-debugging.',
-    conflicts: ['isolated', 'executablePath'],
-    default: false,
-    coerce: (value: boolean | undefined) => {
-      if (!value) {
-        return;
-      }
-      return value;
-    },
-  },
-  browserUrl: {
-    type: 'string',
-    description:
-      'Connect to a running, debuggable Chrome instance (e.g. `http://127.0.0.1:9222`). See README "Connecting to a running Chrome instance".',
-    alias: 'u',
-    conflicts: ['wsEndpoint'],
-    coerce: (url: string | undefined) => {
-      if (!url) {
-        return;
-      }
-      try {
-        new URL(url);
-      } catch {
-        throw new Error(`Provided browserUrl ${url} is not valid URL.`);
-      }
-      return url;
-    },
-  },
-  wsEndpoint: {
-    type: 'string',
-    description:
-      'WebSocket endpoint to connect to a running Chrome instance (e.g., `ws://127.0.0.1:9222/devtools/browser/{ID}`). Alternative to --browserUrl.',
-    alias: 'w',
-    conflicts: ['browserUrl'],
-    coerce: (url: string | undefined) => {
-      if (!url) {
-        return;
-      }
-      try {
-        const parsed = new URL(url);
-        if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
-          throw new Error(
-            `Provided wsEndpoint ${url} must use ws:// or wss:// protocol.`,
-          );
-        }
-        return url;
-      } catch (error) {
-        if ((error as Error).message.includes('ws://')) {
-          throw error;
-        }
-        throw new Error(`Provided wsEndpoint ${url} is not valid URL.`);
-      }
-    },
-  },
-  wsHeaders: {
-    type: 'string',
-    description:
-      'Custom headers for WebSocket connection in JSON format (e.g., \'{"Authorization":"Bearer token"}\'). Only works with --wsEndpoint.',
-    implies: 'wsEndpoint',
-    coerce: (val: string | undefined) => {
-      if (!val) {
-        return;
-      }
-      try {
-        const parsed = JSON.parse(val);
-        if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-          throw new Error('Headers must be a JSON object');
-        }
-        return parsed as Record<string, string>;
-      } catch (error) {
-        throw new Error(
-          `Invalid JSON for wsHeaders: ${(error as Error).message}`,
-        );
-      }
-    },
-  },
   headless: {
     type: 'boolean',
     description: 'Whether to run in headless (no UI) mode.',
@@ -95,7 +16,6 @@ export const cliOptions = {
   executablePath: {
     type: 'string',
     description: 'Path to custom Chrome executable.',
-    conflicts: ['browserUrl', 'wsEndpoint'],
     alias: 'e',
   },
   isolated: {
@@ -107,14 +27,14 @@ export const cliOptions = {
     type: 'string',
     description:
       'Path to the user data directory for Chrome. Default is $HOME/.cache/ghostframe-mcp/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE.',
-    conflicts: ['browserUrl', 'wsEndpoint', 'isolated'],
+    conflicts: ['isolated'],
   },
   channel: {
     type: 'string',
     description:
       'Specify a different Chrome channel that should be used. The default is the stable channel version.',
     choices: ['canary', 'dev', 'beta', 'stable'] as const,
-    conflicts: ['browserUrl', 'wsEndpoint', 'executablePath'],
+    conflicts: ['executablePath'],
   },
   logFile: {
     type: 'string',
@@ -160,49 +80,6 @@ export const cliOptions = {
     type: 'boolean',
     description: `If enabled, ignores errors relative to self-signed and expired certificates. Use with caution.`,
   },
-  experimentalPageIdRouting: {
-    type: 'boolean',
-    describe:
-      'Whether to expose pageId on page-scoped tools and route requests by page ID.',
-    hidden: true,
-  },
-  experimentalDevtools: {
-    type: 'boolean',
-    describe: 'Whether to enable automation over DevTools targets',
-    hidden: true,
-  },
-  experimentalVision: {
-    type: 'boolean',
-    describe:
-      'Whether to enable coordinate-based tools such as click_at(x,y). Usually requires a computer-use model able to produce accurate coordinates by looking at screenshots.',
-    hidden: false,
-  },
-  experimentalMemory: {
-    type: 'boolean',
-    describe: 'Whether to enable experimental memory tools.',
-    hidden: true,
-  },
-  experimentalStructuredContent: {
-    type: 'boolean',
-    describe: 'Whether to output structured formatted content.',
-    hidden: true,
-  },
-  experimentalIncludeAllPages: {
-    type: 'boolean',
-    describe:
-      'Whether to include all kinds of pages such as webviews or background pages as pages.',
-    hidden: true,
-  },
-  experimentalNavigationAllowlist: {
-    type: 'boolean',
-    describe: 'Whether to enable navigation allowlist tool parameter.',
-    hidden: true,
-  },
-  experimentalInteropTools: {
-    type: 'boolean',
-    describe: 'Whether to enable interoperability tools',
-    hidden: true,
-  },
   experimentalScreencast: {
     type: 'boolean',
     describe:
@@ -212,11 +89,6 @@ export const cliOptions = {
     type: 'string',
     describe: 'Path to ffmpeg executable for screencast recording.',
     implies: 'experimentalScreencast',
-  },
-  experimentalWebmcp: {
-    type: 'boolean',
-    describe:
-      'Set to true to enable debugging WebMCP tools. Requires Chrome 149+ with the following flags: `--enable-features=WebMCPTesting,DevToolsWebMCPSupport`',
   },
   chromeArg: {
     type: 'array',
@@ -238,52 +110,6 @@ export const cliOptions = {
     default: true,
     describe: 'Set to false to exclude tools related to network.',
   },
-  categoryExtensions: {
-    type: 'boolean',
-    hidden: false,
-    default: false,
-    describe:
-      'Set to true to include extension tools. This requires a browser launched through the pipe connection.',
-  },
-  categoryExperimentalInPage: {
-    type: 'boolean',
-    hidden: true,
-    default: false,
-    describe:
-      'Set to true to enable tools exposed by the inspected page itself',
-  },
-  stealth: {
-    type: 'boolean',
-    default: true,
-    describe:
-      'Stealth posture (default: true). Skips initialization of the chrome-devtools-frontend Universe (which forces Runtime.enable + Debugger.enable on every page and is the single largest CDP fingerprint) and the page console / pageerror / Runtime.exceptionThrown listeners that implicitly enable Runtime. Trade-off: list_console_messages and get_console_message return empty results, and the ConsoleFormatter degrades to its non-DevTools-detailed mode. Set to false to restore the upstream chrome-devtools-mcp behavior.',
-  },
-  usageStatistics: {
-    type: 'boolean',
-    default: false,
-    describe:
-      'Send usage statistics to Google Clearcut. Off by default in this stealth fork (sending stealth-config telemetry to Google contradicts the fork posture). Set to true to opt back in. Also disabled if `CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS` or `CI` env variables are set.',
-  },
-  clearcutEndpoint: {
-    type: 'string',
-    hidden: true,
-    describe: 'Endpoint for Clearcut telemetry.',
-  },
-  clearcutForceFlushIntervalMs: {
-    type: 'number',
-    hidden: true,
-    describe: 'Force flush interval in milliseconds (for testing).',
-  },
-  clearcutIncludePidHeader: {
-    type: 'boolean',
-    hidden: true,
-    describe: 'Include watchdog PID in Clearcut request headers (for testing).',
-  },
-  slim: {
-    type: 'boolean',
-    describe:
-      'Exposes a "slim" set of 3 tools covering navigation, script execution and screenshots only. Useful for basic browser tasks.',
-  },
   viaCli: {
     type: 'boolean',
     describe:
@@ -293,8 +119,8 @@ export const cliOptions = {
   redactNetworkHeaders: {
     type: 'boolean',
     describe:
-      'If true, redacts some of the network headers considered senstive before returning to the client.',
-    default: false,
+      'If true, redacts network headers considered sensitive before returning them to the client.',
+    default: true,
   },
 } satisfies Record<string, YargsOptions>;
 
@@ -305,37 +131,12 @@ export function parseArguments(version: string, argv = process.argv) {
     .scriptName('ghostframe-mcp')
     .options(cliOptions)
     .check(args => {
-      if (
-        args.categoryExtensions &&
-        (args.autoConnect || args.browserUrl || args.wsEndpoint)
-      ) {
-        throw new Error(
-          'categoryExtensions cannot be used with autoConnect, browserUrl, or wsEndpoint.',
-        );
-      }
-      if (
-        !args.channel &&
-        !args.browserUrl &&
-        !args.wsEndpoint &&
-        !args.executablePath
-      ) {
+      if (!args.channel && !args.executablePath) {
         args.channel = 'stable';
       }
       return true;
     })
     .example([
-      [
-        '$0 --browserUrl http://127.0.0.1:9222',
-        'Connect to an existing browser instance via HTTP',
-      ],
-      [
-        '$0 --wsEndpoint ws://127.0.0.1:9222/devtools/browser/abc123',
-        'Connect to an existing browser instance via WebSocket',
-      ],
-      [
-        `$0 --wsEndpoint ws://127.0.0.1:9222/devtools/browser/abc123 --wsHeaders '{"Authorization":"Bearer token"}'`,
-        'Connect via WebSocket with custom headers',
-      ],
       ['$0 --channel beta', 'Use Chrome Beta installed on this system'],
       ['$0 --channel canary', 'Use Chrome Canary installed on this system'],
       ['$0 --channel dev', 'Use Chrome Dev installed on this system'],
@@ -363,18 +164,6 @@ export function parseArguments(version: string, argv = process.argv) {
       [
         '$0 --auto-connect',
         'Connect to a stable Chrome instance (Chrome 144+) running instead of launching a new instance',
-      ],
-      [
-        '$0 --auto-connect --channel=canary',
-        'Connect to a canary Chrome instance (Chrome 144+) running instead of launching a new instance',
-      ],
-      [
-        '$0 --no-usage-statistics',
-        'Do not send usage statistics https://github.com/ChromeDevTools/chrome-devtools-mcp#usage-statistics.',
-      ],
-      [
-        '$0 --slim',
-        'Only 3 tools: navigation, JavaScript execution and screenshot',
       ],
     ]);
 

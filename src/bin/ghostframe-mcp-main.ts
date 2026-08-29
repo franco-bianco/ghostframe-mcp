@@ -10,27 +10,14 @@ import process from 'node:process';
 
 import {createMcpServer, logDisclaimers} from '../index.js';
 import {logger, saveLogsToFile} from '../logger.js';
-import {computeFlagUsage} from '../telemetry/flagUtils.js';
 import {StdioServerTransport} from '../third_party/index.js';
-import {checkForUpdates} from '../utils/check-for-updates.js';
 import {VERSION} from '../version.js';
 
-import {cliOptions, parseArguments} from './ghostframe-mcp-cli-options.js';
-
-await checkForUpdates('Run `git pull && npm run build` in the fork to update.');
+import {parseArguments} from './ghostframe-mcp-cli-options.js';
 
 export const args = parseArguments(VERSION);
 
 const logFile = args.logFile ? saveLogsToFile(args.logFile) : undefined;
-if (
-  process.env['CI'] ||
-  process.env['CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS']
-) {
-  console.error(
-    "turning off usage statistics. process.env['CI'] || process.env['CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS'] is set.",
-  );
-  args.usageStatistics = false;
-}
 
 if (process.env['CHROME_DEVTOOLS_MCP_CRASH_ON_UNCAUGHT'] !== 'true') {
   process.on('unhandledRejection', (reason, promise) => {
@@ -38,13 +25,11 @@ if (process.env['CHROME_DEVTOOLS_MCP_CRASH_ON_UNCAUGHT'] !== 'true') {
   });
 }
 
-logger(`Starting Chrome DevTools MCP Server v${VERSION}`);
-const {server, clearcutLogger} = await createMcpServer(args, {
+logger(`Starting ghostframe-mcp server v${VERSION}`);
+const {server} = await createMcpServer(args, {
   logFile,
 });
 const transport = new StdioServerTransport();
 await server.connect(transport);
-logger('Chrome DevTools MCP Server connected');
-logDisclaimers(args);
-void clearcutLogger?.logDailyActiveIfNeeded();
-void clearcutLogger?.logServerStart(computeFlagUsage(args, cliOptions));
+logger('ghostframe-mcp server connected');
+logDisclaimers();

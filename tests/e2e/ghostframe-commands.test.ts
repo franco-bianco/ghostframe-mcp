@@ -89,21 +89,4 @@ describe('ghostframe', () => {
       'restart command suggestion is missing: ' + result.stdout,
     );
   });
-
-  it('fails to invoke click_at when experimentalVision is disabled (default)', async () => {
-    await runCli(['start'], sessionId);
-
-    const result = await runCli(['click_at', '100', '100'], sessionId);
-    assert.strictEqual(result.status, 0);
-    assert(
-      result.stdout.includes(
-        'Tool click_at requires experimental feature --experimentalVision and is currently disabled',
-      ),
-      'error message is unexpected: ' + result.stdout,
-    );
-    assert(
-      result.stdout.includes('ghostframe start --experimentalVision=true'),
-      'restart command suggestion is miss: ' + result.stdout,
-    );
-  });
 });

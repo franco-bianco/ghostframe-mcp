@@ -11,7 +11,7 @@ import {describe, it} from 'node:test';
 
 import {executablePath} from 'puppeteer';
 
-import {detectDisplay, ensureBrowserConnected, launch} from '../src/browser.js';
+import {detectDisplay, launch} from '../src/browser.js';
 
 describe('browser', () => {
   it('detects display does not crash', () => {
@@ -26,7 +26,6 @@ describe('browser', () => {
       isolated: false,
       userDataDir: folderPath,
       executablePath: executablePath(),
-      devtools: false,
     });
     try {
       try {
@@ -35,7 +34,6 @@ describe('browser', () => {
           isolated: false,
           userDataDir: folderPath,
           executablePath: executablePath(),
-          devtools: false,
         });
         await browser2.close();
         assert.fail('not reached');
@@ -62,7 +60,6 @@ describe('browser', () => {
         width: 1501,
         height: 801,
       },
-      devtools: false,
     });
     try {
       const [page] = await browser.pages();
@@ -73,29 +70,6 @@ describe('browser', () => {
         width: 1501,
         height: 801,
       });
-    } finally {
-      await browser.close();
-    }
-  });
-  it('connects to an existing browser with userDataDir', async () => {
-    const tmpDir = os.tmpdir();
-    const folderPath = path.join(tmpDir, `temp-folder-${crypto.randomUUID()}`);
-    const browser = await launch({
-      headless: true,
-      isolated: false,
-      userDataDir: folderPath,
-      executablePath: executablePath(),
-      devtools: false,
-      chromeArgs: ['--remote-debugging-port=0'],
-    });
-    try {
-      const connectedBrowser = await ensureBrowserConnected({
-        userDataDir: folderPath,
-        devtools: false,
-      });
-      assert.ok(connectedBrowser);
-      assert.ok(connectedBrowser.connected);
-      connectedBrowser.disconnect();
     } finally {
       await browser.close();
     }

@@ -5,28 +5,21 @@
  */
 
 import {logger} from './logger.js';
-import {TextSnapshot} from './TextSnapshot.js';
+import type {TextSnapshot} from './TextSnapshot.js';
 import type {
   CDPSession,
   Dialog,
   ElementHandle,
   Page,
   Viewport,
-  WebMCPTool,
 } from './third_party/index.js';
-import type {ToolGroup, ToolDefinition} from './tools/inPage.js';
 import {takeSnapshot} from './tools/snapshot.js';
-import type {
-  ContextPage,
-  DevToolsData,
-  Response,
-} from './tools/ToolDefinition.js';
+import type {ContextPage, DevToolsData} from './tools/ToolDefinition.js';
 import type {
   EmulationSettings,
   GeolocationOptions,
   TextSnapshotNode,
 } from './types.js';
-import {DTMCP_SYMBOL_KEY} from './utils/dtmcpState.js';
 import {
   getNetworkMultiplierFromString,
   WaitForHelper,
@@ -61,8 +54,6 @@ export class McpPage implements ContextPage {
   #dialogHandler: (dialog: Dialog) => void;
   #networkSession?: CDPSession;
 
-  inPageTools: ToolGroup<ToolDefinition> | undefined;
-
   constructor(page: Page, id: number) {
     this.pptrPage = page;
     this.id = id;
@@ -92,20 +83,12 @@ export class McpPage implements ContextPage {
     }
   }
 
-  getInPageTools(): ToolGroup<ToolDefinition> | undefined {
-    return this.inPageTools;
-  }
-
   async setBlockedUrls(patterns: string[]): Promise<void> {
     if (!this.#networkSession) {
       this.#networkSession = await this.pptrPage.createCDPSession();
       await this.#networkSession.send('Network.enable');
     }
     await this.#networkSession.send('Network.setBlockedURLs', {urls: patterns});
-  }
-
-  getWebMcpTools(): WebMCPTool[] {
-    return this.pptrPage.webmcp.tools();
   }
 
   get networkConditions(): string | null {
@@ -161,216 +144,6 @@ export class McpPage implements ContextPage {
       logger('Failed to detach network session', error);
     }
     this.#networkSession = undefined;
-  }
-
-  async executeInPageTool(
-    toolName: string,
-    params: Record<string, unknown>,
-    response: Response,
-  ): Promise<void> {
-    // Creates array of ElementHandles from the UIDs in the params.
-    // We do not replace the uids with the ElementsHandles yet, because
-    // the `evaluate` function only turns them into DOM elements if they
-    // are passed as non-nested arguments.
-    const handles: ElementHandle[] = [];
-    for (const value of Object.values(params)) {
-      if (
-        value instanceof Object &&
-        'uid' in value &&
-        typeof value.uid === 'string' &&
-        Object.keys(value).length === 1
-      ) {
-        handles.push(await this.getElementByUid(value.uid));
-      }
-    }
-
-    const result = await this.pptrPage.evaluate(
-      async (stateKey, name, args, ...elements) => {
-        // Replace the UIDs with DOM elements.
-        for (const [key, value] of Object.entries(args)) {
-          if (
-            value instanceof Object &&
-            'uid' in value &&
-            typeof value.uid === 'string' &&
-            Object.keys(value).length === 1
-          ) {
-            args[key] = elements.shift();
-          }
-        }
-
-        const sym = Symbol.for(stateKey);
-        const w = window as unknown as Record<symbol, Record<string, unknown>>;
-        const state = w[sym];
-        const executeTool = state?.['executeTool'] as
-          | ((n: string, a: Record<string, unknown>) => unknown)
-          | undefined;
-        if (!executeTool) {
-          throw new Error('No tools found on the page');
-        }
-        const toolResult = await executeTool(name, args);
-
-        const stashDOMElement = (el: Element) => {
-          const s = (w[sym] ??= {});
-          let stashed = s['stashedElements'] as Element[] | undefined;
-          if (!stashed) {
-            stashed = [];
-            s['stashedElements'] = stashed;
-          }
-          stashed.push(el);
-          return {
-            stashedId: `stashed-${stashed.length - 1}`,
-          };
-        };
-
-        const ancestors: unknown[] = [];
-        // Recursively walks the tool result:
-        // - Replaces DOM elements with an ID and stashes the DOM element on the window object
-        // - Replaces non-plain objects with a string representation of the object
-        // - Replaces circular references with the string '<Circular reference>'
-        // - Replaces functions with the string '<Function object>'
-        const processToolResult = (
-          data: unknown,
-          parentEl?: unknown,
-        ): unknown => {
-          // 1. Handle DOM Elements
-          if (data instanceof Element) {
-            return stashDOMElement(data);
-          }
-
-          // 2. Handle Arrays
-          if (Array.isArray(data)) {
-            return data.map((item: unknown) =>
-              processToolResult(item, parentEl),
-            );
-          }
-
-          // 3. Handle Objects
-          if (data !== null && typeof data === 'object') {
-            while (ancestors.length > 0 && ancestors.at(-1) !== parentEl) {
-              ancestors.pop();
-            }
-            if (ancestors.includes(data)) {
-              return '<Circular reference>';
-            }
-            ancestors.push(data);
-
-            // If not a plain object, return a string representation of the object
-            if (Object.getPrototypeOf(data) !== Object.prototype) {
-              return `<${data.constructor.name} instance>`;
-            }
-
-            const processedObj: Record<string, unknown> = {};
-            for (const [key, value] of Object.entries(data)) {
-              processedObj[key] = processToolResult(value, data);
-            }
-            return processedObj;
-          }
-
-          // 4. Handle Functions
-          if (typeof data === 'function') {
-            return '<Function object>';
-          }
-
-          // 5. Return primitives (strings, numbers, booleans) as-is
-          return data;
-        };
-
-        const processed = processToolResult(toolResult);
-        const finalStashed = w[sym]?.['stashedElements'] as
-          | Element[]
-          | undefined;
-        return {
-          result: processed,
-          stashed: finalStashed?.length ?? 0,
-        };
-      },
-      DTMCP_SYMBOL_KEY,
-      toolName,
-      params,
-      ...handles,
-    );
-
-    const elementHandles: ElementHandle[] = [];
-    for (let i = 0; i < (result.stashed ?? 0); i++) {
-      const elementHandle = await this.pptrPage.evaluateHandle(
-        (stateKey, index) => {
-          const sym = Symbol.for(stateKey);
-          const w = window as unknown as Record<
-            symbol,
-            Record<string, unknown>
-          >;
-          const stashed = w[sym]?.['stashedElements'] as Element[] | undefined;
-          const el = stashed?.[index];
-          if (!el) {
-            throw new Error(`Stashed element at index ${index} not found`);
-          }
-          return el;
-        },
-        DTMCP_SYMBOL_KEY,
-        i,
-      );
-      elementHandles.push(elementHandle);
-    }
-
-    if (elementHandles.length) {
-      const oldHandles = [...this.extraHandles];
-      this.textSnapshot = await TextSnapshot.create(this, {
-        extraHandles: elementHandles,
-      });
-      response.includeSnapshot();
-
-      for (const handle of oldHandles) {
-        await handle
-          .dispose()
-          .catch(e => logger('Failed to dispose old handle', e));
-      }
-    }
-
-    const cdpElementIds = await Promise.all(
-      elementHandles.map(async (elementHandle, index) => {
-        const backendNodeId = await elementHandle.backendNodeId();
-        if (!backendNodeId) {
-          logger(
-            `No backendNodeId for stashed DOM element with index ${index}`,
-          );
-          return `stashed-${index}`;
-        }
-        const cdpElementId = this.resolveCdpElementId(backendNodeId);
-        if (!cdpElementId) {
-          logger(
-            `Could not get cdpElementId for backend node ${backendNodeId}`,
-          );
-          return `stashed-${index}`;
-        }
-        return cdpElementId;
-      }),
-    );
-
-    const recursivelyReplaceStashedElements = (node: unknown): unknown => {
-      if (Array.isArray(node)) {
-        return node.map(x => recursivelyReplaceStashedElements(x));
-      }
-      if (node !== null && typeof node === 'object') {
-        if (
-          'stashedId' in node &&
-          typeof node.stashedId === 'string' &&
-          node.stashedId.startsWith('stashed-') &&
-          Object.keys(node).length === 1
-        ) {
-          const index = parseInt(node.stashedId.split('-')[1]);
-          return {uid: cdpElementIds[index]};
-        }
-        const resultObj: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(node)) {
-          resultObj[key] = recursivelyReplaceStashedElements(value);
-        }
-        return resultObj;
-      }
-      return node;
-    };
-
-    const resultWithUids = recursivelyReplaceStashedElements(result.result);
-    response.appendResponseLine(JSON.stringify(resultWithUids, null, 2));
   }
 
   async getElementByUid(uid: string): Promise<ElementHandle<Element>> {

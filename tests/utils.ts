@@ -118,11 +118,11 @@ export async function withMcpContext(
     stealth?: boolean;
     allowUnrestrictedPaths?: boolean;
   } = {},
-  args: ParsedArguments = {} as ParsedArguments,
+  _args: ParsedArguments = {} as ParsedArguments,
 ) {
   await withBrowser(async browser => {
     TextSnapshot.resetCounter();
-    const response = new McpResponse(args);
+    const response = new McpResponse();
     if (context) {
       context.dispose();
     }
@@ -130,10 +130,8 @@ export async function withMcpContext(
       browser,
       logger('test'),
       {
-        experimentalDevToolsDebugging: false,
-        // Tests opt out of stealth so the Universe + ConsoleCollector are
-        // initialized and console-related expectations match upstream behavior.
-        // Stealth-mode behavior is exercised by dedicated tests.
+        // Tests opt out of humanized input by default so timing-sensitive
+        // expectations stay stable. Stealth is on everywhere in production.
         stealth: options.stealth ?? false,
         allowUnrestrictedPaths: options.allowUnrestrictedPaths ?? false,
       },

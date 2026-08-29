@@ -21,7 +21,6 @@ import {
 import {executablePath} from 'puppeteer';
 
 import type {ToolCategory} from '../src/tools/categories.js';
-import {OFF_BY_DEFAULT_CATEGORIES} from '../src/tools/categories.js';
 import type {ToolDefinition} from '../src/tools/ToolDefinition.js';
 
 describe('e2e', () => {
@@ -82,92 +81,14 @@ describe('e2e', () => {
     });
   });
 
-  it('has all tools with off by default categories', async () => {
-    await withClient(
-      async client => {
-        const {tools} = await client.listTools();
-        const exposedNames = tools.map(t => t.name).sort();
-        const definedNames = await getToolsWithFilteredCategories();
-        definedNames.sort();
-        assert.deepStrictEqual(exposedNames, definedNames);
-      },
-      OFF_BY_DEFAULT_CATEGORIES.map(category => `--category-${category}`),
-    );
-  });
-
   it('has all tools', async () => {
     await withClient(async client => {
       const {tools} = await client.listTools();
       const exposedNames = tools.map(t => t.name).sort();
-      const definedNames = await getToolsWithFilteredCategories(
-        OFF_BY_DEFAULT_CATEGORIES,
-      );
+      const definedNames = await getToolsWithFilteredCategories();
       definedNames.sort();
       assert.deepStrictEqual(exposedNames, definedNames);
     });
-  });
-
-  it('has experimental in-Page tools', async () => {
-    await withClient(
-      async client => {
-        const {tools} = await client.listTools();
-        const listInPageTools = tools.find(
-          t => t.name === 'list_in_page_tools',
-        );
-        assert.ok(listInPageTools);
-      },
-      ['--category-experimental-in-page'],
-    );
-  });
-
-  it('has experimental extensions tools', async () => {
-    await withClient(
-      async client => {
-        const {tools} = await client.listTools();
-        const installExtension = tools.find(
-          t => t.name === 'install_extension',
-        );
-        assert.ok(installExtension);
-      },
-      ['--category-extensions'],
-    );
-  });
-
-  it('has experimental vision tools', async () => {
-    await withClient(
-      async client => {
-        const {tools} = await client.listTools();
-        const clickAt = tools.find(t => t.name === 'click_at');
-        assert.ok(clickAt);
-      },
-      ['--experimental-vision'],
-    );
-  });
-
-  it('has experimental interop tools', async () => {
-    await withClient(
-      async client => {
-        const {tools} = await client.listTools();
-        const getTabId = tools.find(t => t.name === 'get_tab_id');
-        assert.ok(getTabId);
-      },
-      ['--experimental-interop-tools'],
-    );
-  });
-
-  it('has experimental webmcp', async () => {
-    await withClient(
-      async client => {
-        const {tools} = await client.listTools();
-        const listWebMcpTools = tools.find(t => t.name === 'list_webmcp_tools');
-        const executeWebMcpTool = tools.find(
-          t => t.name === 'execute_webmcp_tool',
-        );
-        assert.ok(listWebMcpTools);
-        assert.ok(executeWebMcpTool);
-      },
-      ['--experimental-webmcp'],
-    );
   });
 
   it('updates roots when client notifies', async () => {

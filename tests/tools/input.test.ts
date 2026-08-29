@@ -9,7 +9,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {describe, it} from 'node:test';
 
-import type {ParsedArguments} from '../../src/bin/ghostframe-mcp-cli-options.js';
 import {McpResponse} from '../../src/McpResponse.js';
 import {TextSnapshot} from '../../src/TextSnapshot.js';
 import {
@@ -20,7 +19,6 @@ import {
   fillForm,
   uploadFile,
   pressKey,
-  clickAt,
   typeText,
 } from '../../src/tools/input.js';
 import {setHumanInputTestHooks} from '../../src/utils/humanInput.js';
@@ -299,73 +297,6 @@ describe('input', () => {
         );
         assert.ok(response.includeSnapshot);
         assert.ok(await page.$('text/hovered'));
-      });
-    });
-  });
-
-  describe('click_at', () => {
-    it('clicks at coordinates', async () => {
-      await withMcpContext(async (response, context) => {
-        const page = context.getSelectedPptrPage();
-        await page.setContent(
-          html`<div
-            style="width: 100px; height: 100px; background: red;"
-            onclick="this.innerText = 'clicked'"
-          ></div>`,
-        );
-        context.getSelectedMcpPage().textSnapshot = await TextSnapshot.create(
-          context.getSelectedMcpPage(),
-        );
-        await clickAt.handler(
-          {
-            params: {
-              x: 50,
-              y: 50,
-            },
-            page: context.getSelectedMcpPage(),
-          },
-          response,
-          context,
-        );
-        assert.strictEqual(
-          response.responseLines[0],
-          'Successfully clicked at the coordinates',
-        );
-        assert.ok(response.includeSnapshot);
-        assert.ok(await page.$('text/clicked'));
-      });
-    });
-
-    it('double clicks at coordinates', async () => {
-      await withMcpContext(async (response, context) => {
-        const page = context.getSelectedPptrPage();
-        await page.setContent(
-          html`<div
-            style="width: 100px; height: 100px; background: red;"
-            ondblclick="this.innerText = 'dblclicked'"
-          ></div>`,
-        );
-        context.getSelectedMcpPage().textSnapshot = await TextSnapshot.create(
-          context.getSelectedMcpPage(),
-        );
-        await clickAt.handler(
-          {
-            params: {
-              x: 50,
-              y: 50,
-              dblClick: true,
-            },
-            page: context.getSelectedMcpPage(),
-          },
-          response,
-          context,
-        );
-        assert.strictEqual(
-          response.responseLines[0],
-          'Successfully double clicked at the coordinates',
-        );
-        assert.ok(response.includeSnapshot);
-        assert.ok(await page.$('text/dblclicked'));
       });
     });
   });
@@ -661,7 +592,7 @@ describe('input', () => {
         );
 
         // Fill email
-        const response1 = new McpResponse({} as ParsedArguments);
+        const response1 = new McpResponse();
         await fill.handler(
           {
             params: {
@@ -679,7 +610,7 @@ describe('input', () => {
         );
 
         // Fill password
-        const response2 = new McpResponse({} as ParsedArguments);
+        const response2 = new McpResponse();
         await fill.handler(
           {
             params: {

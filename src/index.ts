@@ -8,15 +8,12 @@ import type fs from 'node:fs';
 
 import type {parseArguments} from './bin/ghostframe-mcp-cli-options.js';
 import type {Channel} from './browser.js';
-import {ensureBrowserConnected, ensureBrowserLaunched} from './browser.js';
+import {ensureBrowserLaunched} from './browser.js';
 import {loadIssueDescriptions} from './issue-descriptions.js';
 import {logger} from './logger.js';
 import {McpContext} from './McpContext.js';
 import {McpResponse} from './McpResponse.js';
 import {Mutex} from './Mutex.js';
-import {SlimMcpResponse} from './SlimMcpResponse.js';
-import {ClearcutLogger} from './telemetry/ClearcutLogger.js';
-import {bucketizeLatency} from './telemetry/metricUtils.js';
 import {
   McpServer,
   type CallToolResult,
@@ -136,17 +133,6 @@ export async function createMcpServer(
     logFile?: fs.WriteStream;
   },
 ) {
-  let clearcutLogger: ClearcutLogger | undefined;
-  if (serverArgs.usageStatistics) {
-    clearcutLogger = new ClearcutLogger({
-      logFile: serverArgs.logFile,
-      appVersion: VERSION,
-      clearcutEndpoint: serverArgs.clearcutEndpoint,
-      clearcutForceFlushIntervalMs: serverArgs.clearcutForceFlushIntervalMs,
-      clearcutIncludePidHeader: serverArgs.clearcutIncludePidHeader,
-    });
-  }
-
   const server = new McpServer(
     {
       name: 'ghostframe',
@@ -175,10 +161,6 @@ export async function createMcpServer(
   };
 
   server.server.oninitialized = () => {
-    const clientName = server.server.getClientVersion()?.name;
-    if (clientName) {
-      clearcutLogger?.setClientName(clientName);
-    }
     if (server.server.getClientCapabilities()?.roots) {
       void updateRoots();
       server.server.setNotificationHandler(
@@ -204,48 +186,24 @@ export async function createMcpServer(
     if (proxy) {
       chromeArgs.push(`--proxy-server=${proxy.server}`);
     }
-    const devtools = serverArgs.experimentalDevtools ?? false;
-    const browser =
-      serverArgs.browserUrl || serverArgs.wsEndpoint || serverArgs.autoConnect
-        ? await ensureBrowserConnected({
-            browserURL: serverArgs.browserUrl,
-            wsEndpoint: serverArgs.wsEndpoint,
-            wsHeaders: serverArgs.wsHeaders,
-            // Important: only pass channel, if autoConnect is true.
-            channel: serverArgs.autoConnect
-              ? (serverArgs.channel as Channel)
-              : undefined,
-            userDataDir: serverArgs.userDataDir,
-            devtools,
-            enableExtensions: serverArgs.categoryExtensions,
-          })
-        : await ensureBrowserLaunched({
-            headless: serverArgs.headless,
-            executablePath: serverArgs.executablePath,
-            channel: serverArgs.channel as Channel,
-            isolated: serverArgs.isolated ?? false,
-            userDataDir: serverArgs.userDataDir,
-            logFile: options.logFile,
-            viewport: serverArgs.viewport,
-            chromeArgs,
-            ignoreDefaultChromeArgs,
-            acceptInsecureCerts: serverArgs.acceptInsecureCerts,
-            devtools,
-            enableExtensions: serverArgs.categoryExtensions,
-            viaCli: serverArgs.viaCli,
-            // The McpContext-level stealth default does not propagate to
-            // launch automatically; forward the CLI flag explicitly so the
-            // Patchright-shape DOM polyfills are installed at launch time.
-            stealth: serverArgs.stealth,
-            proxyUsername: proxy?.username,
-            proxyPassword: proxy?.password,
-          });
+    const browser = await ensureBrowserLaunched({
+      headless: serverArgs.headless,
+      executablePath: serverArgs.executablePath,
+      channel: serverArgs.channel as Channel,
+      isolated: serverArgs.isolated ?? false,
+      userDataDir: serverArgs.userDataDir,
+      logFile: options.logFile,
+      viewport: serverArgs.viewport,
+      chromeArgs,
+      ignoreDefaultChromeArgs,
+      acceptInsecureCerts: serverArgs.acceptInsecureCerts,
+      viaCli: serverArgs.viaCli,
+      proxyUsername: proxy?.username,
+      proxyPassword: proxy?.password,
+    });
 
     if (context?.browser !== browser) {
       context = await McpContext.from(browser, logger, {
-        experimentalDevToolsDebugging: devtools,
-        experimentalIncludeAllPages: serverArgs.experimentalIncludeAllPages,
-        stealth: serverArgs.stealth,
         allowUnrestrictedPaths: serverArgs.allowUnrestrictedPaths,
       });
       await updateRoots();
@@ -266,10 +224,7 @@ export async function createMcpServer(
     }
 
     const schema =
-      'pageScoped' in tool &&
-      tool.pageScoped &&
-      serverArgs.experimentalPageIdRouting &&
-      !serverArgs.slim
+      'pageScoped' in tool && tool.pageScoped
         ? {...tool.schema, ...pageIdSchema}
         : tool.schema;
 
@@ -294,8 +249,6 @@ export async function createMcpServer(
         }
 
         const guard = await toolMutex.acquire();
-        const startTime = Date.now();
-        let success = false;
         try {
           logger(
             `${tool.name} request: ${JSON.stringify(redactSensitiveValues(params), null, '  ')}`,
@@ -303,18 +256,13 @@ export async function createMcpServer(
           const context = await getContext();
           logger(`${tool.name} context: resolved`);
           await context.detectOpenDevToolsWindows();
-          const response = serverArgs.slim
-            ? new SlimMcpResponse(serverArgs)
-            : new McpResponse(serverArgs);
+          const response = new McpResponse();
 
           response.setRedactNetworkHeaders(serverArgs.redactNetworkHeaders);
           try {
-            const page =
-              serverArgs.experimentalPageIdRouting &&
-              params.pageId &&
-              !serverArgs.slim
-                ? context.getPageById(params.pageId)
-                : context.getSelectedMcpPage();
+            const page = params.pageId
+              ? context.getPageById(params.pageId)
+              : context.getSelectedMcpPage();
             response.setPage(page);
             if (tool.blockedByDialog) {
               page.throwIfDialogOpen();
@@ -353,13 +301,10 @@ export async function createMcpServer(
           if (response.error) {
             result.isError = true;
           }
-          success = true;
-          if (serverArgs.experimentalStructuredContent) {
-            result.structuredContent = structuredContent as Record<
-              string,
-              unknown
-            >;
-          }
+          result.structuredContent = structuredContent as Record<
+            string,
+            unknown
+          >;
           return result;
         } catch (err) {
           logger(`${tool.name} error:`, err, err?.stack);
@@ -377,13 +322,6 @@ export async function createMcpServer(
             isError: true,
           };
         } finally {
-          void clearcutLogger?.logToolInvocation({
-            toolName: tool.name,
-            params,
-            schema,
-            success,
-            latencyMs: bucketizeLatency(Date.now() - startTime),
-          });
           guard.dispose();
         }
       },
@@ -397,21 +335,13 @@ export async function createMcpServer(
 
   await loadIssueDescriptions();
 
-  return {server, clearcutLogger};
+  return {server};
 }
 
-export const logDisclaimers = (args: ReturnType<typeof parseArguments>) => {
+export const logDisclaimers = () => {
   console.error(
     `ghostframe-mcp exposes content of the browser instance to the MCP clients allowing them to inspect,
 debug, and modify any data in the browser or DevTools.
 Avoid sharing sensitive or personal information that you do not want to share with MCP clients.`,
   );
-
-  if (!args.slim && args.usageStatistics) {
-    console.error(
-      `
-Google collects usage statistics to improve Chrome DevTools MCP. To opt-out, run with --no-usage-statistics.
-For more details, visit: https://github.com/ChromeDevTools/chrome-devtools-mcp#usage-statistics`,
-    );
-  }
 };

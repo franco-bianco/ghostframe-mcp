@@ -15,21 +15,12 @@ describe('cli args parsing', () => {
     categoryEmulation: true,
     'category-network': true,
     categoryNetwork: true,
-    'category-extensions': false,
-    categoryExtensions: false,
-    'category-experimental-in-page': false,
-    categoryExperimentalInPage: false,
-    'auto-connect': undefined,
-    autoConnect: undefined,
-    stealth: true,
-    'usage-statistics': false,
-    usageStatistics: false,
     'allow-legacy-proxy-credentials': false,
     allowLegacyProxyCredentials: false,
     'allow-unrestricted-paths': false,
     allowUnrestrictedPaths: false,
-    'redact-network-headers': false,
-    redactNetworkHeaders: false,
+    'redact-network-headers': true,
+    redactNetworkHeaders: true,
   };
 
   it('parses with default args', async () => {
@@ -40,24 +31,6 @@ describe('cli args parsing', () => {
       headless: false,
       $0: 'ghostframe-mcp',
       channel: 'stable',
-    });
-  });
-
-  it('parses with browser url', async () => {
-    const args = parseArguments('1.0.0', [
-      'node',
-      'main.js',
-      '--browserUrl',
-      'http://localhost:3000',
-    ]);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      'browser-url': 'http://localhost:3000',
-      browserUrl: 'http://localhost:3000',
-      u: 'http://localhost:3000',
     });
   });
 
@@ -76,25 +49,6 @@ describe('cli args parsing', () => {
       channel: 'stable',
       'user-data-dir': '/tmp/chrome-profile',
       userDataDir: '/tmp/chrome-profile',
-    });
-  });
-
-  it('parses an empty browser url', async () => {
-    const args = parseArguments('1.0.0', [
-      'node',
-      'main.js',
-      '--browserUrl',
-      '',
-    ]);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      'browser-url': undefined,
-      browserUrl: undefined,
-      u: undefined,
-      channel: 'stable',
     });
   });
 
@@ -178,57 +132,6 @@ describe('cli args parsing', () => {
     });
   });
 
-  it('parses wsEndpoint with ws:// protocol', async () => {
-    const args = parseArguments('1.0.0', [
-      'node',
-      'main.js',
-      '--wsEndpoint',
-      'ws://127.0.0.1:9222/devtools/browser/abc123',
-    ]);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      'ws-endpoint': 'ws://127.0.0.1:9222/devtools/browser/abc123',
-      wsEndpoint: 'ws://127.0.0.1:9222/devtools/browser/abc123',
-      w: 'ws://127.0.0.1:9222/devtools/browser/abc123',
-    });
-  });
-
-  it('parses wsEndpoint with wss:// protocol', async () => {
-    const args = parseArguments('1.0.0', [
-      'node',
-      'main.js',
-      '--wsEndpoint',
-      'wss://example.com:9222/devtools/browser/abc123',
-    ]);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      'ws-endpoint': 'wss://example.com:9222/devtools/browser/abc123',
-      wsEndpoint: 'wss://example.com:9222/devtools/browser/abc123',
-      w: 'wss://example.com:9222/devtools/browser/abc123',
-    });
-  });
-
-  it('parses wsHeaders with valid JSON', async () => {
-    const args = parseArguments('1.0.0', [
-      'node',
-      'main.js',
-      '--wsEndpoint',
-      'ws://127.0.0.1:9222/devtools/browser/abc123',
-      '--wsHeaders',
-      '{"Authorization":"Bearer token","X-Custom":"value"}',
-    ]);
-    assert.deepStrictEqual(args.wsHeaders, {
-      Authorization: 'Bearer token',
-      'X-Custom': 'value',
-    });
-  });
-
   it('parses disabled category', async () => {
     const args = parseArguments('1.0.0', [
       'node',
@@ -244,36 +147,5 @@ describe('cli args parsing', () => {
       'category-emulation': false,
       categoryEmulation: false,
     });
-  });
-  it('parses auto-connect', async () => {
-    const args = parseArguments('1.0.0', ['node', 'main.js', '--auto-connect']);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      channel: 'stable',
-      'auto-connect': true,
-      autoConnect: true,
-    });
-  });
-
-  it('parses usage statistics flag', async () => {
-    const defaultArgs = parseArguments('1.0.0', ['node', 'main.js']);
-    assert.strictEqual(defaultArgs.usageStatistics, false);
-
-    const enabledArgs = parseArguments('1.0.0', [
-      'node',
-      'main.js',
-      '--usage-statistics',
-    ]);
-    assert.strictEqual(enabledArgs.usageStatistics, true);
-
-    const disabledArgs = parseArguments('1.0.0', [
-      'node',
-      'main.js',
-      '--no-usage-statistics',
-    ]);
-    assert.strictEqual(disabledArgs.usageStatistics, false);
   });
 });

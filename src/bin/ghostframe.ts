@@ -21,26 +21,16 @@ import {
 import {isDaemonRunning, serializeArgs} from '../daemon/utils.js';
 import {logDisclaimers} from '../index.js';
 import {hideBin, yargs, type CallToolResult} from '../third_party/index.js';
-import {checkForUpdates} from '../utils/check-for-updates.js';
 import {VERSION} from '../version.js';
 
 import {commands} from './ghostframe-cli-options.js';
-import {cliOptions, parseArguments} from './ghostframe-mcp-cli-options.js';
-
-await checkForUpdates(
-  'Run `git pull && npm run build` in the fork and `ghostframe start` to update and restart the daemon.',
-);
+import {cliOptions} from './ghostframe-mcp-cli-options.js';
 
 async function start(args: string[], sessionId: string) {
   const hasProfileMode = args.some(arg => {
-    return [
-      '--isolated',
-      '--no-isolated',
-      '--user-data-dir',
-      '--auto-connect',
-      '--browser-url',
-      '--ws-endpoint',
-    ].some(option => arg === option || arg.startsWith(`${option}=`));
+    return ['--isolated', '--no-isolated', '--user-data-dir'].some(
+      option => arg === option || arg.startsWith(`${option}=`),
+    );
   });
   const combinedArgs = [
     ...defaultArgs,
@@ -48,15 +38,10 @@ async function start(args: string[], sessionId: string) {
     ...args,
   ];
   await startDaemon(combinedArgs, sessionId);
-  logDisclaimers(parseArguments(VERSION, combinedArgs));
+  logDisclaimers();
 }
 
-const defaultArgs = [
-  '--viaCli',
-  '--experimentalStructuredContent',
-  '--headless',
-  '--category-extensions',
-];
+const defaultArgs = ['--viaCli', '--headless'];
 
 const startCliOptions: Partial<typeof cliOptions> = {
   ...cliOptions,
@@ -68,10 +53,6 @@ const startCliOptions: Partial<typeof cliOptions> = {
   },
 };
 delete startCliOptions.viewport;
-
-delete startCliOptions.experimentalStructuredContent;
-delete startCliOptions.experimentalInteropTools;
-delete startCliOptions.experimentalPageIdRouting;
 
 const y = yargs(hideBin(process.argv))
   .scriptName('ghostframe')
@@ -93,36 +74,12 @@ const y = yargs(hideBin(process.argv))
 y.command(
   'start',
   'Start or restart ghostframe-mcp',
-  y =>
-    y
-      .options(startCliOptions)
-      .check(argv => {
-        if (
-          argv.categoryExtensions &&
-          (argv.autoConnect || argv.browserUrl || argv.wsEndpoint)
-        ) {
-          throw new Error(
-            'categoryExtensions cannot be used with autoConnect, browserUrl, or wsEndpoint.',
-          );
-        }
-        return true;
-      })
-      .example(
-        '$0 start --browserUrl http://localhost:9222',
-        'Start the server connecting to an existing browser',
-      )
-      .strict(),
+  y => y.options(startCliOptions).strict(),
   async argv => {
     if (isDaemonRunning(argv.sessionId)) {
       await stopDaemon(argv.sessionId);
     }
-    if (
-      argv.isolated === undefined &&
-      !argv.userDataDir &&
-      !argv.autoConnect &&
-      !argv.browserUrl &&
-      !argv.wsEndpoint
-    ) {
+    if (argv.isolated === undefined && !argv.userDataDir) {
       argv.isolated = true;
     }
     const categoryExtensionsSpecified = hideBin(process.argv).some(arg => {
@@ -134,11 +91,7 @@ y.command(
       );
     });
     if (!categoryExtensionsSpecified) {
-      argv.categoryExtensions = !(
-        argv.autoConnect ||
-        argv.browserUrl ||
-        argv.wsEndpoint
-      );
+      argv.categoryExtensions = true;
     }
     const args = serializeArgs(cliOptions, argv);
     await start(args, argv.sessionId);

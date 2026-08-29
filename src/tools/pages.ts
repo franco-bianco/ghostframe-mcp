@@ -5,7 +5,7 @@
  */
 
 import {logger} from '../logger.js';
-import type {CdpPage, Dialog, HTTPRequest} from '../third_party/index.js';
+import type {Dialog, HTTPRequest} from '../third_party/index.js';
 import {zod} from '../third_party/index.js';
 
 import {ToolCategory} from './categories.js';
@@ -75,10 +75,10 @@ async function navigateWithInterception(
   }
 }
 
-export const listPages = defineTool(args => {
+export const listPages = defineTool(() => {
   return {
     name: 'list_pages',
-    description: `Get a list of pages${args?.categoryExtensions ? ' including extension service workers' : ''} open in the browser.`,
+    description: `Get a list of pages open in the browser.`,
     annotations: {
       category: ToolCategory.NAVIGATION,
       readOnlyHint: true,
@@ -87,8 +87,6 @@ export const listPages = defineTool(args => {
     blockedByDialog: false,
     handler: async (_request, response) => {
       response.setIncludePages(true);
-      response.setListInPageTools();
-      response.setListWebMcpTools();
     },
   };
 });
@@ -116,8 +114,6 @@ export const selectPage = defineTool({
     const page = context.getPageById(request.params.pageId);
     context.selectPage(page);
     response.setIncludePages(true);
-    response.setListInPageTools();
-    response.setListWebMcpTools();
     if (request.params.bringToFront) {
       await page.pptrPage.bringToFront();
     }
@@ -148,11 +144,10 @@ export const closePage = defineTool({
       }
     }
     response.setIncludePages(true);
-    response.setListInPageTools();
   },
 });
 
-export const newPage = defineTool(args => {
+export const newPage = defineTool(() => {
   return {
     name: 'new_page',
     description: `Open a new tab and load a URL. Use project URL if not specified otherwise.`,
@@ -176,16 +171,12 @@ export const newPage = defineTool(args => {
             'Pages in the same browser context share cookies and storage. ' +
             'Pages in different browser contexts are fully isolated.',
         ),
-      ...(args?.experimentalNavigationAllowlist
-        ? {
-            allowList: zod
-              .string()
-              .optional()
-              .describe(
-                'Optional comma-separated list of URL patterns to allow. If provided, all other navigations will be blocked.',
-              ),
-          }
-        : {}),
+      allowList: zod
+        .string()
+        .optional()
+        .describe(
+          'Optional comma-separated list of URL patterns to allow. If provided, all other navigations will be blocked.',
+        ),
       ...timeoutSchema,
     },
     blockedByDialog: false,
@@ -206,12 +197,11 @@ export const newPage = defineTool(args => {
       );
 
       response.setIncludePages(true);
-      response.setListInPageTools();
     },
   };
 });
 
-export const navigatePage = definePageTool(args => {
+export const navigatePage = definePageTool(() => {
   return {
     name: 'navigate_page',
     description: `Go to a URL, or back, forward, or reload. Use project URL if not specified otherwise.`,
@@ -243,16 +233,12 @@ export const navigatePage = definePageTool(args => {
         .describe(
           'A JavaScript script to be executed on each new document before any other scripts for the next navigation.',
         ),
-      ...(args?.experimentalNavigationAllowlist
-        ? {
-            allowList: zod
-              .string()
-              .optional()
-              .describe(
-                'Optional comma-separated list of URL patterns to allow. If provided, all other navigations will be blocked.',
-              ),
-          }
-        : {}),
+      allowList: zod
+        .string()
+        .optional()
+        .describe(
+          'Optional comma-separated list of URL patterns to allow. If provided, all other navigations will be blocked.',
+        ),
       ...timeoutSchema,
     },
     blockedByDialog: false,
@@ -373,8 +359,6 @@ export const navigatePage = definePageTool(args => {
       }
 
       response.setIncludePages(true);
-      response.setListInPageTools();
-      response.setListWebMcpTools();
     },
   };
 });
@@ -468,28 +452,5 @@ export const handleDialog = definePageTool({
 
     page.clearDialog();
     response.setIncludePages(true);
-  },
-});
-
-export const getTabId = definePageTool({
-  name: 'get_tab_id',
-  description: `Get the tab ID of the page`,
-  annotations: {
-    category: ToolCategory.NAVIGATION,
-    readOnlyHint: true,
-    conditions: ['experimentalInteropTools'],
-  },
-  schema: {
-    pageId: zod
-      .number()
-      .describe(
-        `The ID of the page to get the tab ID for. Call ${listPages().name} to get available pages.`,
-      ),
-  },
-  blockedByDialog: false,
-  handler: async (request, response, context) => {
-    const page = context.getPageById(request.params.pageId);
-    const tabId = (page.pptrPage as unknown as CdpPage)._tabId;
-    response.setTabId(tabId);
   },
 });

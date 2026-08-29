@@ -12,19 +12,18 @@ import type {
   Realm,
   WebWorker,
 } from '../third_party/index.js';
-import type {ExtensionServiceWorker} from '../types.js';
 
 import {ToolCategory} from './categories.js';
-import type {Context, Response} from './ToolDefinition.js';
+import type {Response} from './ToolDefinition.js';
 import {defineTool, pageIdSchema} from './ToolDefinition.js';
 
 export type Evaluatable = Page | Frame | WebWorker;
 type EvaluationTarget = Evaluatable | Realm;
 
-export const evaluateScript = defineTool(cliArgs => {
+export const evaluateScript = defineTool(() => {
   return {
     name: 'evaluate_script',
-    description: `Evaluate a JavaScript function inside the currently selected page${cliArgs?.categoryExtensions ? ' or service worker' : ''}. Returns the response as JSON,
+    description: `Evaluate a JavaScript function inside the currently selected page. Returns the response as JSON,
 so returned values have to be JSON-serializable.`,
     annotations: {
       category: ToolCategory.DEBUGGING,
@@ -65,27 +64,11 @@ Example with arguments: \`(el) => {
         .describe(
           'Execution world. "isolated" (default when no args/element UIDs are passed; recommended for stealth) runs in a fresh isolated context invisible to page scripts and to Function.prototype.toString patching detection. "main" runs in the same realm as page scripts. Defaults to "main" when args contain element UIDs, since element handles can only be evaluated in the realm that created them. Has no effect when evaluating in a service worker.',
         ),
-      ...(cliArgs?.experimentalPageIdRouting ? pageIdSchema : {}),
-      ...(cliArgs?.categoryExtensions
-        ? {
-            serviceWorkerId: zod
-              .string()
-              .optional()
-              .describe(
-                `The optional service worker id to evaluate the script in. If provided, 'pageId' should be omitted. Note: 'args' (element UIDs) cannot be used when evaluating in a service worker.`,
-              ),
-          }
-        : {}),
+      ...pageIdSchema,
     },
     blockedByDialog: true,
     handler: async (request, response, context) => {
-      const {
-        serviceWorkerId,
-        args: uidArgs,
-        function: fnString,
-        pageId,
-        dialogAction,
-      } = request.params;
+      const {args: uidArgs, function: fnString, dialogAction} = request.params;
       // Element handles are bound to the realm that created them, so when the
       // caller passes element UIDs we have to evaluate in main world. Default
       // to isolated when no element UIDs are passed.
@@ -93,27 +76,7 @@ Example with arguments: \`(el) => {
         request.params.world ??
         (uidArgs && uidArgs.length > 0 ? 'main' : 'isolated');
 
-      if (cliArgs?.categoryExtensions && serviceWorkerId) {
-        if (uidArgs && uidArgs.length > 0) {
-          throw new Error(
-            'args (element uids) cannot be used when evaluating in a service worker.',
-          );
-        }
-        if (pageId) {
-          throw new Error('specify either a pageId or a serviceWorkerId.');
-        }
-
-        const worker = await getWebWorker(context, serviceWorkerId);
-        await context.getSelectedMcpPage().waitForEventsAfterAction(
-          async () => {
-            await performEvaluation(worker, fnString, [], response);
-          },
-          {handleDialog: dialogAction ?? 'accept'},
-        );
-        return;
-      }
-
-      const mcpPage = cliArgs?.experimentalPageIdRouting
+      const mcpPage = request.params.pageId
         ? context.getPageById(request.params.pageId)
         : context.getSelectedMcpPage();
       const page: Page = mcpPage.pptrPage;
@@ -194,28 +157,4 @@ const getPageOrFrame = async (
   }
 
   return pageOrFrame;
-};
-
-const getWebWorker = async (
-  context: Context,
-  serviceWorkerId: string,
-): Promise<WebWorker> => {
-  const serviceWorkers = context.getExtensionServiceWorkers();
-
-  const serviceWorker = serviceWorkers.find(
-    (sw: ExtensionServiceWorker) =>
-      context.getExtensionServiceWorkerId(sw) === serviceWorkerId,
-  );
-
-  if (serviceWorker && serviceWorker.target) {
-    const worker = await serviceWorker.target.worker();
-
-    if (!worker) {
-      throw new Error('Service worker target not found.');
-    }
-
-    return worker;
-  } else {
-    throw new Error('Service worker not found.');
-  }
 };

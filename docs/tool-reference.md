@@ -1,6 +1,6 @@
 <!-- AUTO GENERATED DO NOT EDIT - run 'npm run gen' to update-->
 
-# Chrome DevTools MCP Tool Reference (~6496 cl100k_base tokens)
+# ghostframe-mcp Tool Reference (~7145 cl100k_base tokens)
 
 - **[Input automation](#input-automation)** (9 tools)
   - [`click`](#click)
@@ -32,12 +32,6 @@
   - [`list_console_messages`](#list_console_messages)
   - [`take_screenshot`](#take_screenshot)
   - [`take_snapshot`](#take_snapshot)
-- **[Extensions](#extensions)** (5 tools)
-  - [`install_extension`](#install_extension)
-  - [`list_extensions`](#list_extensions)
-  - [`reload_extension`](#reload_extension)
-  - [`trigger_extension_action`](#trigger_extension_action)
-  - [`uninstall_extension`](#uninstall_extension)
 
 ## Input automation
 
@@ -170,6 +164,7 @@
 
 **Parameters:**
 
+- **allowList** (string) _(optional)_: Optional comma-separated list of URL patterns to allow. If provided, all other navigations will be blocked.
 - **handleBeforeUnload** (enum: "accept", "decline") _(optional)_: Whether to auto accept or beforeunload dialogs triggered by this navigation. Default is accept.
 - **ignoreCache** (boolean) _(optional)_: Whether to ignore cache on reload.
 - **initScript** (string) _(optional)_: A JavaScript script to be executed on each new document before any other scripts for the next navigation.
@@ -186,6 +181,7 @@
 **Parameters:**
 
 - **url** (string) **(required)**: URL to load in a new page.
+- **allowList** (string) _(optional)_: Optional comma-separated list of URL patterns to allow. If provided, all other navigations will be blocked.
 - **background** (boolean) _(optional)_: Whether to open the page in the background without bringing it to the front. Default is false (foreground).
 - **isolatedContext** (string) _(optional)_: If specified, the page is created in an isolated browser context with the given name. Pages in the same browser context share cookies and storage. Pages in different browser contexts are fully isolated.
 - **timeout** (integer) _(optional)_: Maximum wait time in milliseconds. If set to 0, the default timeout will be used.
@@ -274,7 +270,7 @@
 
 ### `set_blocked_urls`
 
-**Description:** Block requests for URLs matching any of the given patterns. Patterns may include the \* wildcard. Pass an empty array to clear all blocks. Useful for blocking trackers, ad networks, or fingerprint-collection endpoints during stealth runs.
+**Description:** Block requests for URLs matching any of the given patterns. Patterns may include the * wildcard. Pass an empty array to clear all blocks. Useful for blocking trackers, ad networks, or fingerprint-collection endpoints during stealth runs.
 
 **Parameters:**
 
@@ -292,17 +288,18 @@ so returned values have to be JSON-serializable.
 **Parameters:**
 
 - **function** (string) **(required)**: A JavaScript function declaration to be executed by the tool in the currently selected page.
-  Example without arguments: `() => {
+Example without arguments: `() => {
   return document.title
 }` or `async () => {
   return await fetch("example.com")
 }`.
-  Example with arguments: `(el) => {
+Example with arguments: `(el) => {
   return el.innerText;
 }`
 
 - **args** (array) _(optional)_: An optional list of arguments to pass to the function.
 - **dialogAction** (string) _(optional)_: Handle dialogs while execution. "accept", "dismiss", or string for response of window.prompt. Defaults to accept.
+- **pageId** (number) _(optional)_: Targets a specific page by ID.
 - **world** (enum: "isolated", "main") _(optional)_: Execution world. "isolated" (default when no args/element UIDs are passed; recommended for stealth) runs in a fresh isolated context invisible to page scripts and to Function.prototype.toString patching detection. "main" runs in the same realm as page scripts. Defaults to "main" when args contain element UIDs, since element handles can only be evaluated in the realm that created them. Has no effect when evaluating in a service worker.
 
 ---
@@ -354,57 +351,5 @@ in the DevTools Elements panel (if any).
 
 - **filePath** (string) _(optional)_: The absolute path, or a path relative to the current working directory, to save the snapshot to instead of attaching it to the response.
 - **verbose** (boolean) _(optional)_: Whether to include all possible information available in the full a11y tree. Default is false.
-
----
-
-## Extensions
-
-> NOTE: Extensions are not active by default. Use the '--categoryExtensions' flag
-
-### `install_extension`
-
-**Description:** Installs a Chrome extension from the given path.
-
-**Parameters:**
-
-- **path** (string) **(required)**: Absolute path to the unpacked extension folder.
-
----
-
-### `list_extensions`
-
-**Description:** Lists all the Chrome extensions installed in the browser. This includes their name, ID, version, and enabled status.
-
-**Parameters:** None
-
----
-
-### `reload_extension`
-
-**Description:** Reloads an unpacked Chrome extension by its ID.
-
-**Parameters:**
-
-- **id** (string) **(required)**: ID of the extension to reload.
-
----
-
-### `trigger_extension_action`
-
-**Description:** Triggers the default action of an extension by its ID.
-
-**Parameters:**
-
-- **id** (string) **(required)**: ID of the extension to trigger the action for.
-
----
-
-### `uninstall_extension`
-
-**Description:** Uninstalls a Chrome extension by its ID.
-
-**Parameters:**
-
-- **id** (string) **(required)**: ID of the extension to uninstall.
 
 ---

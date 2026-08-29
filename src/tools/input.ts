@@ -102,45 +102,6 @@ export const click = definePageTool({
   },
 });
 
-export const clickAt = definePageTool({
-  name: 'click_at',
-  description: `Clicks at the provided coordinates`,
-  annotations: {
-    category: ToolCategory.INPUT,
-    readOnlyHint: false,
-    conditions: ['experimentalVision'],
-  },
-  schema: {
-    x: zod.number().describe('The x coordinate'),
-    y: zod.number().describe('The y coordinate'),
-    dblClick: dblClickSchema,
-    includeSnapshot: includeSnapshotSchema,
-  },
-  blockedByDialog: true,
-  handler: async (request, response, context) => {
-    const page = request.page;
-    const disabled = isStealthDisabled(context);
-    await page.waitForEventsAfterAction(async () => {
-      await humanizedClick(
-        page.pptrPage,
-        {type: 'xy', x: request.params.x, y: request.params.y},
-        {
-          count: request.params.dblClick ? 2 : 1,
-          disabled,
-        },
-      );
-    });
-    response.appendResponseLine(
-      request.params.dblClick
-        ? `Successfully double clicked at the coordinates`
-        : `Successfully clicked at the coordinates`,
-    );
-    if (request.params.includeSnapshot) {
-      response.includeSnapshot();
-    }
-  },
-});
-
 export const hover = definePageTool({
   name: 'hover',
   description: `Hover over the provided element`,

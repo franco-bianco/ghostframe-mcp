@@ -6,27 +6,37 @@ Not published to npm (`"private": true` in `package.json`). Local install only.
 
 ## Differences from upstream
 
-### Stealth mode (`--stealth`, default `true`)
+### Stealth mode (always on)
 
-When on:
+There is no `--stealth` flag and no way to turn stealth off. The posture is:
 
-- The chrome-devtools-frontend `Universe` is not initialised. The Universe forces `Runtime.enable` + `Debugger.enable` on every page, which is the largest CDP-side fingerprint and is what the `console.groupEnd` Proxy-trap family of detectors looks for.
-- Page `console` / `pageerror` / `Runtime.exceptionThrown` listeners are not subscribed (those implicitly enable `Runtime`).
 - Patchright-shape DOM polyfills are injected on every navigation in every page:
-  - `chrome.runtime` / `chrome.loadTimes()` / `chrome.csi()` stubs.
-  - `Notification.permission` ↔ `navigator.permissions.query({name:'notifications'})` coherence.
-  - `Function.prototype.toString` Proxy preserving `[native code]` for the polyfilled functions.
-- WebGL remains untouched so Chrome reports the renderer it actually uses.
-- Mouse, hover, fill, type, key-press, and drag go through humanisers:
-  - Cubic-bezier mouse paths with 8–24 `mouseMoved` events, 8–30ms non-uniform gap.
-  - 40–180ms mouse-down/up dwell.
-  - Lognormal keystroke flight (mean ~110ms, p10 55ms, p90 220ms), 50–150ms dwell, 350–600ms thinking pauses every 8–25 chars.
-  - `fill` and `fill_form` focus, clear, and type text per key; select elements retain native selection behavior.
-  - Drag transitions use an 80–280ms randomized dwell.
-- Geolocation defaults to no override (instead of `{lat:0,lon:0}` Null Island).
-- The in-page tools state global is `window[Symbol.for('dtmcp')]` instead of `window.__dtmcp`.
+  - `chrome.runtime` stub (Chrome omits it on ordinary pages; its absence is a tell).
+  - `chrome.loadTimes()` / `chrome.csi()` fallbacks, anchored to `performance.timeOrigin`,
+    for Chrome versions that no longer ship them.
+  - `Notification.permission` reconciled with `navigator.permissions.query({name:'notifications'})`.
+  - `Function.prototype.toString` preserving `[native code]`, including for itself.
+- Headless launches rewrite the user agent so the first request does not say
+  `HeadlessChrome`.
+- WebGL is untouched, so Chrome reports the renderer it actually uses.
+- `navigator.webdriver` is left alone. The launch flags already make it `false`, and
+  overriding it in JS would replace a native getter with a detectable one.
+- Mouse, hover, fill, type, key-press and drag go through humanisers:
+  - Cubic-bezier mouse paths with 8-24 `mouseMoved` events, 8-30ms non-uniform gap.
+  - Press and release are dispatched at the jittered point with a real pointer
+    pressure, rather than delegating to a helper that re-centres on the element.
+  - Lognormal keystroke flight (mean ~110ms), 50-150ms dwell, 350-600ms thinking
+    pauses every 8-25 chars.
+  - Drag transitions use an 80-280ms randomized dwell.
+- Geolocation defaults to no override, not `{lat:0,lon:0}`.
+- A persona set with `emulate` is reapplied to pages opened later in the session, so
+  two tabs in one browser cannot report different identities.
 
-Trade-off: `list_console_messages` and `get_console_message` return empty under stealth, and the `ConsoleFormatter` falls back to its non-Universe-detailed mode. Pass `--no-stealth` to restore upstream behaviour.
+Console capture is on. It rides the primary CDP session, where puppeteer has already
+enabled `Runtime` to make `evaluate_script` work at all, so it adds no detection
+surface. The chrome-devtools-frontend Universe was removed — it attached a second CDP
+session per page and enabled `Debugger` — so console errors no longer carry symbolized
+stack traces.
 
 ### Chrome launch flags
 
@@ -42,14 +52,22 @@ Trade-off: `list_console_messages` and `get_console_message` return empty under 
 
 **Schema additions on existing tools:**
 
-- `evaluate_script` and slim `evaluate` accept `world: 'isolated' | 'main'`. Default is `isolated` for stealth, except when `args` (element UIDs) are passed, in which case it falls back to `main` (element handles can only be evaluated in the realm that created them).
+- `evaluate_script` accepts `world: 'isolated' | 'main'`. Default is `isolated` for stealth, except when `args` (element UIDs) are passed, in which case it falls back to `main` (element handles can only be evaluated in the realm that created them).
 - `emulate` accepts `userAgentMetadata` (JSON-encoded UA Client-Hints), `locale`, and `timezone`, and routes UA/locale/timezone overrides through raw CDP `Emulation.setUserAgentOverride` + `setLocaleOverride` + `setTimezoneOverride` + `Network.setExtraHTTPHeaders` so `navigator.userAgent`, `Sec-CH-UA-*`, and `Accept-Language` stay coherent.
 
-**Removed:** `lighthouse_audit`, `take_memory_snapshot`, `load_memory_snapshot`, `get_memory_snapshot_details`, `performance_start_trace`, `performance_stop_trace`, `performance_analyze_insight`. The `lighthouse` npm dep, the `chrome-devtools-frontend` heap-snapshot worker bundle, and the `trace-processing/` module are also gone. Use upstream `chrome-devtools-mcp` for these.
+**Removed:** Lighthouse, memory and performance tools; the five extension tools;
+in-page tools and WebMCP; `click_at`; `get_tab_id`; and `--slim` mode. Connect mode
+(`--browser-url`, `--ws-endpoint`, `--auto-connect`) is gone too — it left pre-existing
+tabs unshimmed and was the only path using the WebSocket transport. The fork launches
+Chrome itself over a pipe. Use upstream `chrome-devtools-mcp` for the audit tooling.
+
+The flag surface is 19 options, down from 40. Anything that was off by default and
+gated a feature has been resolved one way or the other: the feature is either always
+on or gone.
 
 ### Other
 
-- `--usage-statistics` defaults to `false`. Sending stealth-config telemetry to Google's Clearcut endpoint contradicts the fork posture.
+- Telemetry is removed entirely. No usage statistics are collected or transmitted.
 - `--proxy-server` accepts authenticated proxies — see [Proxy](#proxy).
 - File access defaults to MCP workspace roots plus the system temporary directory. `--allow-unrestricted-paths` restores the legacy unrestricted behavior.
 - Package marked private; npm name is `ghostframe-mcp`; bin entries are `ghostframe-mcp` (server) and `ghostframe` (CLI). Names are distinct from upstream `chrome-devtools-mcp` / `chrome-devtools` so a global install never shadows upstream.
@@ -86,6 +104,47 @@ Or as JSON in your MCP client config:
 ```
 
 After pulling new commits, run `npm run build`. The MCP config does not change.
+
+### Driving it from a terminal
+
+The `ghostframe` CLI talks to the same server. Link it once:
+
+```bash
+npm link              # puts `ghostframe` and `ghostframe-mcp` on your PATH
+ghostframe --help
+```
+
+Then run tools directly. The daemon and Chrome start on first use:
+
+```bash
+ghostframe new_page "https://example.com"
+ghostframe take_snapshot
+ghostframe click "1_4"
+```
+
+To run several browsers at once, give each its own profile directory. Chrome refuses
+two instances on one profile, so this is the thing to get right:
+
+```bash
+ghostframe start --userDataDir ~/.cache/ghostframe-personas/a   # terminal 1
+ghostframe start --userDataDir ~/.cache/ghostframe-personas/b   # terminal 2
+```
+
+Use `--isolated` instead if you want a throwaway profile with no persisted logins.
+
+### Installing the skills
+
+The skill sources are tracked in `skills/`, but Claude Code only discovers skills in
+`.claude/skills/` (project) or `~/.claude/skills/` (personal). Install them to the
+personal directory so they load in any session, not only when your working directory
+is this repo:
+
+```bash
+cp -R skills/ghostframe-* ~/.claude/skills/
+```
+
+Verify with `/skills` in Claude Code — each should appear by name. Re-run the copy
+after pulling changes to `skills/`.
 
 Requirements: Node.js v20.19+, Chrome stable (or another channel via `--channel`).
 
@@ -199,37 +258,14 @@ Use `--allow-unrestricted-paths` only for compatibility with clients that cannot
   - [`list_console_messages`](docs/tool-reference.md#list_console_messages)
   - [`take_screenshot`](docs/tool-reference.md#take_screenshot)
   - [`take_snapshot`](docs/tool-reference.md#take_snapshot)
-- **Extensions** (5 tools)
-  - [`install_extension`](docs/tool-reference.md#install_extension)
-  - [`list_extensions`](docs/tool-reference.md#list_extensions)
-  - [`reload_extension`](docs/tool-reference.md#reload_extension)
-  - [`trigger_extension_action`](docs/tool-reference.md#trigger_extension_action)
-  - [`uninstall_extension`](docs/tool-reference.md#uninstall_extension)
 
 <!-- END AUTO GENERATED TOOLS -->
 
-Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md). Slim mode (3 tools): [`docs/slim-tool-reference.md`](./docs/slim-tool-reference.md).
+Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md).
 
 ## Configuration
 
 <!-- BEGIN AUTO GENERATED OPTIONS -->
-
-- **`--autoConnect`/ `--auto-connect`**
-  If specified, automatically connects to a browser (Chrome 144+) running locally from the user data directory identified by the channel param (default channel is stable). Requires the remote debugging server to be started in the Chrome instance via chrome://inspect/#remote-debugging.
-  - **Type:** boolean
-  - **Default:** `false`
-
-- **`--browserUrl`/ `--browser-url`, `-u`**
-  Connect to a running, debuggable Chrome instance (e.g. `http://127.0.0.1:9222`). See README "Connecting to a running Chrome instance".
-  - **Type:** string
-
-- **`--wsEndpoint`/ `--ws-endpoint`, `-w`**
-  WebSocket endpoint to connect to a running Chrome instance (e.g., `ws://127.0.0.1:9222/devtools/browser/{ID}`). Alternative to --browserUrl.
-  - **Type:** string
-
-- **`--wsHeaders`/ `--ws-headers`**
-  Custom headers for WebSocket connection in JSON format (e.g., '{"Authorization":"Bearer token"}'). Only works with --wsEndpoint.
-  - **Type:** string
 
 - **`--headless`**
   Whether to run in headless (no UI) mode.
@@ -279,10 +315,6 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md). Slim mode (3
   If enabled, ignores errors relative to self-signed and expired certificates. Use with caution.
   - **Type:** boolean
 
-- **`--experimentalVision`/ `--experimental-vision`**
-  Whether to enable coordinate-based tools such as click_at(x,y). Usually requires a computer-use model able to produce accurate coordinates by looking at screenshots.
-  - **Type:** boolean
-
 - **`--experimentalScreencast`/ `--experimental-screencast`**
   Exposes experimental screencast tools (requires ffmpeg). Install ffmpeg from <https://www.ffmpeg.org/download.html> and ensure it is on the MCP server PATH.
   - **Type:** boolean
@@ -290,10 +322,6 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md). Slim mode (3
 - **`--experimentalFfmpegPath`/ `--experimental-ffmpeg-path`**
   Path to ffmpeg executable for screencast recording.
   - **Type:** string
-
-- **`--experimentalWebmcp`/ `--experimental-webmcp`**
-  Set to true to enable debugging WebMCP tools. Requires Chrome 149+ with the following flags: `--enable-features=WebMCPTesting,DevToolsWebMCPSupport`
-  - **Type:** boolean
 
 - **`--chromeArg`/ `--chrome-arg`**
   Additional arguments for Chrome. Only applies when Chrome is launched by ghostframe-mcp.
@@ -313,54 +341,29 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md). Slim mode (3
   - **Type:** boolean
   - **Default:** `true`
 
-- **`--categoryExtensions`/ `--category-extensions`**
-  Set to true to include extension tools. This requires a browser launched through the pipe connection.
-  - **Type:** boolean
-  - **Default:** `false`
-
-- **`--stealth`**
-  Stealth posture (default: true). Skips initialization of the chrome-devtools-frontend Universe (which forces Runtime.enable + Debugger.enable on every page and is the single largest CDP fingerprint) and the page console / pageerror / Runtime.exceptionThrown listeners that implicitly enable Runtime. Trade-off: list_console_messages and get_console_message return empty results, and the ConsoleFormatter degrades to its non-DevTools-detailed mode. Set to false to restore the upstream chrome-devtools-mcp behavior.
+- **`--redactNetworkHeaders`/ `--redact-network-headers`**
+  If true, redacts network headers considered sensitive before returning them to the client.
   - **Type:** boolean
   - **Default:** `true`
-
-- **`--usageStatistics`/ `--usage-statistics`**
-  Send usage statistics to Google Clearcut. Off by default in this stealth fork (sending stealth-config telemetry to Google contradicts the fork posture). Set to true to opt back in. Also disabled if `CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS` or `CI` env variables are set.
-  - **Type:** boolean
-  - **Default:** `false`
-
-- **`--slim`**
-  Exposes a "slim" set of 3 tools covering navigation, script execution and screenshots only. Useful for basic browser tasks.
-  - **Type:** boolean
-
-- **`--redactNetworkHeaders`/ `--redact-network-headers`**
-  If true, redacts some of the network headers considered senstive before returning to the client.
-  - **Type:** boolean
-  - **Default:** `false`
 
 <!-- END AUTO GENERATED OPTIONS -->
 
 Pass options via the `args` array in the MCP JSON config. Run `node build/src/bin/ghostframe-mcp.js --help` to print the full list.
 
-## Connecting to a running Chrome instance
-
-Same as upstream — useful when you want manual and agent-driven sessions to share state, or when the agent runs inside a sandbox. Two paths:
-
-- **`--auto-connect`** (Chrome 144+) — connect to a Chrome instance you started yourself. In Chrome, navigate to `chrome://inspect/#remote-debugging` to enable remote debugging, then start the MCP server with `--auto-connect`.
-- **`--browser-url=http://127.0.0.1:9222`** — connect to a Chrome started with `--remote-debugging-port=9222`. Chrome requires a non-default `--user-data-dir` when `--remote-debugging-port` is set.
-
-When connecting to a running Chrome, the fork does not control its launch flags. Existing pages keep their existing document state; MCP-created pages receive the stealth init script before their first navigation. The Universe gate, console-listener gate, and humanizers still apply because they live in the context and tool layers.
-
 ## Docs and skills
 
 - [`docs/detection-signals.md`](./docs/detection-signals.md) — six-layer detection map (CDP / launch / DOM / fingerprint / behavioral / network) with citations.
-- [`docs/stealth-configuration.md`](./docs/stealth-configuration.md) — flag posture, Universe gate trade-off, isolated-world routing, persona bundling, polyfill list.
+- [`docs/stealth-configuration.md`](./docs/stealth-configuration.md) — stealth posture, isolated-world routing, persona bundling, polyfill list.
 - [`docs/design-principles.md`](./docs/design-principles.md), [`docs/cli.md`](./docs/cli.md), [`docs/troubleshooting.md`](./docs/troubleshooting.md) — adapted from upstream for stealth scope.
-- [`skills/stealth-launch/`](./skills/stealth-launch/) — pre-flight checklist before driving a stealth-protected site.
-- [`skills/detection-testing/`](./skills/detection-testing/) — sweep workflow for `bot.sannysoft.com`, `arh.antoinevastel.com`, `creepjs`, `pixelscan`.
-- [`skills/diagnose-bot-block/`](./skills/diagnose-bot-block/) — six-layer walk for "blocked but detectors pass".
-- [`skills/borrow-stealth-feature/`](./skills/borrow-stealth-feature/) — port workflow for borrowing primitives from `vibheksoni/stealth-browser-mcp` and `nodriver`.
-- [`skills/humanized-input/`](./skills/humanized-input/) — humanisation distributions and persona-coherence callouts.
-- [`skills/ghostframe/`](./skills/ghostframe/), [`skills/ghostframe-cli/`](./skills/ghostframe-cli/), [`skills/troubleshooting/`](./skills/troubleshooting/) — adapted from upstream.
+Sources in `skills/`, installed to `~/.claude/skills/` — see
+[Installing the skills](#installing-the-skills):
+
+- `ghostframe-cli` — driving the browser from the terminal, world routing, personas.
+- `ghostframe-launch` — pre-flight checklist before a stealth-protected site.
+- `ghostframe-detect-test` — sweep `bot.sannysoft.com`, `arh.antoinevastel.com`, `creepjs`, `pixelscan`.
+- `ghostframe-diagnose-block` — six-layer walk for "blocked but detectors pass".
+- `ghostframe-troubleshoot` — symptom-to-fix for failed tool calls.
+- `ghostframe-borrow-feature` — porting a primitive from a reference stealth project.
 
 ## Disclaimer
 

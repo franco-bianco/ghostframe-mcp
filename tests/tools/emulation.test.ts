@@ -307,7 +307,7 @@ describe('emulation', () => {
       });
     });
 
-    it('reports correctly for the currently selected page', async () => {
+    it('carries the persona to a newly created page', async () => {
       await withMcpContext(async (response, context) => {
         await emulate.handler(
           {
@@ -330,7 +330,9 @@ describe('emulation', () => {
         const page = await context.newPage();
         context.selectPage(page);
 
-        assert.strictEqual(context.getSelectedMcpPage().geolocation, null);
+        const inherited = context.getSelectedMcpPage().geolocation;
+        assert.strictEqual(inherited?.latitude, 48.137154);
+        assert.strictEqual(inherited?.longitude, 11.576124);
       });
     });
   });
@@ -428,7 +430,7 @@ describe('emulation', () => {
       });
     });
 
-    it('reports correctly for the currently selected page', async () => {
+    it('carries the persona to a newly created page', async () => {
       await withMcpContext(async (response, context) => {
         await emulate.handler(
           {
@@ -449,10 +451,10 @@ describe('emulation', () => {
         const page = await context.newPage();
         context.selectPage(page);
 
-        assert.strictEqual(context.getSelectedMcpPage().viewport, null);
+        assert.ok(context.getSelectedMcpPage().viewport);
         assert.ok(
           await context.getSelectedPptrPage().evaluate(() => {
-            return window.innerWidth !== 400 && window.innerHeight !== 400;
+            return window.innerWidth === 400 && window.innerHeight === 400;
           }),
         );
       });
@@ -543,7 +545,7 @@ describe('emulation', () => {
       });
     });
 
-    it('reports correctly for the currently selected page', async () => {
+    it('carries the persona to a newly created page', async () => {
       await withMcpContext(async (response, context) => {
         await emulate.handler(
           {
@@ -561,10 +563,10 @@ describe('emulation', () => {
         const page = await context.newPage();
         context.selectPage(page);
 
-        assert.strictEqual(context.getSelectedMcpPage().userAgent, null);
+        assert.strictEqual(context.getSelectedMcpPage().userAgent, 'MyUA');
         assert.ok(
           await context.getSelectedPptrPage().evaluate(() => {
-            return navigator.userAgent !== 'MyUA';
+            return navigator.userAgent === 'MyUA';
           }),
         );
       });

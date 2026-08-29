@@ -5,25 +5,12 @@
  */
 
 import assert from 'node:assert';
-import path from 'node:path';
 import {describe, it} from 'node:test';
 
-import type {ParsedArguments} from '../../src/bin/ghostframe-mcp-cli-options.js';
 import {TextSnapshot} from '../../src/TextSnapshot.js';
-import {installExtension} from '../../src/tools/extensions.js';
 import {evaluateScript} from '../../src/tools/script.js';
 import {serverHooks} from '../server.js';
-import {
-  assertNoServiceWorkerReported,
-  extractExtensionId,
-  html,
-  withMcpContext,
-} from '../utils.js';
-
-const EXTENSION_PATH = path.join(
-  import.meta.dirname,
-  '../../../tests/tools/fixtures/extension-sw',
-);
+import {html, withMcpContext} from '../utils.js';
 
 describe('script', () => {
   const server = serverHooks();
@@ -278,111 +265,6 @@ describe('script', () => {
         const lineEvaluation = response.responseLines.at(2)!;
         assert.strictEqual(JSON.parse(lineEvaluation), 'I am iframe button');
       });
-    });
-    it('evaluates inside extension service worker', async () => {
-      await withMcpContext(
-        async (response, context) => {
-          await installExtension.handler(
-            {params: {path: EXTENSION_PATH}},
-            response,
-            context,
-          );
-
-          const extensionId = extractExtensionId(response);
-          const swTarget = await context.browser.waitForTarget(
-            t => t.type() === 'service_worker' && t.url().includes(extensionId),
-          );
-
-          await context.createExtensionServiceWorkersSnapshot();
-          const swList = context.getExtensionServiceWorkers();
-          const sw = swList.find(s => s.target === swTarget);
-
-          if (!sw) {
-            assert.fail('Service worker not found in context list');
-          }
-
-          const swId = context.getExtensionServiceWorkerId(sw);
-
-          response.resetResponseLineForTesting();
-          await evaluateScript({
-            categoryExtensions: true,
-          } as ParsedArguments).handler(
-            {
-              params: {
-                function: String(() => {
-                  return 'chrome' in globalThis ? 'has-chrome' : 'no-chrome';
-                }),
-                serviceWorkerId: swId,
-              },
-            },
-            response,
-            context,
-          );
-
-          const lineEvaluation = response.responseLines.at(2)!;
-          assert.strictEqual(JSON.parse(lineEvaluation), 'has-chrome');
-          await context.uninstallExtension(extensionId);
-          const targets = context.browser.targets();
-          assertNoServiceWorkerReported(targets, extensionId);
-        },
-        {},
-        {categoryExtensions: true} as ParsedArguments,
-      );
-    });
-
-    it('throws error when both pageId and serviceWorkerId are provided', async () => {
-      await withMcpContext(
-        async (response, context) => {
-          await assert.rejects(
-            evaluateScript({
-              categoryExtensions: true,
-            } as ParsedArguments).handler(
-              {
-                params: {
-                  function: String(() => 'test'),
-                  serviceWorkerId: 'example_service_worker',
-                  pageId: '1',
-                },
-              },
-              response,
-              context,
-            ),
-            {
-              message: 'specify either a pageId or a serviceWorkerId.',
-            },
-          );
-        },
-        {},
-        {categoryExtensions: true} as ParsedArguments,
-      );
-    });
-
-    it('throws error when args are provided with serviceWorkerId', async () => {
-      await withMcpContext(
-        async (response, context) => {
-          await assert.rejects(
-            evaluateScript({
-              categoryExtensions: true,
-            } as ParsedArguments).handler(
-              {
-                params: {
-                  function: String(() => 'test'),
-                  serviceWorkerId: 'example_service_worker',
-                  args: ['1_1'],
-                },
-              },
-              response,
-              context,
-            ),
-            {
-              message:
-                'args (element uids) cannot be used when evaluating in a service worker.',
-            },
-          );
-        },
-        {},
-        {categoryExtensions: true} as ParsedArguments,
-      );
     });
   });
 });

@@ -8,27 +8,16 @@ export enum ToolCategory {
   INPUT = 'input',
   NAVIGATION = 'navigation',
   EMULATION = 'emulation',
-  PERFORMANCE = 'performance',
   NETWORK = 'network',
   DEBUGGING = 'debugging',
-  EXTENSIONS = 'extensions',
-  IN_PAGE = 'experimentalInPage',
-  MEMORY = 'memory',
 }
 
 export const labels = {
   [ToolCategory.INPUT]: 'Input automation',
   [ToolCategory.NAVIGATION]: 'Navigation automation',
   [ToolCategory.EMULATION]: 'Emulation',
-  [ToolCategory.PERFORMANCE]: 'Performance',
   [ToolCategory.NETWORK]: 'Network',
   [ToolCategory.DEBUGGING]: 'Debugging',
-  [ToolCategory.EXTENSIONS]: 'Extensions',
-  [ToolCategory.IN_PAGE]: 'In-page tools',
-  [ToolCategory.MEMORY]: 'Memory',
 };
 
-export const OFF_BY_DEFAULT_CATEGORIES = [
-  ToolCategory.EXTENSIONS,
-  ToolCategory.IN_PAGE,
-];
+export const OFF_BY_DEFAULT_CATEGORIES: ToolCategory[] = [];

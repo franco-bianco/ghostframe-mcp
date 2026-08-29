@@ -65,8 +65,6 @@ Trade-off:
 - `list_console_messages` and `get_console_message` return empty results.
 - `ConsoleFormatter` falls back to its non-Universe-detailed mode.
 
-`--no-stealth` restores the upstream behaviour, including the Universe and the console listeners.
-
 ### `evaluate_script` and isolated worlds
 
 `evaluate_script` and slim `evaluate` accept `world: 'isolated' | 'main'`. The default is `'isolated'` — except when `args` (element UIDs) are passed, in which case the default falls back to `'main'`. Element handles are bound to the realm that created them; you cannot evaluate a main-world handle inside an isolated realm.
@@ -120,8 +118,6 @@ A mismatch on any one is a detection. A US/Pacific timezone behind a Frankfurt e
 
 ## Humanized input
 
-Default-on for `click`, `click_at`, `hover`, `fill`, `fill_form`, `type_text`, `drag`, and `press_key` (`src/utils/humanInput.ts`, wired in `src/tools/input.ts`). One global off-switch is available through `--no-stealth`.
-
 Distributions:
 
 - **Mouse** — cubic-bezier path with 1–3 control-point jitters, 8–24 `mouseMoved` events along the path, 8–30 ms non-uniform inter-event gap, optional 80–250 ms pre-press dwell, 40–180 ms down-to-up dwell.
@@ -133,7 +129,8 @@ Distributions:
 
 The submit key in `type_text` uses a randomized down-to-up dwell while preserving Puppeteer's validation behavior.
 
-See [`skills/humanized-input/SKILL.md`](../skills/humanized-input/SKILL.md) for the operational guide.
+Humanized input is always on and has no override; see the behavioral layer in
+[`detection-signals.md`](./detection-signals.md#behavioral-layer) for the distributions.
 
 ## DOM polyfills
 

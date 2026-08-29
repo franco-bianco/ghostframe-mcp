@@ -33,6 +33,11 @@ export const nativeToStringScript = String.raw`(() => {
           const name = nativeNameByFn.get(thisArg) || (thisArg && thisArg.name) || '';
           return 'function ' + name + '() { [native code] }';
         }
+        // Without this the proxy stringifies itself through V8's proxy path,
+        // which drops the function name and exposes the shim.
+        if (thisArg === proxiedToString) {
+          return 'function toString() { [native code] }';
+        }
         return Reflect.apply(target, thisArg, args);
       },
     });

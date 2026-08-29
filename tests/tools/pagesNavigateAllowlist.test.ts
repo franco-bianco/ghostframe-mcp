@@ -14,7 +14,7 @@ import {withMcpContext} from '../utils.js';
 
 describe('pages allowList', () => {
   const server = serverHooks();
-  const args = {experimentalNavigationAllowlist: true} as ParsedArguments;
+  const args = {} as ParsedArguments;
 
   it('navigates through redirects when all URLs are allowed', async () => {
     server.addRoute('/a.html', (_req, res) => {

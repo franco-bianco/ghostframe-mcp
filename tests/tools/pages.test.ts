@@ -5,13 +5,11 @@
  */
 
 import assert from 'node:assert';
-import path from 'node:path';
 import {afterEach, describe, it} from 'node:test';
 
 import type {Dialog} from 'puppeteer-core';
 import sinon from 'sinon';
 
-import type {ParsedArguments} from '../../src/bin/ghostframe-mcp-cli-options.js';
 import {
   listPages,
   newPage,
@@ -20,22 +18,8 @@ import {
   navigatePage,
   resizePage,
   handleDialog,
-  getTabId,
 } from '../../src/tools/pages.js';
-import {assertNoServiceWorkerReported, html, withMcpContext} from '../utils.js';
-
-const EXTENSION_SW_PATH = path.join(
-  import.meta.dirname,
-  '../../../tests/tools/fixtures/extension-sw',
-);
-const EXTENSION_PATH = path.join(
-  import.meta.dirname,
-  '../../../tests/tools/fixtures/extension',
-);
-const EXTENSION_SIDE_PANEL_PATH = path.join(
-  import.meta.dirname,
-  '../../../tests/tools/fixtures/extension-side-panel',
-);
+import {html, withMcpContext} from '../utils.js';
 
 describe('pages', () => {
   afterEach(() => {
@@ -62,148 +46,6 @@ describe('pages', () => {
         await listPages().handler({params: {}}, response, context);
         assert.ok(response.includePages);
       });
-    });
-    it(`list pages for extension pages with --category-extensions`, async t => {
-      await withMcpContext(
-        async (response, context) => {
-          const extensionId = await context.installExtension(EXTENSION_PATH);
-
-          assert.ok(extensionId);
-
-          await context.triggerExtensionAction(extensionId);
-
-          const _popupTarget = await context.browser.waitForTarget(
-            t => t.type() === 'page' && t.url().includes('chrome-extension://'),
-          );
-
-          response.resetResponseLineForTesting();
-          const listPageDef = listPages({
-            categoryExtensions: true,
-          } as ParsedArguments);
-          await listPageDef.handler({params: {}}, response, context);
-
-          const result = await response.handle(listPageDef.name, context);
-          const textContent = result.content.find(c => c.type === 'text') as {
-            type: 'text';
-            text: string;
-          };
-          assert.ok(textContent);
-
-          const text = textContent.text.replaceAll(
-            extensionId,
-            '<extension-id>',
-          );
-          t.assert.snapshot?.(text);
-          await context.uninstallExtension(extensionId);
-        },
-        {},
-        {
-          categoryExtensions: true,
-        } as ParsedArguments,
-      );
-    });
-
-    for (const categoryExtensions of [true, false]) {
-      it(`list pages for extension service workers ${categoryExtensions ? 'with' : 'without'} --category-extensions`, async t => {
-        await withMcpContext(
-          async (response, context) => {
-            const extensionId =
-              await context.installExtension(EXTENSION_SW_PATH);
-            assert.ok(extensionId);
-
-            const swTarget = await context.browser.waitForTarget(
-              target =>
-                target.type() === 'service_worker' &&
-                target.url().includes('chrome-extension://'),
-            );
-            const swUrl = swTarget.url();
-
-            const listPageDef = listPages({
-              categoryExtensions,
-            } as ParsedArguments);
-            await listPageDef.handler({params: {}}, response, context);
-
-            const result = await response.handle(listPageDef.name, context);
-            const textContent = result.content.find(c => c.type === 'text') as {
-              type: 'text';
-              text: string;
-            };
-            assert.ok(textContent);
-
-            if (categoryExtensions) {
-              const structured = result.structuredContent as {
-                extensionServiceWorkers: Array<{url: string}>;
-              };
-              assert.deepStrictEqual(
-                structured.extensionServiceWorkers.map(sw => sw.url),
-                [swUrl],
-              );
-            }
-
-            const text = textContent.text.replaceAll(
-              extensionId,
-              '<extension-id>',
-            );
-            t.assert.snapshot?.(text);
-            await context.uninstallExtension(extensionId);
-            const targets = context.browser.targets();
-            assertNoServiceWorkerReported(targets, extensionId);
-          },
-          {},
-          {
-            categoryExtensions,
-          } as ParsedArguments,
-        );
-      });
-    }
-
-    it('list pages for side panels with --category-extensions', async t => {
-      await withMcpContext(
-        async (response, context) => {
-          const extensionId = await context.installExtension(
-            EXTENSION_SIDE_PANEL_PATH,
-          );
-
-          assert.ok(extensionId);
-
-          const sidePanelPage = await context.newPage();
-          await sidePanelPage.pptrPage.goto(
-            `chrome-extension://${extensionId}/sidepanel.html`,
-          );
-
-          await context.waitForTextOnPage(['Side Panel']);
-
-          // Wait for service worker used in the snapshot.
-          await context.browser.waitForTarget(
-            target => target.type() === 'service_worker',
-          );
-
-          const listPageDef = listPages({
-            categoryExtensions: true,
-          } as ParsedArguments);
-          await listPageDef.handler({params: {}}, response, context);
-
-          const result = await response.handle(listPageDef.name, context);
-          const textContent = result.content.find(c => c.type === 'text') as {
-            type: 'text';
-            text: string;
-          };
-          assert.ok(textContent);
-
-          const text = textContent.text.replaceAll(
-            extensionId,
-            '<extension-id>',
-          );
-          t.assert.snapshot?.(text);
-          await context.uninstallExtension(extensionId);
-          const targets = context.browser.targets();
-          assertNoServiceWorkerReported(targets, extensionId);
-        },
-        {},
-        {
-          categoryExtensions: true,
-        } as ParsedArguments,
-      );
     });
 
     it('when dialog is open', async t => {
@@ -1255,27 +1097,6 @@ describe('pages', () => {
           context,
         );
         assert.strictEqual(page2.getDialog(), undefined);
-      });
-    });
-  });
-
-  describe('get_tab_id', () => {
-    it('returns the tab id', async () => {
-      await withMcpContext(async (response, context) => {
-        const page = context.getSelectedPptrPage();
-        // @ts-expect-error _tabId is internal.
-        assert.ok(typeof page._tabId === 'string');
-        // @ts-expect-error _tabId is internal.
-        page._tabId = 'test-tab-id';
-        await getTabId.handler(
-          {params: {pageId: 1}, page: context.getSelectedMcpPage()},
-          response,
-          context,
-        );
-        const result = await response.handle('get_tab_id', context);
-        // @ts-expect-error _tabId is internal.
-        assert.strictEqual(result.structuredContent.tabId, 'test-tab-id');
-        assert.deepStrictEqual(response.responseLines, []);
       });
     });
   });

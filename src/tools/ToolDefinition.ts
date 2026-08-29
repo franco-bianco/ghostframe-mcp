@@ -10,23 +10,14 @@ import {zod} from '../third_party/index.js';
 import type {
   Dialog,
   ElementHandle,
-  Extension,
   Page,
   ScreenRecorder,
   Viewport,
 } from '../third_party/index.js';
-import type {
-  TextSnapshotNode,
-  GeolocationOptions,
-  ExtensionServiceWorker,
-} from '../types.js';
+import type {TextSnapshotNode, GeolocationOptions} from '../types.js';
 import type {PaginationOptions} from '../utils/types.js';
 
 import type {ToolCategory} from './categories.js';
-import type {
-  ToolGroup,
-  ToolDefinition as InPageToolDefinition,
-} from './inPage.js';
 
 export interface BaseToolDefinition<
   Schema extends zod.ZodRawShape = zod.ZodRawShape,
@@ -34,7 +25,6 @@ export interface BaseToolDefinition<
   name: string;
   description: string;
   annotations: {
-    title?: string;
     category: ToolCategory;
     /**
      * If true, the tool does not modify its environment.
@@ -104,9 +94,6 @@ export interface Response {
   // Allows re-using DevTools data queried by some tools.
   attachDevToolsData(data: DevToolsData): void;
   setTabId(tabId: string): void;
-  setListExtensions(): void;
-  setListInPageTools(): void;
-  setListWebMcpTools(): void;
 }
 
 export type SupportedExtensions =
@@ -135,7 +122,6 @@ export type Context = Readonly<{
   ): Promise<ContextPage>;
   closePage(pageId: number): Promise<void>;
   selectPage(page: ContextPage): void;
-  restoreEmulation(page: ContextPage): Promise<void>;
   emulate(
     options: {
       networkConditions?: string;
@@ -172,16 +158,7 @@ export type Context = Readonly<{
   setScreenRecorder(
     data: {recorder: ScreenRecorder; filePath: string} | null,
   ): void;
-  installExtension(path: string): Promise<string>;
-  uninstallExtension(id: string): Promise<void>;
-  triggerExtensionAction(id: string): Promise<void>;
-  listExtensions(): Promise<Map<string, Extension>>;
-  getExtension(id: string): Promise<Extension | undefined>;
   getSelectedMcpPage(): McpPage;
-  getExtensionServiceWorkers(): ExtensionServiceWorker[];
-  getExtensionServiceWorkerId(
-    extensionServiceWorker: ExtensionServiceWorker,
-  ): string | undefined;
 }>;
 
 /**
@@ -189,7 +166,6 @@ export type Context = Readonly<{
  */
 export type ContextPage = Readonly<{
   readonly pptrPage: Page;
-  getAXNodeByUid(uid: string): TextSnapshotNode | undefined;
   getElementByUid(uid: string): Promise<ElementHandle<Element>>;
   setBlockedUrls(patterns: string[]): Promise<void>;
 
@@ -199,12 +175,6 @@ export type ContextPage = Readonly<{
   waitForEventsAfterAction(
     action: () => Promise<unknown>,
     options?: {timeout?: number; handleDialog?: 'accept' | 'dismiss' | string},
-  ): Promise<void>;
-  getInPageTools(): ToolGroup<InPageToolDefinition> | undefined;
-  executeInPageTool(
-    toolName: string,
-    params: Record<string, unknown>,
-    response: Response,
   ): Promise<void>;
   getDevToolsData(): Promise<DevToolsData>;
 }>;

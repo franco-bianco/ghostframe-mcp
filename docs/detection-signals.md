@@ -154,4 +154,4 @@ Public detector pages. Run after any change to launch flags, polyfills, persona,
 - `creepjs` — combined fingerprint plus "lies" detection; best after polyfill work.
 - `pixelscan` — commercial-grade. Free tier shows partial fails; useful for relative comparison.
 
-Operational guide: [`skills/detection-testing/SKILL.md`](../skills/detection-testing/SKILL.md).
+Operational guide: the `ghostframe-detect-test` skill.

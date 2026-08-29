@@ -36,3 +36,8 @@ export function toSnakeCase(text: string): string {
 
   return result;
 }
+
+/** Quotes page-supplied text so it cannot break out of the surrounding line. */
+export function quoteUntrusted(text: string | undefined): string {
+  return JSON.stringify(text ?? '');
+}

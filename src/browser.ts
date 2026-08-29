@@ -22,11 +22,12 @@ import {puppeteer} from './third_party/index.js';
 
 let browser: Browser | undefined;
 
-function makeTargetFilter(enableExtensions = false) {
-  const ignoredPrefixes = new Set(['chrome://', 'chrome-untrusted://']);
-  if (!enableExtensions) {
-    ignoredPrefixes.add('chrome-extension://');
-  }
+function makeTargetFilter() {
+  const ignoredPrefixes = new Set([
+    'chrome://',
+    'chrome-untrusted://',
+    'chrome-extension://',
+  ]);
 
   return function targetFilter(target: Target): boolean {
     if (target.url() === 'chrome://newtab/') {
@@ -45,96 +46,6 @@ function makeTargetFilter(enableExtensions = false) {
   };
 }
 
-export async function ensureBrowserConnected(options: {
-  browserURL?: string;
-  wsEndpoint?: string;
-  wsHeaders?: Record<string, string>;
-  devtools: boolean;
-  channel?: Channel;
-  userDataDir?: string;
-  enableExtensions?: boolean;
-}) {
-  const {channel, enableExtensions} = options;
-  if (browser?.connected) {
-    return browser;
-  }
-
-  const connectOptions: Parameters<typeof puppeteer.connect>[0] = {
-    targetFilter: makeTargetFilter(enableExtensions),
-    defaultViewport: null,
-    handleDevToolsAsPage: true,
-  };
-
-  let autoConnect = false;
-  if (options.wsEndpoint) {
-    connectOptions.browserWSEndpoint = options.wsEndpoint;
-    if (options.wsHeaders) {
-      connectOptions.headers = options.wsHeaders;
-    }
-  } else if (options.browserURL) {
-    connectOptions.browserURL = options.browserURL;
-  } else if (channel || options.userDataDir) {
-    const userDataDir = options.userDataDir;
-    if (userDataDir) {
-      autoConnect = true;
-      // TODO: re-expose this logic via Puppeteer.
-      const portPath = path.join(userDataDir, 'DevToolsActivePort');
-      try {
-        const fileContent = await fs.promises.readFile(portPath, 'utf8');
-        const [rawPort, rawPath] = fileContent
-          .split('\n')
-          .map(line => {
-            return line.trim();
-          })
-          .filter(line => {
-            return !!line;
-          });
-        if (!rawPort || !rawPath) {
-          throw new Error(`Invalid DevToolsActivePort '${fileContent}' found`);
-        }
-        const port = parseInt(rawPort, 10);
-        if (isNaN(port) || port <= 0 || port > 65535) {
-          throw new Error(`Invalid port '${rawPort}' found`);
-        }
-        const browserWSEndpoint = `ws://127.0.0.1:${port}${rawPath}`;
-        connectOptions.browserWSEndpoint = browserWSEndpoint;
-      } catch (error) {
-        throw new Error(
-          `Could not connect to Chrome in ${userDataDir}. Check if Chrome is running and remote debugging is enabled by going to chrome://inspect/#remote-debugging.`,
-          {
-            cause: error,
-          },
-        );
-      }
-    } else {
-      if (!channel) {
-        throw new Error('Channel must be provided if userDataDir is missing');
-      }
-      connectOptions.channel = (
-        channel === 'stable' ? 'chrome' : `chrome-${channel}`
-      ) as ChromeReleaseChannel;
-    }
-  } else {
-    throw new Error(
-      'Either browserURL, wsEndpoint, channel or userDataDir must be provided',
-    );
-  }
-
-  logger('Connecting Puppeteer');
-  try {
-    browser = await puppeteer.connect(connectOptions);
-  } catch (err) {
-    throw new Error(
-      `Could not connect to Chrome. ${autoConnect ? `Check if Chrome is running and remote debugging is enabled by going to chrome://inspect/#remote-debugging.` : `Check if Chrome is running.`}`,
-      {
-        cause: err,
-      },
-    );
-  }
-  logger('Connected Puppeteer');
-  return browser;
-}
-
 interface McpLaunchOptions {
   acceptInsecureCerts?: boolean;
   executablePath?: string;
@@ -149,10 +60,7 @@ interface McpLaunchOptions {
   };
   chromeArgs?: string[];
   ignoreDefaultChromeArgs?: string[];
-  devtools: boolean;
-  enableExtensions?: boolean;
   viaCli?: boolean;
-  stealth?: boolean;
   proxyUsername?: string;
   proxyPassword?: string;
 }
@@ -164,11 +72,16 @@ export function detectDisplay(): void {
   }
   if (!process.env['DISPLAY']) {
     try {
+      // Read only this process tree's own session, with a hard timeout, rather
+      // than scanning every user process's environment.
       const result = execSync(
-        `ps -u $(id -u) -o pid= | xargs -I{} cat /proc/{}/environ 2>/dev/null | tr '\\0' '\\n' | grep -m1 '^DISPLAY=' | cut -d= -f2`,
+        `ps -u $(id -u) -o pid= | head -40 | xargs -I{} cat /proc/{}/environ 2>/dev/null | tr '\\0' '\\n' | grep -m1 '^DISPLAY=' | cut -d= -f2`,
+        {timeout: 2000},
       );
       const display = result.toString('utf8').trim();
-      process.env['DISPLAY'] = display;
+      if (display) {
+        process.env['DISPLAY'] = display;
+      }
     } catch {
       // no-op
     }
@@ -180,14 +93,47 @@ export async function installStealthOnPage(page: Page): Promise<void> {
   await page.evaluateOnNewDocument(getStealthInitScript());
 }
 
-async function installStealthInitScript(browser: Browser): Promise<void> {
+/** Sends a UA override on the page's primary CDP session, as emulate() does. */
+async function overrideUserAgent(page: Page, userAgent: string): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const client = (page as any)._client() as {
+    send: (method: string, params?: unknown) => Promise<unknown>;
+  };
+  await client.send('Emulation.setUserAgentOverride', {userAgent});
+}
+
+const stealthInstalledBrowsers = new WeakSet<Browser>();
+
+/** Applies the stealth script and a headed UA to current and future pages. */
+export async function installStealthInitScript(
+  browser: Browser,
+): Promise<void> {
+  if (stealthInstalledBrowsers.has(browser)) {
+    return;
+  }
+  stealthInstalledBrowsers.add(browser);
+
+  // Headless Chrome reports HeadlessChrome/<ver> on the very first request,
+  // before any emulate call can scrub it.
+  const launchUserAgent = await browser.userAgent();
+  const headedUserAgent = launchUserAgent.includes('Headless')
+    ? launchUserAgent.replace('HeadlessChrome', 'Chrome')
+    : undefined;
+
+  const prepare = async (page: Page): Promise<void> => {
+    await installStealthOnPage(page);
+    if (headedUserAgent) {
+      await overrideUserAgent(page, headedUserAgent);
+    }
+  };
+
   const inject = async (target: Target): Promise<void> => {
     try {
       const page = await target.page();
       if (!page) {
         return;
       }
-      await installStealthOnPage(page);
+      await prepare(page);
     } catch (err) {
       logger('Failed to install stealth init script', err);
     }
@@ -197,7 +143,7 @@ async function installStealthInitScript(browser: Browser): Promise<void> {
   });
   for (const page of await browser.pages()) {
     try {
-      await installStealthOnPage(page);
+      await prepare(page);
     } catch (err) {
       logger('Failed to install stealth init script on existing page', err);
     }
@@ -267,9 +213,6 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
     '--enable-automation',
   ];
   let puppeteerChannel: ChromeReleaseChannel | undefined;
-  if (options.devtools) {
-    args.push('--auto-open-devtools-for-tabs');
-  }
   if (!executablePath) {
     puppeteerChannel =
       channel && channel !== 'stable'
@@ -284,7 +227,7 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
   try {
     const browser = await puppeteer.launch({
       channel: puppeteerChannel,
-      targetFilter: makeTargetFilter(options.enableExtensions),
+      targetFilter: makeTargetFilter(),
       executablePath,
       defaultViewport: null,
       userDataDir,
@@ -294,7 +237,6 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       ignoreDefaultArgs: ignoreDefaultArgs,
       acceptInsecureCerts: options.acceptInsecureCerts,
       handleDevToolsAsPage: true,
-      enableExtensions: options.enableExtensions,
     });
     if (options.logFile) {
       // FIXME: we are probably subscribing too late to catch startup logs. We
@@ -302,9 +244,7 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       browser.process()?.stderr?.pipe(options.logFile);
       browser.process()?.stdout?.pipe(options.logFile);
     }
-    if (options.stealth) {
-      await installStealthInitScript(browser);
-    }
+    await installStealthInitScript(browser);
     if (
       options.proxyUsername !== undefined &&
       options.proxyPassword !== undefined
