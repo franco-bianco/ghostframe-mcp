@@ -4,6 +4,56 @@ Private stealth browser-automation MCP server. Forked from [`chrome-devtools-mcp
 
 Not published to npm (`"private": true` in `package.json`). Local install only.
 
+## Contents
+
+- [At a glance](#at-a-glance)
+- [Differences from upstream](#differences-from-upstream)
+  - [Stealth mode (always on)](#stealth-mode-always-on)
+  - [Chrome launch flags](#chrome-launch-flags)
+  - [Tool changes](#tool-changes)
+  - [Other](#other)
+- [Setup](#setup)
+  - [Driving it from a terminal](#driving-it-from-a-terminal)
+  - [Installing the skills](#installing-the-skills)
+- [Side-by-side with upstream](#side-by-side-with-upstream)
+- [Proxy](#proxy)
+- [File access](#file-access)
+- [Tools](#tools)
+- [Configuration](#configuration)
+- [Docs and skills](#docs-and-skills)
+- [Disclaimer](#disclaimer)
+
+## At a glance
+
+Measured against the last upstream commit before this fork diverged.
+
+|                                   | `chrome-devtools-mcp`                               | `ghostframe-mcp`                                           |
+| --------------------------------- | --------------------------------------------------- | ---------------------------------------------------------- |
+| Purpose                           | General browser automation and web debugging        | Driving sites that run bot management                      |
+| Stealth posture                   | None                                                | Always on, no flag to disable                              |
+| CLI options                       | 39                                                  | 19                                                         |
+| Tool modules                      | 19                                                  | 12                                                         |
+| Tools exposed                     | More, spread across category and experimental gates | 25, ungated                                                |
+| DOM polyfills                     | None                                                | `chrome.runtime`, permissions coherence, native `toString` |
+| Input timing                      | Immediate synthetic events                          | Bezier mouse paths, lognormal keystrokes, pointer pressure |
+| Persona                           | Per-page `emulate`, does not follow new tabs        | Session-wide, reapplied to pages opened later              |
+| Headless user agent               | Reports `HeadlessChrome`                            | Rewritten before the first request                         |
+| Browser connection                | Launch or attach over HTTP/WebSocket                | Launch only, over a pipe                                   |
+| DevTools Universe                 | Enabled; forces `Debugger.enable` per page          | Removed                                                    |
+| Console capture                   | On                                                  | On                                                         |
+| Network capture                   | On                                                  | On                                                         |
+| Network header redaction          | Off by default                                      | On by default                                              |
+| Telemetry                         | Reports to Google Clearcut                          | None                                                       |
+| Lighthouse / performance / memory | Yes                                                 | No                                                         |
+| Extensions, in-page tools, WebMCP | Yes                                                 | No                                                         |
+| Reduced toolset (`--slim`)        | Yes                                                 | No                                                         |
+| Default profile                   | `~/.cache/chrome-devtools-mcp/`                     | `~/.cache/ghostframe-mcp/`                                 |
+| Published to npm                  | Yes                                                 | No, local install only                                     |
+
+Both share the same MCP protocol, the same snapshot-and-uid interaction model, the
+same puppeteer core, and the same tool names where a tool exists in both. A prompt
+written for upstream generally works here, minus the removed tools.
+
 ## Differences from upstream
 
 ### Stealth mode (always on)
@@ -267,84 +317,26 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md).
 
 <!-- BEGIN AUTO GENERATED OPTIONS -->
 
-- **`--headless`**
-  Whether to run in headless (no UI) mode.
-  - **Type:** boolean
-  - **Default:** `false`
-
-- **`--executablePath`/ `--executable-path`, `-e`**
-  Path to custom Chrome executable.
-  - **Type:** string
-
-- **`--isolated`**
-  If specified, creates a temporary user-data-dir that is automatically cleaned up after the browser is closed. Defaults to false.
-  - **Type:** boolean
-
-- **`--userDataDir`/ `--user-data-dir`**
-  Path to the user data directory for Chrome. Default is $HOME/.cache/ghostframe-mcp/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE.
-  - **Type:** string
-
-- **`--channel`**
-  Specify a different Chrome channel that should be used. The default is the stable channel version.
-  - **Type:** string
-  - **Choices:** `canary`, `dev`, `beta`, `stable`
-
-- **`--logFile`/ `--log-file`**
-  Path to a file to write debug logs to. Set the env variable `DEBUG` to `*` to enable verbose logs. Useful for submitting bug reports.
-  - **Type:** string
-
-- **`--viewport`**
-  Initial viewport size for the Chrome instances started by the server. For example, `1280x720`. In headless mode, max size is 3840x2160px.
-  - **Type:** string
-
-- **`--proxyServer`/ `--proxy-server`**
-  Proxy server for Chrome. Use GHOSTFRAME_PROXY_USERNAME and GHOSTFRAME_PROXY_PASSWORD for HTTP proxy authentication. SOCKS proxies must be unauthenticated.
-  - **Type:** string
-
-- **`--allowLegacyProxyCredentials`/ `--allow-legacy-proxy-credentials`**
-  Allow credentials embedded in --proxy-server. This may expose secrets through process listings and is disabled by default.
-  - **Type:** boolean
-  - **Default:** `false`
-
-- **`--allowUnrestrictedPaths`/ `--allow-unrestricted-paths`**
-  Allow file access outside client workspace roots and the system temporary directory. Disabled by default.
-  - **Type:** boolean
-  - **Default:** `false`
-
-- **`--acceptInsecureCerts`/ `--accept-insecure-certs`**
-  If enabled, ignores errors relative to self-signed and expired certificates. Use with caution.
-  - **Type:** boolean
-
-- **`--experimentalScreencast`/ `--experimental-screencast`**
-  Exposes experimental screencast tools (requires ffmpeg). Install ffmpeg from <https://www.ffmpeg.org/download.html> and ensure it is on the MCP server PATH.
-  - **Type:** boolean
-
-- **`--experimentalFfmpegPath`/ `--experimental-ffmpeg-path`**
-  Path to ffmpeg executable for screencast recording.
-  - **Type:** string
-
-- **`--chromeArg`/ `--chrome-arg`**
-  Additional arguments for Chrome. Only applies when Chrome is launched by ghostframe-mcp.
-  - **Type:** array
-
-- **`--ignoreDefaultChromeArg`/ `--ignore-default-chrome-arg`**
-  Explicitly disable default arguments for Chrome. Only applies when Chrome is launched by ghostframe-mcp.
-  - **Type:** array
-
-- **`--categoryEmulation`/ `--category-emulation`**
-  Set to false to exclude tools related to emulation.
-  - **Type:** boolean
-  - **Default:** `true`
-
-- **`--categoryNetwork`/ `--category-network`**
-  Set to false to exclude tools related to network.
-  - **Type:** boolean
-  - **Default:** `true`
-
-- **`--redactNetworkHeaders`/ `--redact-network-headers`**
-  If true, redacts network headers considered sensitive before returning them to the client.
-  - **Type:** boolean
-  - **Default:** `true`
+| Option                                                                | Type                                    | Default | Description                                                                                                                                                  |
+| --------------------------------------------------------------------- | --------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--headless`                                                          | boolean                                 | `false` | Whether to run in headless (no UI) mode.                                                                                                                     |
+| `--executablePath`<br>`--executable-path`, `-e`                       | string                                  | —       | Path to custom Chrome executable.                                                                                                                            |
+| `--isolated`                                                          | boolean                                 | —       | If specified, creates a temporary user-data-dir that is automatically cleaned up after the browser is closed. Defaults to false.                             |
+| `--userDataDir`<br>`--user-data-dir`                                  | string                                  | —       | Path to the user data directory for Chrome. Default is $HOME/.cache/ghostframe-mcp/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE.                              |
+| `--channel`                                                           | `canary` \| `dev` \| `beta` \| `stable` | —       | Specify a different Chrome channel that should be used. The default is the stable channel version.                                                           |
+| `--logFile`<br>`--log-file`                                           | string                                  | —       | Path to a file to write debug logs to. Set the env variable `DEBUG` to `*` to enable verbose logs. Useful for submitting bug reports.                        |
+| `--viewport`                                                          | string                                  | —       | Initial viewport size for the Chrome instances started by the server. For example, `1280x720`. In headless mode, max size is 3840x2160px.                    |
+| `--proxyServer`<br>`--proxy-server`                                   | string                                  | —       | Proxy server for Chrome. Use GHOSTFRAME_PROXY_USERNAME and GHOSTFRAME_PROXY_PASSWORD for HTTP proxy authentication. SOCKS proxies must be unauthenticated.   |
+| `--allowLegacyProxyCredentials`<br>`--allow-legacy-proxy-credentials` | boolean                                 | `false` | Allow credentials embedded in --proxy-server. This may expose secrets through process listings and is disabled by default.                                   |
+| `--allowUnrestrictedPaths`<br>`--allow-unrestricted-paths`            | boolean                                 | `false` | Allow file access outside client workspace roots and the system temporary directory. Disabled by default.                                                    |
+| `--acceptInsecureCerts`<br>`--accept-insecure-certs`                  | boolean                                 | —       | If enabled, ignores errors relative to self-signed and expired certificates. Use with caution.                                                               |
+| `--experimentalScreencast`<br>`--experimental-screencast`             | boolean                                 | —       | Exposes experimental screencast tools (requires ffmpeg). Install ffmpeg from <https://www.ffmpeg.org/download.html> and ensure it is on the MCP server PATH. |
+| `--experimentalFfmpegPath`<br>`--experimental-ffmpeg-path`            | string                                  | —       | Path to ffmpeg executable for screencast recording.                                                                                                          |
+| `--chromeArg`<br>`--chrome-arg`                                       | array                                   | —       | Additional arguments for Chrome. Only applies when Chrome is launched by ghostframe-mcp.                                                                     |
+| `--ignoreDefaultChromeArg`<br>`--ignore-default-chrome-arg`           | array                                   | —       | Explicitly disable default arguments for Chrome. Only applies when Chrome is launched by ghostframe-mcp.                                                     |
+| `--categoryEmulation`<br>`--category-emulation`                       | boolean                                 | `true`  | Set to false to exclude tools related to emulation.                                                                                                          |
+| `--categoryNetwork`<br>`--category-network`                           | boolean                                 | `true`  | Set to false to exclude tools related to network.                                                                                                            |
+| `--redactNetworkHeaders`<br>`--redact-network-headers`                | boolean                                 | `true`  | If true, redacts network headers considered sensitive before returning them to the client.                                                                   |
 
 <!-- END AUTO GENERATED OPTIONS -->
 
@@ -355,8 +347,8 @@ Pass options via the `args` array in the MCP JSON config. Run `node build/src/bi
 - [`docs/detection-signals.md`](./docs/detection-signals.md) — six-layer detection map (CDP / launch / DOM / fingerprint / behavioral / network) with citations.
 - [`docs/stealth-configuration.md`](./docs/stealth-configuration.md) — stealth posture, isolated-world routing, persona bundling, polyfill list.
 - [`docs/design-principles.md`](./docs/design-principles.md), [`docs/cli.md`](./docs/cli.md), [`docs/troubleshooting.md`](./docs/troubleshooting.md) — adapted from upstream for stealth scope.
-Sources in `skills/`, installed to `~/.claude/skills/` — see
-[Installing the skills](#installing-the-skills):
+  Sources in `skills/`, installed to `~/.claude/skills/` — see
+  [Installing the skills](#installing-the-skills):
 
 - `ghostframe-cli` — driving the browser from the terminal, world routing, personas.
 - `ghostframe-launch` — pre-flight checklist before a stealth-protected site.

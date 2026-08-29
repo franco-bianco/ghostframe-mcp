@@ -22,7 +22,6 @@ import {
 import {createTools} from '../build/src/tools/tools.js';
 
 const OUTPUT_PATH = './docs/tool-reference.md';
-const SLIM_OUTPUT_PATH = './docs/slim-tool-reference.md';
 const README_PATH = './README.md';
 
 async function measureServer(args: string[]) {
@@ -177,47 +176,46 @@ function updateReadmeWithToolsTOC(toolsTOC: string): void {
 }
 
 function generateConfigOptionsMarkdown(): string {
-  let markdown = '';
+  const rows: string[] = [
+    '| Option | Type | Default | Description |',
+    '| --- | --- | --- | --- |',
+  ];
 
   for (const [optionName, optionConfig] of Object.entries(cliOptions)) {
-    // Skip hidden options
     if (optionConfig.hidden) {
       continue;
     }
 
-    const aliasText = optionConfig.alias ? `, \`-${optionConfig.alias}\`` : '';
-    const description = optionConfig.description || optionConfig.describe || '';
-
-    // Convert camelCase to dash-case
     const dashCaseName = optionName
       .replace(/([a-z])([A-Z])/g, '$1-$2')
       .toLowerCase();
-    const nameDisplay =
+    const alias = optionConfig.alias ? `, \`-${optionConfig.alias}\`` : '';
+    const name =
       dashCaseName !== optionName
-        ? `\`--${optionName}\`/ \`--${dashCaseName}\``
-        : `\`--${optionName}\``;
+        ? `\`--${optionName}\`<br>\`--${dashCaseName}\`${alias}`
+        : `\`--${optionName}\`${alias}`;
 
-    // Start with option name and description
-    markdown += `- **${nameDisplay}${aliasText}**\n`;
-    markdown += `  ${description}\n`;
+    const type = optionConfig.choices
+      ? optionConfig.choices.map(c => `\`${c}\``).join(' \\| ')
+      : `${optionConfig.type}`;
 
-    // Add type information
-    markdown += `  - **Type:** ${optionConfig.type}\n`;
+    const fallback =
+      optionConfig.default !== undefined ? `\`${optionConfig.default}\`` : '—';
 
-    // Add choices if available
-    if (optionConfig.choices) {
-      markdown += `  - **Choices:** ${optionConfig.choices.map(c => `\`${c}\``).join(', ')}\n`;
-    }
+    // Pipes and newlines would break the row.
+    const description = (
+      optionConfig.description ||
+      optionConfig.describe ||
+      ''
+    )
+      .replace(/\|/g, '\\|')
+      .replace(/\s*\n\s*/g, ' ')
+      .trim();
 
-    // Add default if available
-    if (optionConfig.default !== undefined) {
-      markdown += `  - **Default:** \`${optionConfig.default}\`\n`;
-    }
-
-    markdown += '\n';
+    rows.push(`| ${name} | ${type} | ${fallback} | ${description} |`);
   }
 
-  return markdown.trim();
+  return rows.join('\n');
 }
 
 function updateReadmeWithOptionsMarkdown(optionsMarkdown: string): void {
@@ -520,9 +518,9 @@ async function generateToolDocumentation(): Promise<void> {
 
     {
       const {toolsWithAnnotations, categories, sortedCategories} =
-        getToolsAndCategories(createTools({slim: false} as ParsedArguments));
+        getToolsAndCategories(createTools({} as ParsedArguments));
       await generateReference(
-        'Chrome DevTools MCP Tool Reference',
+        'ghostframe-mcp Tool Reference',
         OUTPUT_PATH,
         toolsWithAnnotations,
         categories,
@@ -533,19 +531,6 @@ async function generateToolDocumentation(): Promise<void> {
       // Generate tools TOC and update README
       const toolsTOC = generateToolsTOC(categories, sortedCategories);
       updateReadmeWithToolsTOC(toolsTOC);
-    }
-
-    {
-      const {toolsWithAnnotations, categories, sortedCategories} =
-        getToolsAndCategories(createTools({slim: true} as ParsedArguments));
-      await generateReference(
-        'Chrome DevTools MCP Slim Tool Reference',
-        SLIM_OUTPUT_PATH,
-        toolsWithAnnotations,
-        categories,
-        sortedCategories,
-        ['--slim'],
-      );
     }
 
     // Generate and update configuration options
