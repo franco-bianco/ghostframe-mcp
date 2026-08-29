@@ -1,6 +1,6 @@
 ---
 name: ghostframe-detect-test
-description: Verify the stealth config against public bot detectors. Use after changing launch flags, polyfills, persona, or before shipping a config change; or as the next step when `ghostframe-launch` flagged a problem. Manual visual review of detector pages — not an automated test suite.
+description: Verify the stealth config against public bot detectors. Use after changing launch flags, polyfills or persona, or before shipping a config change. Manual visual review of detector pages — not an automated test suite.
 ---
 
 # Detection testing

@@ -351,7 +351,6 @@ Pass options via the `args` array in the MCP JSON config. Run `node build/src/bi
   [Installing the skills](#installing-the-skills):
 
 - `ghostframe-cli` — driving the browser from the terminal, world routing, personas.
-- `ghostframe-launch` — pre-flight checklist before a stealth-protected site.
 - `ghostframe-detect-test` — sweep `bot.sannysoft.com`, `arh.antoinevastel.com`, `creepjs`, `pixelscan`.
 - `ghostframe-diagnose-block` — six-layer walk for "blocked but detectors pass".
 - `ghostframe-troubleshoot` — symptom-to-fix for failed tool calls.
