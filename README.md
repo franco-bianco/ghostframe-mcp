@@ -90,8 +90,13 @@ stack traces.
 
 ### Chrome launch flags
 
-- `--enable-automation` stripped from default args (zeros `navigator.webdriver`).
-- `--disable-blink-features=AutomationControlled` added.
+- `--disable-blink-features=AutomationControlled` added. This is what makes
+  `navigator.webdriver` read `false`; measured, stripping `--enable-automation` alone
+  leaves it `true`.
+- `--enable-automation` stripped from default args, which removes the automation
+  infobar and the associated switches.
+- `--disable-infobars` passed explicitly. Chrome treats the blink-features flag as
+  unsupported and would otherwise offer to say so in a banner.
 - Hardcoded `--screen-info=3840x2160` removed.
 - Default user-data-dir is `~/.cache/ghostframe-mcp/...`, distinct from upstream's `~/.cache/chrome-devtools-mcp/...` so cookies, Cloudflare reputation, and the profile lock don't collide.
 - `pipe: true` is kept (over the detectable `--remote-debugging-port`).

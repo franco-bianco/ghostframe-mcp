@@ -98,10 +98,21 @@ describe('McpContext', () => {
         const page = await context.newPage();
         await page.pptrPage.goto('data:text/html,<title>stealth</title>');
         await page.pptrPage.evaluate(() => {
-          console.log('not collected');
+          console.log('collected under stealth');
         });
 
-        assert.deepStrictEqual(context.getConsoleData(page), []);
+        // Console capture rides the primary session, where Runtime is already
+        // enabled, so stealth does not suppress it.
+        const consoleData = context.getConsoleData(page);
+        assert.ok(
+          consoleData.some(
+            entry =>
+              'text' in entry &&
+              typeof entry.text === 'function' &&
+              entry.text().includes('collected under stealth'),
+          ),
+          'expected the console message to be collected',
+        );
         const result = await page.pptrPage.evaluate(() => {
           const webglGetParameter =
             WebGLRenderingContext.prototype.getParameter;

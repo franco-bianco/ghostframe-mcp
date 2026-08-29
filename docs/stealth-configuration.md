@@ -12,12 +12,12 @@ Launch routes through `src/browser.ts:46-134` (connect path) and `src/browser.ts
 
 Stripped from the inherited posture:
 
-- `--enable-automation` — `src/browser.ts:240-243` adds it to `ignoreDefaultArgs`. Without this strip, `navigator.webdriver === true` is the top automation tell.
+- `--enable-automation` — added to `ignoreDefaultArgs`. This removes the automation infobar and related switches. It does not by itself change `navigator.webdriver`; measured, stripping it alone still reports `true`.
 - Hardcoded `--screen-info=3840x2160` — removed entirely. Persona-coherent values come from the `emulate` tool's viewport field instead.
 
 Added in stealth mode:
 
-- `--disable-blink-features=AutomationControlled` (`src/browser.ts:238`). Defense-in-depth even if the `--enable-automation` strip is bypassed.
+- `--disable-blink-features=AutomationControlled`. This is the flag that makes `navigator.webdriver` read `false`, so it is load-bearing rather than defence-in-depth. Chrome lists it as unsupported, which is why `--disable-infobars` is passed alongside it.
 
 Kept deliberately:
 

@@ -102,6 +102,23 @@ async function overrideUserAgent(page: Page, userAgent: string): Promise<void> {
   await client.send('Emulation.setUserAgentOverride', {userAgent});
 }
 
+/** Replaces Chrome's first tab, which carries the unsupported-flag banner. */
+async function closeInitialTab(browser: Browser): Promise<void> {
+  try {
+    const initial = await browser.pages();
+    const replacement = await browser.newPage();
+    await Promise.all(
+      initial.map(async page => {
+        if (page !== replacement && page.url() === 'about:blank') {
+          await page.close();
+        }
+      }),
+    );
+  } catch (err) {
+    logger('Failed to replace the initial tab', err);
+  }
+}
+
 const stealthInstalledBrowsers = new WeakSet<Browser>();
 
 /** Applies the stealth script and a headed UA to current and future pages. */
@@ -206,6 +223,9 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
   const args: LaunchOptions['args'] = [
     ...(options.chromeArgs ?? []),
     '--hide-crash-restore-bubble',
+    // Load-bearing: without it navigator.webdriver reads true, even with
+    // --enable-automation stripped. Chrome labels it unsupported and paints a
+    // banner on its first tab; closeInitialTab() drops that tab instead.
     '--disable-blink-features=AutomationControlled',
   ];
   const ignoreDefaultArgs: LaunchOptions['ignoreDefaultArgs'] = [
@@ -245,6 +265,7 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       browser.process()?.stdout?.pipe(options.logFile);
     }
     await installStealthInitScript(browser);
+    await closeInitialTab(browser);
     if (
       options.proxyUsername !== undefined &&
       options.proxyPassword !== undefined
