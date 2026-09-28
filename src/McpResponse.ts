@@ -60,15 +60,10 @@ export class McpResponse implements Response {
   #devToolsData?: DevToolsData;
   #tabId?: string;
   #page?: McpPage;
-  #redactNetworkHeaders = true;
   #error?: Error;
 
   setPage(page: McpPage): void {
     this.#page = page;
-  }
-
-  setRedactNetworkHeaders(value: boolean): void {
-    this.#redactNetworkHeaders = value;
   }
 
   attachDevToolsData(data: DevToolsData): void {
@@ -253,7 +248,6 @@ export class McpResponse implements Response {
         responseFilePath: this.#attachedNetworkRequestOptions?.responseFilePath,
         saveFile: (data, filename, extension) =>
           context.saveFile(data, filename, extension),
-        redactNetworkHeaders: this.#redactNetworkHeaders,
       });
       detailedNetworkRequest = formatter;
     }
@@ -383,7 +377,6 @@ export class McpResponse implements Response {
               fetchData: false,
               saveFile: (data, filename, extension) =>
                 context.saveFile(data, filename, extension),
-              redactNetworkHeaders: this.#redactNetworkHeaders,
             }),
           ),
         );

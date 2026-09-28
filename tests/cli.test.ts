@@ -19,8 +19,6 @@ describe('cli args parsing', () => {
     allowLegacyProxyCredentials: false,
     'allow-unrestricted-paths': false,
     allowUnrestrictedPaths: false,
-    'redact-network-headers': true,
-    redactNetworkHeaders: true,
   };
 
   it('parses with default args', async () => {

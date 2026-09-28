@@ -257,8 +257,6 @@ export async function createMcpServer(
           logger(`${tool.name} context: resolved`);
           await context.detectOpenDevToolsWindows();
           const response = new McpResponse();
-
-          response.setRedactNetworkHeaders(serverArgs.redactNetworkHeaders);
           try {
             const page = params.pageId
               ? context.getPageById(params.pageId)

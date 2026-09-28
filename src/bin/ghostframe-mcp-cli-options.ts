@@ -116,12 +116,6 @@ export const cliOptions = {
       'Set by Chrome DevTools CLI if the MCP server is started via the CLI client (this arg exists for usage stats)',
     hidden: true,
   },
-  redactNetworkHeaders: {
-    type: 'boolean',
-    describe:
-      'If true, redacts network headers considered sensitive before returning them to the client.',
-    default: true,
-  },
 } satisfies Record<string, YargsOptions>;
 
 export type ParsedArguments = ReturnType<typeof parseArguments>;

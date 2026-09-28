@@ -31,7 +31,6 @@ describe('NetworkFormatter', () => {
       const formatter = await NetworkFormatter.from(request, {
         requestId: 1,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
 
       assert.equal(
@@ -44,7 +43,6 @@ describe('NetworkFormatter', () => {
       const formatter = await NetworkFormatter.from(request, {
         requestId: 1,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
 
       assert.equal(
@@ -58,7 +56,6 @@ describe('NetworkFormatter', () => {
       const formatter = await NetworkFormatter.from(request, {
         requestId: 1,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
 
       assert.equal(
@@ -74,7 +71,6 @@ describe('NetworkFormatter', () => {
       const formatter = await NetworkFormatter.from(request, {
         requestId: 1,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
 
       assert.equal(
@@ -90,7 +86,6 @@ describe('NetworkFormatter', () => {
       const formatter = await NetworkFormatter.from(request, {
         requestId: 1,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
 
       assert.equal(
@@ -109,7 +104,6 @@ describe('NetworkFormatter', () => {
       const formatter = await NetworkFormatter.from(request, {
         requestId: 1,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
 
       assert.equal(
@@ -124,7 +118,6 @@ describe('NetworkFormatter', () => {
         requestId: 1,
         selectedInDevToolsUI: true,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
 
       assert.equal(
@@ -145,7 +138,6 @@ describe('NetworkFormatter', () => {
         requestId: 200,
         fetchData: true,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
       const result = formatter.toStringDetailed();
       assert.match(result, /test/);
@@ -162,7 +154,6 @@ describe('NetworkFormatter', () => {
         requestId: 200,
         fetchData: true,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
       const result = formatter.toStringDetailed();
 
@@ -185,7 +176,6 @@ describe('NetworkFormatter', () => {
         requestId: 20,
         fetchData: true,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
       const result = formatter.toStringDetailed();
       assert.match(result, /some text/);
@@ -219,7 +209,6 @@ describe('NetworkFormatter', () => {
           await writeFile(filename, data);
           return {filename};
         },
-        redactNetworkHeaders: false,
       });
 
       const json = formatter.toJSONDetailed() as {
@@ -263,7 +252,6 @@ describe('NetworkFormatter', () => {
           await writeFile(filename, data);
           return {filename};
         },
-        redactNetworkHeaders: false,
       });
 
       const reqContent = await readFile(reqPath, 'utf8');
@@ -284,7 +272,6 @@ describe('NetworkFormatter', () => {
         requestId: 200,
         fetchData: true,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
       const result = formatter.toStringDetailed();
 
@@ -302,7 +289,6 @@ describe('NetworkFormatter', () => {
         requestId: 1,
         requestIdResolver: () => 2,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
       const result = formatter.toStringDetailed();
       t.assert.snapshot?.(result);
@@ -335,7 +321,6 @@ describe('NetworkFormatter', () => {
           await writeFile(filename, data);
           return {filename};
         },
-        redactNetworkHeaders: false,
       });
 
       const result = formatter.toStringDetailed();
@@ -375,7 +360,6 @@ describe('NetworkFormatter', () => {
           await writeFile(filename, data);
           return {filename};
         },
-        redactNetworkHeaders: false,
       });
 
       const result = formatter.toStringDetailed();
@@ -394,7 +378,6 @@ describe('NetworkFormatter', () => {
         requestId: 1,
         selectedInDevToolsUI: true,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
       const result = formatter.toJSON();
       assert.deepEqual(result, {
@@ -420,7 +403,6 @@ describe('NetworkFormatter', () => {
         requestId: 1,
         fetchData: true,
         saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: false,
       });
       const result = formatter.toJSONDetailed();
       assert.deepEqual(result, {
@@ -439,38 +421,6 @@ describe('NetworkFormatter', () => {
         responseBodyFilePath: undefined,
         failure: undefined,
         redirectChain: undefined,
-      });
-    });
-
-    it('redacts headers', async () => {
-      const response = getMockResponse({
-        headers: {
-          'set-cookie': 'secret=123',
-          'content-type': 'text/plain',
-        },
-      });
-      response.buffer = () => Promise.resolve(Buffer.from('response'));
-      const request = getMockRequest({
-        response,
-        headers: {
-          cookie: 'secret=123',
-          'user-agent': 'test',
-        },
-      });
-      const formatter = await NetworkFormatter.from(request, {
-        requestId: 1,
-        fetchData: true,
-        saveFile: async () => ({filename: ''}),
-        redactNetworkHeaders: true,
-      });
-      const result = formatter.toJSONDetailed();
-      assert.deepEqual(result.requestHeaders, {
-        cookie: '<redacted>',
-        'user-agent': 'test',
-      });
-      assert.deepEqual(result.responseHeaders, {
-        'set-cookie': '<redacted>',
-        'content-type': 'text/plain',
       });
     });
 
@@ -502,7 +452,6 @@ describe('NetworkFormatter', () => {
           await writeFile(filename, data);
           return {filename};
         },
-        redactNetworkHeaders: false,
       });
 
       const result = formatter.toJSONDetailed() as {

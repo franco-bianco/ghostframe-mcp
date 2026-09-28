@@ -42,7 +42,7 @@ Measured against the last upstream commit before this fork diverged.
 | DevTools Universe                 | Enabled; forces `Debugger.enable` per page          | Removed                                                    |
 | Console capture                   | On                                                  | On                                                         |
 | Network capture                   | On                                                  | On                                                         |
-| Network header redaction          | Off by default                                      | On by default                                              |
+| Network header redaction          | Off by default                                      | Removed; headers are always returned in full               |
 | Telemetry                         | Reports to Google Clearcut                          | None                                                       |
 | Lighthouse / performance / memory | Yes                                                 | No                                                         |
 | Extensions, in-page tools, WebMCP | Yes                                                 | No                                                         |
@@ -341,7 +341,6 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md).
 | `--ignoreDefaultChromeArg`<br>`--ignore-default-chrome-arg`           | array                                   | —       | Explicitly disable default arguments for Chrome. Only applies when Chrome is launched by ghostframe-mcp.                                                     |
 | `--categoryEmulation`<br>`--category-emulation`                       | boolean                                 | `true`  | Set to false to exclude tools related to emulation.                                                                                                          |
 | `--categoryNetwork`<br>`--category-network`                           | boolean                                 | `true`  | Set to false to exclude tools related to network.                                                                                                            |
-| `--redactNetworkHeaders`<br>`--redact-network-headers`                | boolean                                 | `true`  | If true, redacts network headers considered sensitive before returning them to the client.                                                                   |
 
 <!-- END AUTO GENERATED OPTIONS -->
 
