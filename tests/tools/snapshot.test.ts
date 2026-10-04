@@ -8,18 +8,24 @@ import assert from 'node:assert';
 import {describe, it} from 'node:test';
 
 import {takeSnapshot, waitFor} from '../../src/tools/snapshot.js';
-import {html, withMcpContext} from '../utils.js';
+import {getTextContent, html, withMcpContext} from '../utils.js';
 
 describe('snapshot', () => {
   describe('browser_snapshot', () => {
-    it('includes a snapshot', async () => {
+    it('returns accessible roles, labels and actionable UIDs', async () => {
       await withMcpContext(async (response, context) => {
+        await context
+          .getSelectedPptrPage()
+          .setContent(html`<h1>Checkout</h1><button>Pay now</button>`);
         await takeSnapshot.handler(
           {params: {}, page: context.getSelectedMcpPage()},
           response,
           context,
         );
-        assert.ok(response.includeSnapshot);
+        const result = await response.handle('take_snapshot', context);
+        const text = getTextContent(result.content[0]);
+        assert.ok(text.includes('heading "Checkout"'));
+        assert.ok(/uid=\d+_\d+ button "Pay now"/.test(text));
       });
     });
   });
@@ -42,11 +48,11 @@ describe('snapshot', () => {
           context,
         );
 
-        assert.equal(
-          response.responseLines[0],
-          'Element matching one of ["Hello"] found.',
+        const result = await response.handle('wait_for', context);
+        assert.ok('snapshot' in result.structuredContent);
+        assert.ok(
+          JSON.stringify(result.structuredContent.snapshot).includes('Hello'),
         );
-        assert.ok(response.includeSnapshot);
       });
     });
 
@@ -68,11 +74,11 @@ describe('snapshot', () => {
           context,
         );
 
-        assert.equal(
-          response.responseLines[0],
-          'Element matching one of ["Complete","Error"] found.',
+        const result = await response.handle('wait_for', context);
+        assert.ok('snapshot' in result.structuredContent);
+        assert.ok(
+          JSON.stringify(result.structuredContent.snapshot).includes('Error'),
         );
-        assert.ok(response.includeSnapshot);
       });
     });
 
@@ -99,11 +105,13 @@ describe('snapshot', () => {
 
         await handlePromise;
 
-        assert.equal(
-          response.responseLines[0],
-          'Element matching one of ["Complete","Error"] found.',
+        const result = await response.handle('wait_for', context);
+        assert.ok('snapshot' in result.structuredContent);
+        assert.ok(
+          JSON.stringify(result.structuredContent.snapshot).includes(
+            'Complete',
+          ),
         );
-        assert.ok(response.includeSnapshot);
       });
     });
 
@@ -128,11 +136,11 @@ describe('snapshot', () => {
 
         await handlePromise;
 
-        assert.equal(
-          response.responseLines[0],
-          'Element matching one of ["Hello World"] found.',
+        const result = await response.handle('wait_for', context);
+        assert.ok('snapshot' in result.structuredContent);
+        assert.ok(
+          JSON.stringify(result.structuredContent.snapshot).includes('Hello'),
         );
-        assert.ok(response.includeSnapshot);
       });
     });
     it('should work with aria elements', async () => {
@@ -154,11 +162,11 @@ describe('snapshot', () => {
           context,
         );
 
-        assert.equal(
-          response.responseLines[0],
-          'Element matching one of ["Header"] found.',
+        const result = await response.handle('wait_for', context);
+        assert.ok('snapshot' in result.structuredContent);
+        assert.ok(
+          JSON.stringify(result.structuredContent.snapshot).includes('Header'),
         );
-        assert.ok(response.includeSnapshot);
       });
     });
 
@@ -182,11 +190,13 @@ describe('snapshot', () => {
           context,
         );
 
-        assert.equal(
-          response.responseLines[0],
-          'Element matching one of ["Hello iframe"] found.',
+        const result = await response.handle('wait_for', context);
+        assert.ok('snapshot' in result.structuredContent);
+        assert.ok(
+          JSON.stringify(result.structuredContent.snapshot).includes(
+            'Hello iframe',
+          ),
         );
-        assert.ok(response.includeSnapshot);
       });
     });
   });

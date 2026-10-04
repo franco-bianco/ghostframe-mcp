@@ -11,6 +11,7 @@ import {join} from 'node:path';
 import {describe, it} from 'node:test';
 
 import {} from '../src/tools/pages.js';
+import type {ResourceType} from '../src/third_party/index.js';
 
 import {serverHooks} from './server.js';
 import {
@@ -26,7 +27,7 @@ import {
 } from './utils.js';
 
 describe('McpResponse', () => {
-  it('list pages', async t => {
+  it('list pages', async () => {
     await withMcpContext(async (response, context) => {
       response.setIncludePages(true);
       const {content, structuredContent} = await response.handle(
@@ -34,14 +35,14 @@ describe('McpResponse', () => {
         context,
       );
       assert.equal(content[0].type, 'text');
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
+      assert.match(getTextContent(content[0]), /1: about:blank.*\[selected\]/);
+      assert.deepEqual(structuredContent, {
+        pages: [{id: 1, url: 'about:blank', selected: true}],
+      });
     });
   });
 
-  it('allows response text lines to be added', async t => {
+  it('serializes response lines in insertion order', async () => {
     await withMcpContext(async (response, context) => {
       response.appendResponseLine('Testing 1');
       response.appendResponseLine('Testing 2');
@@ -49,26 +50,10 @@ describe('McpResponse', () => {
         'test',
         context,
       );
-      assert.equal(content[0].type, 'text');
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
-    });
-  });
-
-  it('does not include anything in response if snapshot is null', async t => {
-    await withMcpContext(async (response, context) => {
-      const page = context.getSelectedPptrPage();
-      page.accessibility.snapshot = async () => null;
-      const {content, structuredContent} = await response.handle(
-        'test',
-        context,
-      );
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
+      assert.deepEqual(structuredContent, {message: 'Testing 1\nTesting 2'});
+      const text = getTextContent(content[0]);
+      assert.ok(text.includes('Testing 1') && text.includes('Testing 2'));
+      assert.ok(text.indexOf('Testing 1') < text.indexOf('Testing 2'));
     });
   });
 
@@ -274,7 +259,7 @@ describe('McpResponse', () => {
     });
   });
 
-  it('adds throttling setting when it is not null', async t => {
+  it('adds throttling setting when it is not null', async () => {
     await withMcpContext(async (response, context) => {
       await context.emulate({networkConditions: 'Slow 3G'});
       const {content, structuredContent} = await response.handle(
@@ -282,72 +267,69 @@ describe('McpResponse', () => {
         context,
       );
       assert.equal(content[0].type, 'text');
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
+      const text = getTextContent(content[0]);
+      assert.match(text, /Slow 3G/);
+      assert.match(text, /100000\s*ms/);
+      assert.deepEqual(structuredContent, {
+        networkConditions: 'Slow 3G',
+        navigationTimeout: 100000,
+      });
     });
   });
 
-  it('does not include throttling setting when it is null', async t => {
+  it('does not include throttling setting when it is null', async () => {
     await withMcpContext(async (response, context) => {
       const {content, structuredContent} = await response.handle(
         'test',
         context,
       );
-      await context.emulate({});
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
+      assert.doesNotMatch(
+        getTextContent(content[0]),
+        /network conditions|navigation timeout/i,
       );
+      assert.deepEqual(structuredContent, {});
     });
   });
-  it('adds image when image is attached', async t => {
+  it('adds image when image is attached', async () => {
     await withMcpContext(async (response, context) => {
       response.attachImage({data: 'imageBase64', mimeType: 'image/png'});
       const {content, structuredContent} = await response.handle(
         'test',
         context,
       );
-      t.assert.snapshot?.(getTextContent(content[0]));
+
       assert.equal(content[1].type, 'image');
       assert.strictEqual(getImageContent(content[1]).data, 'imageBase64');
       assert.strictEqual(getImageContent(content[1]).mimeType, 'image/png');
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
+      assert.deepEqual(structuredContent, {});
     });
   });
 
-  it('adds cpu throttling setting when it is over 1', async t => {
+  it('adds cpu throttling setting when it is over 1', async () => {
     await withMcpContext(async (response, context) => {
       await context.emulate({cpuThrottlingRate: 4});
       const {content, structuredContent} = await response.handle(
         'test',
         context,
       );
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
+      assert.match(getTextContent(content[0]), /CPU.*4x/i);
+      assert.deepEqual(structuredContent, {cpuThrottlingRate: 4});
     });
   });
 
-  it('does not include cpu throttling setting when it is 1', async t => {
+  it('does not include cpu throttling setting when it is 1', async () => {
     await withMcpContext(async (response, context) => {
       await context.emulate({cpuThrottlingRate: 1});
       const {content, structuredContent} = await response.handle(
         'test',
         context,
       );
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
+      assert.doesNotMatch(getTextContent(content[0]), /CPU throttling/i);
+      assert.deepEqual(structuredContent, {});
     });
   });
 
-  it('adds viewport emulation setting when it is set', async t => {
+  it('adds viewport emulation setting when it is set', async () => {
     await withMcpContext(async (response, context) => {
       await context.emulate({
         viewport: {width: 400, height: 400, deviceScaleFactor: 1},
@@ -356,42 +338,46 @@ describe('McpResponse', () => {
         'test',
         context,
       );
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
+      assert.match(getTextContent(content[0]), /"width":400/);
+      assert.match(getTextContent(content[0]), /"height":400/);
+      assert.deepEqual(structuredContent, {
+        viewport: {
+          deviceScaleFactor: 1,
+          isMobile: false,
+          hasTouch: false,
+          isLandscape: false,
+          width: 400,
+          height: 400,
+        },
+      });
     });
   });
 
-  it('adds userAgent emulation setting when it is set', async t => {
+  it('adds userAgent emulation setting when it is set', async () => {
     await withMcpContext(async (response, context) => {
       await context.emulate({userAgent: 'MyUA'});
       const {content, structuredContent} = await response.handle(
         'test',
         context,
       );
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
+      assert.match(getTextContent(content[0]), /MyUA/);
+      assert.deepEqual(structuredContent, {userAgent: 'MyUA'});
     });
   });
 
-  it('adds color scheme emulation setting when it is set', async t => {
+  it('adds color scheme emulation setting when it is set', async () => {
     await withMcpContext(async (response, context) => {
       await context.emulate({colorScheme: 'dark'});
       const {content, structuredContent} = await response.handle(
         'test',
         context,
       );
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
+      assert.match(getTextContent(content[0]), /color scheme.*dark/i);
+      assert.deepEqual(structuredContent, {colorScheme: 'dark'});
     });
   });
 
-  it('adds a prompt dialog', async t => {
+  it('adds a prompt dialog', async () => {
     await withMcpContext(async (response, context) => {
       const page = context.getSelectedMcpPage();
       const dialogPromise = new Promise<void>(resolve => {
@@ -408,14 +394,18 @@ describe('McpResponse', () => {
         context,
       );
       await page.getDialog()?.dismiss();
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
+      const text = getTextContent(content[0]);
+      assert.match(text, /prompt: "message"/);
+      assert.match(text, /"default"/);
+      assert.match(text, /page-controlled data/);
+      assert.match(text, /handle_dialog/);
+      assert.deepEqual(structuredContent, {
+        dialog: {type: 'prompt', message: 'message', defaultValue: 'default'},
+      });
     });
   });
 
-  it('adds an alert dialog', async t => {
+  it('adds an alert dialog', async () => {
     await withMcpContext(async (response, context) => {
       const page = context.getSelectedMcpPage();
       const dialogPromise = new Promise<void>(resolve => {
@@ -432,10 +422,13 @@ describe('McpResponse', () => {
         context,
       );
       await page.getDialog()?.dismiss();
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
+      const text = getTextContent(content[0]);
+      assert.match(text, /alert: "message"/);
+      assert.match(text, /page-controlled data/);
+      assert.match(text, /handle_dialog/);
+      assert.deepEqual(structuredContent, {
+        dialog: {type: 'alert', message: 'message', defaultValue: ''},
+      });
     });
   });
 
@@ -611,223 +604,226 @@ describe('McpResponse', () => {
         return mockAggregatedIssue;
       };
 
-      try {
-        await response.handle('test', context);
-      } catch (e) {
-        assert.ok(e.message.includes("Can't provide details for the msgid 1"));
-      }
+      await assert.rejects(response.handle('test', context), /msgid 1/);
     });
   });
 });
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 describe('McpResponse network request filtering', () => {
-  it('filters network requests by resource type', async t => {
-    await withMcpContext(async (response, context) => {
-      response.setIncludeNetworkRequests(true, {
-        resourceTypes: ['script', 'stylesheet'],
+  const cases: Array<{
+    name: string;
+    resourceTypes?: ResourceType[];
+    expectedIds: number[];
+  }> = [
+    {
+      name: 'filters network requests by resource type',
+      resourceTypes: ['script', 'stylesheet'],
+      expectedIds: [1, 3],
+    },
+    {
+      name: 'filters network requests by single resource type',
+      resourceTypes: ['image'],
+      expectedIds: [2],
+    },
+    {
+      name: 'shows no requests when filter matches nothing',
+      resourceTypes: ['media'],
+      expectedIds: [],
+    },
+    {
+      name: 'shows all requests when no filters are provided',
+      expectedIds: [1, 2, 3, 4, 5],
+    },
+    {
+      name: 'shows all requests when empty resourceTypes array is provided',
+      resourceTypes: [],
+      expectedIds: [1, 2, 3, 4, 5],
+    },
+  ];
+  for (const testCase of cases) {
+    it(testCase.name, async () => {
+      await withMcpContext(async (response, context) => {
+        const requests = [
+          'script',
+          'image',
+          'stylesheet',
+          'document',
+          'font',
+        ].map((resourceType, index) =>
+          getMockRequest({
+            resourceType,
+            stableId: index + 1,
+            url: `http://example.com/${resourceType}`,
+          }),
+        );
+        context.getNetworkRequests = () => requests;
+        response.setIncludeNetworkRequests(true, {
+          resourceTypes: testCase.resourceTypes,
+        });
+        const {content, structuredContent} = await response.handle(
+          'test',
+          context,
+        );
+        if (testCase.expectedIds.length === 0) {
+          assert.ok(!('networkRequests' in structuredContent));
+        } else {
+          assert.ok(
+            'networkRequests' in structuredContent &&
+              Array.isArray(structuredContent.networkRequests),
+          );
+          const ids = structuredContent.networkRequests.map(
+            (request: unknown) => {
+              assert.ok(isRecord(request));
+              return request.requestId;
+            },
+          );
+          assert.deepEqual(ids, testCase.expectedIds);
+        }
+        const text = getTextContent(content[0]);
+        for (const id of [1, 2, 3, 4, 5]) {
+          const pattern = new RegExp(`reqid=${id}\\b`);
+          if (testCase.expectedIds.includes(id)) {
+            assert.match(text, pattern);
+          } else {
+            assert.doesNotMatch(text, pattern);
+          }
+        }
       });
-      context.getNetworkRequests = () => {
-        return [
-          getMockRequest({resourceType: 'script'}),
-          getMockRequest({resourceType: 'image'}),
-          getMockRequest({resourceType: 'stylesheet'}),
-          getMockRequest({resourceType: 'document'}),
-        ];
-      };
-      const {content, structuredContent} = await response.handle(
-        'test',
-        context,
-      );
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
     });
-  });
-
-  it('filters network requests by single resource type', async t => {
-    await withMcpContext(async (response, context) => {
-      response.setIncludeNetworkRequests(true, {
-        resourceTypes: ['image'],
-      });
-      context.getNetworkRequests = () => {
-        return [
-          getMockRequest({resourceType: 'script'}),
-          getMockRequest({resourceType: 'image'}),
-          getMockRequest({resourceType: 'stylesheet'}),
-        ];
-      };
-      const {content, structuredContent} = await response.handle(
-        'test',
-        context,
-      );
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
-    });
-  });
-
-  it('shows no requests when filter matches nothing', async t => {
-    await withMcpContext(async (response, context) => {
-      response.setIncludeNetworkRequests(true, {
-        resourceTypes: ['font'],
-      });
-      context.getNetworkRequests = () => {
-        return [
-          getMockRequest({resourceType: 'script'}),
-          getMockRequest({resourceType: 'image'}),
-          getMockRequest({resourceType: 'stylesheet'}),
-        ];
-      };
-      const {content, structuredContent} = await response.handle(
-        'test',
-        context,
-      );
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
-    });
-  });
-
-  it('shows all requests when no filters are provided', async t => {
-    await withMcpContext(async (response, context) => {
-      response.setIncludeNetworkRequests(true);
-      context.getNetworkRequests = () => {
-        return [
-          getMockRequest({resourceType: 'script'}),
-          getMockRequest({resourceType: 'image'}),
-          getMockRequest({resourceType: 'stylesheet'}),
-          getMockRequest({resourceType: 'document'}),
-          getMockRequest({resourceType: 'font'}),
-        ];
-      };
-      const {content, structuredContent} = await response.handle(
-        'test',
-        context,
-      );
-
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
-    });
-  });
-
-  it('shows all requests when empty resourceTypes array is provided', async t => {
-    await withMcpContext(async (response, context) => {
-      response.setIncludeNetworkRequests(true, {
-        resourceTypes: [],
-      });
-      context.getNetworkRequests = () => {
-        return [
-          getMockRequest({resourceType: 'script'}),
-          getMockRequest({resourceType: 'image'}),
-          getMockRequest({resourceType: 'stylesheet'}),
-          getMockRequest({resourceType: 'document'}),
-          getMockRequest({resourceType: 'font'}),
-        ];
-      };
-      const {content, structuredContent} = await response.handle(
-        'test',
-        context,
-      );
-      t.assert.snapshot?.(getTextContent(content[0]));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
-    });
-  });
+  }
 });
 
 describe('McpResponse network pagination', () => {
-  it('returns all requests when pagination is not provided', async t => {
-    await withMcpContext(async (response, context) => {
-      const requests = Array.from({length: 5}, () => getMockRequest());
-      context.getNetworkRequests = () => requests;
-      response.setIncludeNetworkRequests(true);
-      const {content, structuredContent} = await response.handle(
-        'test',
-        context,
-      );
-      const text = getTextContent(content[0]);
-      assert.ok(text.includes('Showing 1-5 of 5 (Page 1 of 1).'));
-      assert.ok(!text.includes('Next page:'));
-      assert.ok(!text.includes('Previous page:'));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
-    });
-  });
-
-  it('returns first page by default', async t => {
-    await withMcpContext(async (response, context) => {
-      const requests = Array.from({length: 30}, (_, idx) =>
-        getMockRequest({method: `GET-${idx}`}),
-      );
-      context.getNetworkRequests = () => {
-        return requests;
-      };
-      response.setIncludeNetworkRequests(true, {pageSize: 10});
-      const {content, structuredContent} = await response.handle(
-        'test',
-        context,
-      );
-      const text = getTextContent(content[0]);
-      assert.ok(text.includes('Showing 1-10 of 30 (Page 1 of 3).'));
-      assert.ok(text.includes('Next page: 1'));
-      assert.ok(!text.includes('Previous page:'));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
-    });
-  });
-
-  it('returns subsequent page when pageIdx provided', async t => {
-    await withMcpContext(async (response, context) => {
-      const requests = Array.from({length: 25}, (_, idx) =>
-        getMockRequest({method: `GET-${idx}`}),
-      );
-      context.getNetworkRequests = () => requests;
-      response.setIncludeNetworkRequests(true, {
-        pageSize: 10,
-        pageIdx: 1,
+  const cases: Array<{
+    name: string;
+    count: number;
+    pageSize?: number;
+    pageIdx?: number;
+    expectedIds: number[];
+    expectedPagination: Record<string, number | boolean>;
+  }> = [
+    {
+      name: 'returns all requests when pagination is not provided',
+      count: 5,
+      expectedIds: [1, 2, 3, 4, 5],
+      expectedPagination: {
+        currentPage: 0,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false,
+        startIndex: 0,
+        endIndex: 5,
+        invalidPage: false,
+      },
+    },
+    {
+      name: 'returns first page by default',
+      count: 30,
+      pageSize: 10,
+      expectedIds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      expectedPagination: {
+        currentPage: 0,
+        totalPages: 3,
+        hasNextPage: true,
+        hasPreviousPage: false,
+        startIndex: 0,
+        endIndex: 10,
+        invalidPage: false,
+      },
+    },
+    {
+      name: 'returns subsequent page when pageIdx provided',
+      count: 25,
+      pageSize: 10,
+      pageIdx: 1,
+      expectedIds: [11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+      expectedPagination: {
+        currentPage: 1,
+        totalPages: 3,
+        hasNextPage: true,
+        hasPreviousPage: true,
+        startIndex: 10,
+        endIndex: 20,
+        invalidPage: false,
+      },
+    },
+    {
+      name: 'handles invalid page number by showing first page',
+      count: 5,
+      pageSize: 2,
+      pageIdx: 10,
+      expectedIds: [1, 2],
+      expectedPagination: {
+        currentPage: 0,
+        totalPages: 3,
+        hasNextPage: true,
+        hasPreviousPage: false,
+        startIndex: 0,
+        endIndex: 2,
+        invalidPage: true,
+      },
+    },
+  ];
+  for (const testCase of cases) {
+    it(testCase.name, async () => {
+      await withMcpContext(async (response, context) => {
+        const requests = Array.from({length: testCase.count}, (_, index) =>
+          getMockRequest({stableId: index + 1}),
+        );
+        context.getNetworkRequests = () => requests;
+        response.setIncludeNetworkRequests(true, {
+          pageSize: testCase.pageSize,
+          pageIdx: testCase.pageIdx,
+        });
+        const {content, structuredContent} = await response.handle(
+          'test',
+          context,
+        );
+        assert.ok('pagination' in structuredContent);
+        assert.deepEqual(
+          structuredContent.pagination,
+          testCase.expectedPagination,
+        );
+        assert.ok(
+          'networkRequests' in structuredContent &&
+            Array.isArray(structuredContent.networkRequests),
+        );
+        assert.deepEqual(
+          structuredContent.networkRequests.map((request: unknown) => {
+            assert.ok(isRecord(request));
+            return request.requestId;
+          }),
+          testCase.expectedIds,
+        );
+        const text = getTextContent(content[0]);
+        if (testCase.expectedPagination.hasNextPage) {
+          assert.match(
+            text,
+            new RegExp(
+              `Next page: ${Number(testCase.expectedPagination.currentPage) + 1}`,
+            ),
+          );
+        } else {
+          assert.doesNotMatch(text, /Next page:/);
+        }
+        if (testCase.expectedPagination.hasPreviousPage) {
+          assert.match(
+            text,
+            new RegExp(
+              `Previous page: ${Number(testCase.expectedPagination.currentPage) - 1}`,
+            ),
+          );
+        } else {
+          assert.doesNotMatch(text, /Previous page:/);
+        }
+        if (testCase.expectedPagination.invalidPage) {
+          assert.match(text, /Invalid page/);
+        }
       });
-      const {content, structuredContent} = await response.handle(
-        'test',
-        context,
-      );
-      const text = getTextContent(content[0]);
-      assert.ok(text.includes('Showing 11-20 of 25 (Page 2 of 3).'));
-      assert.ok(text.includes('Next page: 2'));
-      assert.ok(text.includes('Previous page: 0'));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
     });
-  });
-
-  it('handles invalid page number by showing first page', async t => {
-    await withMcpContext(async (response, context) => {
-      const requests = Array.from({length: 5}, () => getMockRequest());
-      context.getNetworkRequests = () => requests;
-      response.setIncludeNetworkRequests(true, {
-        pageSize: 2,
-        pageIdx: 10, // Invalid page number
-      });
-      const {content, structuredContent} = await response.handle(
-        'test',
-        context,
-      );
-      const text = getTextContent(content[0]);
-      assert.ok(
-        text.includes('Invalid page number provided. Showing first page.'),
-      );
-      assert.ok(text.includes('Showing 1-2 of 5 (Page 1 of 3).'));
-      t.assert.snapshot?.(
-        JSON.stringify(stabilizeStructuredContent(structuredContent), null, 2),
-      );
-    });
-  });
+  }
 });

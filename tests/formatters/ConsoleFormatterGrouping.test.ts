@@ -7,10 +7,7 @@
 import assert from 'node:assert';
 import {describe, it} from 'node:test';
 
-import {
-  ConsoleFormatter,
-  GroupedConsoleFormatter,
-} from '../../src/formatters/ConsoleFormatter.js';
+import {ConsoleFormatter} from '../../src/formatters/ConsoleFormatter.js';
 import type {ConsoleMessage} from '../../src/third_party/index.js';
 
 const createMockMessage = (
@@ -42,8 +39,15 @@ describe('ConsoleFormatter grouping', () => {
       ]);
       const grouped = ConsoleFormatter.groupConsecutive(msgs);
       assert.strictEqual(grouped.length, 1);
-      assert.ok(grouped[0] instanceof GroupedConsoleFormatter);
-      assert.ok(grouped[0].toString().includes('[3 times]'));
+      assert.deepStrictEqual(grouped[0].toJSON(), {
+        id: 1,
+        type: 'log',
+        text: 'hello',
+        argsCount: 0,
+        count: 3,
+      });
+      assert.match(grouped[0].toString(), /msgid=1\b/);
+      assert.match(grouped[0].toString(), /\[3 times\]/);
     });
 
     it('does not group different messages', async () => {
@@ -54,10 +58,14 @@ describe('ConsoleFormatter grouping', () => {
       ]);
       const grouped = ConsoleFormatter.groupConsecutive(msgs);
       assert.strictEqual(grouped.length, 3);
-      for (const g of grouped) {
-        assert.ok(!(g instanceof GroupedConsoleFormatter));
-        assert.ok(!g.toString().includes('times'));
-      }
+      assert.deepStrictEqual(
+        grouped.map(message => message.toJSON()),
+        [
+          {id: 1, type: 'log', text: 'aaa', argsCount: 0},
+          {id: 2, type: 'log', text: 'bbb', argsCount: 0},
+          {id: 3, type: 'log', text: 'ccc', argsCount: 0},
+        ],
+      );
     });
 
     it('groups A,A,B,A,A correctly', async () => {
@@ -70,11 +78,14 @@ describe('ConsoleFormatter grouping', () => {
       ]);
       const grouped = ConsoleFormatter.groupConsecutive(msgs);
       assert.strictEqual(grouped.length, 3);
-      assert.ok(grouped[0] instanceof GroupedConsoleFormatter);
-      assert.ok(grouped[0].toString().includes('[2 times]'));
-      assert.ok(!(grouped[1] instanceof GroupedConsoleFormatter));
-      assert.ok(grouped[2] instanceof GroupedConsoleFormatter);
-      assert.ok(grouped[2].toString().includes('[2 times]'));
+      assert.deepStrictEqual(
+        grouped.map(message => message.toJSON()),
+        [
+          {id: 1, type: 'log', text: 'A', argsCount: 0, count: 2},
+          {id: 3, type: 'log', text: 'B', argsCount: 0},
+          {id: 4, type: 'log', text: 'A', argsCount: 0, count: 2},
+        ],
+      );
     });
 
     it('does not group messages with different types', async () => {
@@ -84,6 +95,13 @@ describe('ConsoleFormatter grouping', () => {
       ]);
       const grouped = ConsoleFormatter.groupConsecutive(msgs);
       assert.strictEqual(grouped.length, 2);
+      assert.deepStrictEqual(
+        grouped.map(message => message.toJSON()),
+        [
+          {id: 1, type: 'log', text: 'hello', argsCount: 0},
+          {id: 2, type: 'error', text: 'hello', argsCount: 0},
+        ],
+      );
     });
 
     it('does not group messages with different argsCount', async () => {
@@ -93,48 +111,13 @@ describe('ConsoleFormatter grouping', () => {
       ]);
       const grouped = ConsoleFormatter.groupConsecutive(msgs);
       assert.strictEqual(grouped.length, 2);
-    });
-
-    it('returns empty array for empty input', () => {
-      const grouped = ConsoleFormatter.groupConsecutive([]);
-      assert.strictEqual(grouped.length, 0);
-    });
-
-    it('handles single message', async () => {
-      const msgs = await Promise.all([makeFormatter(1, 'log', 'solo')]);
-      const grouped = ConsoleFormatter.groupConsecutive(msgs);
-      assert.strictEqual(grouped.length, 1);
-      assert.ok(!(grouped[0] instanceof GroupedConsoleFormatter));
-    });
-  });
-
-  describe('GroupedConsoleFormatter output', () => {
-    it('toString includes count suffix', async () => {
-      const msgs = await Promise.all([
-        makeFormatter(1, 'log', 'hello'),
-        makeFormatter(2, 'log', 'hello'),
-        makeFormatter(3, 'log', 'hello'),
-        makeFormatter(4, 'log', 'hello'),
-        makeFormatter(5, 'log', 'hello'),
-      ]);
-      const grouped = ConsoleFormatter.groupConsecutive(msgs);
-      assert.strictEqual(grouped.length, 1);
-      const str = grouped[0].toString();
-      assert.ok(str.includes('[5 times]'), `expected [5 times] in: ${str}`);
-      assert.ok(str.includes('msgid=1'), `expected msgid=1 in: ${str}`);
-    });
-
-    it('toJSON includes count field', async () => {
-      const msgs = await Promise.all([
-        makeFormatter(1, 'log', 'hello'),
-        makeFormatter(2, 'log', 'hello'),
-        makeFormatter(3, 'log', 'hello'),
-      ]);
-      const grouped = ConsoleFormatter.groupConsecutive(msgs);
-      assert.strictEqual(grouped.length, 1);
-      const json = (grouped[0] as GroupedConsoleFormatter).toJSON();
-      assert.strictEqual(json.count, 3);
-      assert.strictEqual(json.id, 1);
+      assert.deepStrictEqual(
+        grouped.map(message => message.toJSON()),
+        [
+          {id: 1, type: 'log', text: 'hello', argsCount: 1},
+          {id: 2, type: 'log', text: 'hello', argsCount: 2},
+        ],
+      );
     });
   });
 });

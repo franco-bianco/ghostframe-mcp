@@ -4,9 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import assert from 'node:assert';
+import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
 import {describe, it, afterEach, beforeEach} from 'node:test';
+
+import {executablePath} from 'puppeteer';
 
 import {
   assertDaemonIsNotRunning,
@@ -14,13 +17,11 @@ import {
   runCli,
 } from '../utils.js';
 
-describe('ghostframe', () => {
+describe('CLI browser commands', () => {
   let sessionId: string;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     sessionId = crypto.randomUUID();
-    await runCli(['stop'], sessionId);
-    await assertDaemonIsNotRunning(sessionId);
   });
 
   afterEach(async () => {
@@ -28,65 +29,48 @@ describe('ghostframe', () => {
     await assertDaemonIsNotRunning(sessionId);
   });
 
-  it('can invoke list_pages', async () => {
-    await assertDaemonIsNotRunning(sessionId);
-
-    const startResult = await runCli(['start'], sessionId);
-    assert.strictEqual(
-      startResult.status,
-      0,
-      `start command failed: ${startResult.stderr}`,
+  it('invokes browser tools through one persistent daemon and saves a valid PNG artifact', async () => {
+    const started = await runCli(
+      ['start', '--executablePath', executablePath()],
+      sessionId,
     );
-
-    const listPagesResult = await runCli(['list_pages'], sessionId);
-    assert.strictEqual(
-      listPagesResult.status,
-      0,
-      `list_pages command failed: ${listPagesResult.stderr}`,
-    );
-    assert(
-      listPagesResult.stdout.includes('about:blank'),
-      'list_pages output is unexpected',
-    );
-
+    assert.equal(started.status, 0, started.stderr);
+    const listed = await runCli(['list_pages'], sessionId);
+    assert.equal(listed.status, 0, listed.stderr);
+    assert.match(listed.stdout, /about:blank/);
+    const screenshot = await runCli(['take_screenshot'], sessionId);
+    assert.equal(screenshot.status, 0, screenshot.stderr);
+    const match = screenshot.stdout.match(/Saved to (.+\.png)\./);
+    assert(match, screenshot.stdout);
+    const file = match[1];
+    try {
+      const bytes = await fs.readFile(file);
+      assert.deepEqual(
+        bytes.subarray(0, 8),
+        Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+      );
+      assert(bytes.length > 8);
+    } finally {
+      await fs.rm(file, {force: true});
+    }
     await assertDaemonIsRunning(sessionId);
   });
 
-  it('can take screenshot', async () => {
-    const startResult = await runCli(['start'], sessionId);
-    assert.strictEqual(
-      startResult.status,
-      0,
-      `start command failed: ${startResult.stderr}`,
+  it('reports disabled network tools and explains the launch setting needed to enable them', async () => {
+    const started = await runCli(
+      [
+        'start',
+        '--categoryNetwork=false',
+        '--executablePath',
+        executablePath(),
+      ],
+      sessionId,
     );
-
-    const result = await runCli(['take_screenshot'], sessionId);
-    assert.strictEqual(
-      result.status,
-      0,
-      `take_screenshot command failed: ${result.stderr}`,
-    );
-    assert(
-      result.stdout.includes('.png'),
-      'take_screenshot output is unexpected',
-    );
-  });
-
-  it('fails to invoke list_network_requests when categoryNetwork is disabled', async () => {
-    await runCli(['start', '--categoryNetwork=false'], sessionId);
-
+    assert.equal(started.status, 0, started.stderr);
     const result = await runCli(['list_network_requests'], sessionId);
-    assert.strictEqual(result.status, 0);
-
-    assert(
-      result.stdout.includes(
-        'Tool list_network_requests is in category Network which is currently disabled',
-      ),
-      'error message is unexpected: ' + result.stdout,
-    );
-    assert(
-      result.stdout.includes('ghostframe start --categoryNetwork=true'),
-      'restart command suggestion is missing: ' + result.stdout,
-    );
+    assert.match(result.stdout, /category Network.*disabled/);
+    assert.match(result.stdout, /ghostframe start --categoryNetwork=true/);
+    // A tool error currently exits zero; this test preserves the useful error
+    // and recovery instruction without declaring that exit code a contract.
   });
 });

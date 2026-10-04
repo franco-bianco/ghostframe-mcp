@@ -1,6 +1,7 @@
 # Detection Signals
 
-A concepts page. The six layers a bot detector watches, what each layer measures, what we control, and what we cannot.
+This guide describes six detection layers and the browser configuration that affects them.
+Ghostframe's defaults reduce selected signals; they do not guarantee that a website accepts the session.
 
 Configuration that responds to these signals lives in [`stealth-configuration.md`](./stealth-configuration.md). This page is the _why_.
 
@@ -19,14 +20,17 @@ A detector composes a verdict from multiple layers. A single layer rarely flips 
 
 ## CDP layer
 
-A browser with CDP attached can be detected by the side effects of common CDP enables, not by the protocol itself.
+CDP domain enables can produce runtime side effects that detector scripts observe.
+The exact signals depend on the Chrome version and enabled instrumentation.
 
-The classic signal: `Runtime.enable` opens a wire-protocol contract that materializes side effects in JS — primarily the way exceptions and console events surface, and the timing of stack-trace collection. A detector probes this without the script seeing the protocol directly.
+Historical detectors probe console and exception formatting when Runtime instrumentation is active.
+Stack collection and formatting can differ from an uninstrumented browser.
+These observations do not imply that page scripts can directly read protocol traffic.
 
-Examples:
+Historical examples:
 
-- A `console.debug(obj)` that triggers a `Runtime.consoleAPICalled` event will, when CDP is observing, evaluate the formatter on the inspected object. A getter on a property of `obj` runs.
-- `Runtime.exceptionThrown` listeners cause the engine to format thrown errors differently.
+- Console or error formatting can invoke getters that detector scripts use as probes.
+- Exception reporting and stack collection can change observable behavior or timing.
 
 References:
 
@@ -34,7 +38,22 @@ References:
 - [Castle: a classic CDP detection signal stopped working](https://blog.castle.io/why-a-classic-cdp-bot-detection-signal-suddenly-stopped-working-and-nobody-noticed/) — Chrome quietly changed the surface; the cat-and-mouse continues.
 - [CDP fingerprinting](https://svebaa.github.io/personal/blog/cdp-fingerprinting/) — broader survey of CDP-side detection vectors.
 
-Mitigation in this fork: gate the Universe (`src/DevtoolsUtils.ts:142-156`) so `Runtime.enable`/`Debugger.enable` are not held open. Trade-off: lose DevTools-frontend Universe affordances. Two residual implicit enables exist via Puppeteer console listeners — see [`stealth-configuration.md`](./stealth-configuration.md#the-universe-gate).
+Ghostframe removes the upstream per-page Universe and its additional persistent Runtime and Debugger model sessions.
+Puppeteer still enables Runtime on primary page sessions.
+Console collection uses those existing sessions; it does not enable an additional Runtime domain.
+Some DevTools-frontend probing and formatting remain unavailable.
+See [Default page sessions](stealth-configuration.md#default-page-sessions).
+
+Passive network capture also uses existing primary page sessions.
+Listener and handle inspection do not enable Debugger, but object retention and inspection can change garbage collection or timing.
+Worker evaluation explicitly attaches to the selected worker.
+These operations do not establish a guarantee of invisibility.
+
+`debugger_control` starts a bounded Debugger session only when explicitly requested.
+Breakpoints pause JavaScript; request interception pauses network traffic.
+Both can change the behavior under investigation.
+Use `start_action` to keep the tool queue available during a pause.
+See [Website and API investigation](investigation.md) for the supported controls and limits.
 
 ## Launch layer
 
@@ -134,16 +153,25 @@ Mitigation: humanized input defaults in [`stealth-configuration.md#humanized-inp
 
 ## Network layer
 
-TLS handshake (JA3/JA4), HTTP/2 SETTINGS frame, header order, ALPN negotiation. These are _not_ MCP-controllable in any meaningful way.
+This layer includes TLS handshakes, HTTP/2 SETTINGS, header order, and ALPN negotiation.
+Chrome supplies the destination network stack for browser requests.
 
-Stance: this fork inherits Chrome's network stack via CDP. Chrome speaks TLS, not us. As long as we drive a real Chrome binary, our JA4 is Chrome's JA4. This is a stealth feature.
+`set_proxy` changes native Chrome proxy settings during a run through a managed extension.
+It preserves tabs and browser state without replacing Chrome's destination TLS implementation.
+The proxy can still affect the traffic observed by the destination.
+See [Proxy configuration](stealth-configuration.md#proxy-configuration).
 
 Caveats:
 
-- A proxy that terminates and re-originates TLS (most authenticated forwarders) replaces Chrome's JA4 with the proxy's. A pure-pass-through proxy preserves it.
-- `Network.setExtraHTTPHeaders` rewrites headers but does not reorder them at the wire level. Reordering would require a custom transport, which we do not ship.
+- A proxy that terminates destination TLS presents its own TLS handshake to the destination.
+  Authentication alone does not establish whether a proxy terminates that connection.
+- Existing tunnels, sockets, and streams can continue on the previous route after a proxy change.
+- Regular-profile proxy settings do not guarantee the route used by explicitly configured isolated contexts, UDP traffic, or WebRTC.
+- Header overrides and interception change browser-visible request content.
+  Capture returns normalized header maps and decoded bodies, not exact wire recordings.
 
-Out of scope to mitigate further. Document the constraints; route stealth-sensitive traffic through pass-through proxies.
+Use [capture coverage records](investigation.md#network-coverage-and-fidelity) to assess missing events or bodies.
+Verify the observed route when the investigation depends on a particular exit IP.
 
 ## Detector tools we use to verify
 

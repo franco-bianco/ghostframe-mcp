@@ -5,19 +5,16 @@
  */
 
 import assert from 'node:assert';
+import {rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, it} from 'node:test';
 
 import {executablePath} from 'puppeteer';
 
-import {detectDisplay, launch} from '../src/browser.js';
+import {launch} from '../src/browser.js';
 
 describe('browser', () => {
-  it('detects display does not crash', () => {
-    detectDisplay();
-  });
-
   it('cannot launch multiple times with the same profile', async () => {
     const tmpDir = os.tmpdir();
     const folderPath = path.join(tmpDir, `temp-folder-${crypto.randomUUID()}`);
@@ -28,7 +25,7 @@ describe('browser', () => {
       executablePath: executablePath(),
     });
     try {
-      try {
+      await assert.rejects(async () => {
         const browser2 = await launch({
           headless: true,
           isolated: false,
@@ -36,15 +33,10 @@ describe('browser', () => {
           executablePath: executablePath(),
         });
         await browser2.close();
-        assert.fail('not reached');
-      } catch (err) {
-        assert.strictEqual(
-          err.message,
-          `The browser is already running for ${folderPath}. Use --isolated to run multiple browser instances.`,
-        );
-      }
+      }, /already running.*--isolated/);
     } finally {
       await browser1.close();
+      await rm(folderPath, {recursive: true, force: true});
     }
   });
 
@@ -72,6 +64,7 @@ describe('browser', () => {
       });
     } finally {
       await browser.close();
+      await rm(folderPath, {recursive: true, force: true});
     }
   });
 });

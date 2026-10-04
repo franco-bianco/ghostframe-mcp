@@ -5,6 +5,11 @@
  */
 
 import type {ParsedArguments} from '../bin/ghostframe-mcp-cli-options.js';
+import type {InterceptionController} from '../investigation/InterceptionController.js';
+import type {NetworkCapture} from '../investigation/NetworkCapture.js';
+import type {OperationManager} from '../investigation/OperationManager.js';
+import type {ProxyController} from '../investigation/ProxyController.js';
+import type {RuntimeInspector} from '../investigation/RuntimeInspector.js';
 import type {McpPage} from '../McpPage.js';
 import {zod} from '../third_party/index.js';
 import type {
@@ -112,6 +117,11 @@ export type SupportedExtensions =
  * Only add methods used by tools/*.
  */
 export type Context = Readonly<{
+  getNetworkCapture(): NetworkCapture;
+  getProxyController(): ProxyController;
+  getRuntimeInspector(): RuntimeInspector;
+  getOperationManager(): OperationManager;
+  getInterceptionController(): InterceptionController;
   validatePath(filePath?: string): Promise<void>;
   getStealth(): boolean;
   getAXNodeByUid(uid: string): TextSnapshotNode | undefined;

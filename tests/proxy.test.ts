@@ -14,6 +14,12 @@ import {
 } from '../src/utils/redact.js';
 
 describe('proxy', () => {
+  it('redacts embedded credentials in runtime proxy argument objects', () => {
+    assert.deepStrictEqual(
+      redactSensitiveValues({server: 'http://user:secret@proxy.example:8080'}),
+      {server: 'http://[REDACTED]@proxy.example:8080'},
+    );
+  });
   it('uses no proxy when none is configured', () => {
     assert.strictEqual(parseProxy(undefined), undefined);
   });
@@ -60,6 +66,22 @@ describe('proxy', () => {
           password: 'pass',
         }),
       /does not support authenticated SOCKS/,
+    );
+  });
+
+  it('rejects partial or conflicting credentials instead of silently mixing sources', () => {
+    assert.throws(
+      () => parseProxy('http://proxy.example:8080', {username: 'user'}),
+      /must be set together/,
+    );
+    assert.throws(
+      () =>
+        parseProxy('http://embedded:secret@proxy.example:8080', {
+          allowLegacyCredentials: true,
+          username: 'environment-user',
+          password: 'environment-password',
+        }),
+      /not both/,
     );
   });
 

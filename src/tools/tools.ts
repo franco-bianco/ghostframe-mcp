@@ -6,11 +6,16 @@
 
 import type {ParsedArguments} from '../bin/ghostframe-mcp-cli-options.js';
 
+import * as captureTools from './capture.js';
 import * as consoleTools from './console.js';
 import * as emulationTools from './emulation.js';
 import * as inputTools from './input.js';
+import * as interceptionTools from './interception.js';
 import * as networkTools from './network.js';
+import * as operationTools from './operations.js';
 import * as pagesTools from './pages.js';
+import * as proxyTools from './proxy.js';
+import * as runtimeTools from './runtime.js';
 import * as screencastTools from './screencast.js';
 import * as screenshotTools from './screenshot.js';
 import * as scriptTools from './script.js';
@@ -20,6 +25,11 @@ import type {ToolDefinition} from './ToolDefinition.js';
 export const createTools = (args: ParsedArguments) => {
   const rawTools = [
     ...Object.values(consoleTools),
+    ...Object.values(captureTools),
+    ...Object.values(proxyTools),
+    ...Object.values(runtimeTools),
+    ...Object.values(operationTools),
+    ...Object.values(interceptionTools),
     ...Object.values(emulationTools),
     ...Object.values(inputTools),
     ...Object.values(networkTools),

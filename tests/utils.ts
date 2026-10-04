@@ -7,12 +7,13 @@
 import assert from 'node:assert';
 import {spawn} from 'node:child_process';
 import path from 'node:path';
+import {after} from 'node:test';
 import {pathToFileURL} from 'node:url';
 
 import type {CallToolResult} from '@modelcontextprotocol/sdk/types.js';
 import logger from 'debug';
 import type {Browser} from 'puppeteer';
-import puppeteer, {Locator} from 'puppeteer';
+import {executablePath} from 'puppeteer';
 import type {
   Frame,
   HTTPRequest,
@@ -27,7 +28,7 @@ import type {ParsedArguments} from '../src/bin/ghostframe-mcp-cli-options.js';
 import {McpContext} from '../src/McpContext.js';
 import {McpResponse} from '../src/McpResponse.js';
 import {TextSnapshot} from '../src/TextSnapshot.js';
-import {DevTools} from '../src/third_party/index.js';
+import {DevTools, puppeteer} from '../src/third_party/index.js';
 import {stableIdSymbol} from '../src/utils/id.js';
 
 export function assertNoServiceWorkerReported(targets: Target[], id: string) {
@@ -68,6 +69,14 @@ export function extractExtensionId(response: McpResponse) {
 const browsers = new Map<string, Browser>();
 let context: McpContext | undefined;
 
+after(async () => {
+  await context?.dispose();
+  for (const browser of browsers.values()) {
+    await browser.close();
+  }
+  browsers.clear();
+});
+
 export async function withBrowser(
   cb: (browser: Browser, page: Page) => Promise<void>,
   options: {
@@ -79,7 +88,9 @@ export async function withBrowser(
 ) {
   const launchOptions: LaunchOptions = {
     executablePath:
-      options.executablePath ?? process.env.PUPPETEER_EXECUTABLE_PATH,
+      options.executablePath ??
+      process.env.PUPPETEER_EXECUTABLE_PATH ??
+      executablePath(),
     headless: !options.debug,
     defaultViewport: null,
     devtools: options.autoOpenDevTools ?? false,
@@ -124,19 +135,14 @@ export async function withMcpContext(
     TextSnapshot.resetCounter();
     const response = new McpResponse();
     if (context) {
-      context.dispose();
+      await context.dispose();
     }
-    context = await McpContext.from(
-      browser,
-      logger('test'),
-      {
-        // Tests opt out of humanized input by default so timing-sensitive
-        // expectations stay stable. Stealth is on everywhere in production.
-        stealth: options.stealth ?? false,
-        allowUnrestrictedPaths: options.allowUnrestrictedPaths ?? false,
-      },
-      Locator,
-    );
+    context = await McpContext.from(browser, logger('test'), {
+      // Tests opt out of humanized input by default so timing-sensitive
+      // expectations stay stable. Stealth is on everywhere in production.
+      stealth: options.stealth ?? false,
+      allowUnrestrictedPaths: options.allowUnrestrictedPaths ?? false,
+    });
     context.setRoots([
       {uri: pathToFileURL(process.cwd()).href, name: 'workspace'},
     ]);

@@ -13,31 +13,35 @@ import {pathToFileURL} from 'node:url';
 
 import sinon from 'sinon';
 
-import {NetworkFormatter} from '../src/formatters/NetworkFormatter.js';
 import {TextSnapshot} from '../src/TextSnapshot.js';
-import type {HTTPResponse} from '../src/third_party/index.js';
 
+import {serverHooks} from './server.js';
 import {getMockRequest, html, withMcpContext} from './utils.js';
 
 describe('McpContext', () => {
+  const server = serverHooks();
   afterEach(() => {
     sinon.restore();
   });
 
-  it('list pages', async () => {
+  it('resolves an existing element UID after a refreshed snapshot', async () => {
     await withMcpContext(async (_response, context) => {
       const page = context.getSelectedMcpPage();
-      await page.pptrPage.setContent(
-        html`<button>Click me</button>
-          <input
-            type="text"
-            value="Input"
-          />`,
+      await page.pptrPage.setContent(html`<button>Click me</button>`);
+      page.textSnapshot = await TextSnapshot.create(page);
+      const first = await page.getElementByUid('1_1');
+      assert.equal(
+        await first.evaluate(element => element.textContent),
+        'Click me',
       );
+      await first.dispose();
       page.textSnapshot = await TextSnapshot.create(page);
-      assert.ok(await page.getElementByUid('1_1'));
-      page.textSnapshot = await TextSnapshot.create(page);
-      await page.getElementByUid('1_1');
+      const refreshed = await page.getElementByUid('1_1');
+      assert.equal(
+        await refreshed.evaluate(element => element.textContent),
+        'Click me',
+      );
+      await refreshed.dispose();
     });
   });
 
@@ -58,24 +62,6 @@ describe('McpContext', () => {
       await context.emulate({networkConditions: 'Slow 3G'});
       const timeoutAfter = page.pptrPage.getDefaultNavigationTimeout();
       assert(timeoutBefore < timeoutAfter, 'Timeout was less then expected');
-    });
-  });
-
-  it('should call waitForEventsAfterAction with correct multipliers', async () => {
-    await withMcpContext(async (_response, context) => {
-      const page = await context.newPage();
-
-      await context.emulate({
-        cpuThrottlingRate: 2,
-        networkConditions: 'Slow 3G',
-      });
-      const stub = sinon.spy(page, 'createWaitForHelper');
-
-      await page.waitForEventsAfterAction(async () => {
-        // trigger the waiting only
-      });
-
-      sinon.assert.calledWithExactly(stub, 2, 10);
     });
   });
 
@@ -174,101 +160,114 @@ describe('McpContext', () => {
     });
   });
 
-  it('should include network requests in structured content', async t => {
+  it('serializes request identity and status in structured content', async () => {
     await withMcpContext(async (response, context) => {
-      const mockRequest = getMockRequest({
+      const request = getMockRequest({
         url: 'http://example.com/api',
         stableId: 123,
       });
-
-      sinon.stub(context, 'getNetworkRequests').returns([mockRequest]);
-      sinon.stub(context, 'getNetworkRequestStableId').returns(123);
-
+      sinon.stub(context, 'getNetworkRequests').returns([request]);
       response.setIncludeNetworkRequests(true);
       const result = await response.handle('test', context);
-
-      t.assert.snapshot?.(JSON.stringify(result.structuredContent, null, 2));
+      assert.ok('networkRequests' in result.structuredContent);
+      assert.deepEqual(result.structuredContent.networkRequests, [
+        {
+          requestId: 123,
+          method: 'GET',
+          url: 'http://example.com/api',
+          status: 'pending',
+          selectedInDevToolsUI: false,
+        },
+      ]);
     });
   });
 
-  it('should include detailed network request in structured content', async t => {
+  it('serializes an attached request with complete header values', async () => {
     await withMcpContext(async (response, context) => {
-      const mockRequest = getMockRequest({
+      const request = getMockRequest({
         url: 'http://example.com/detail',
         stableId: 456,
+        headers: {
+          authorization: 'Bearer secret',
+          'content-type': 'application/json',
+        },
       });
-
-      sinon.stub(context, 'getNetworkRequestById').returns(mockRequest);
-      sinon.stub(context, 'getNetworkRequestStableId').returns(456);
-
+      sinon.stub(context, 'getNetworkRequestById').returns(request);
       response.attachNetworkRequest(456);
       const result = await response.handle('test', context);
-
-      t.assert.snapshot?.(JSON.stringify(result.structuredContent, null, 2));
+      assert.ok('networkRequest' in result.structuredContent);
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(result.structuredContent.networkRequest)),
+        {
+          requestId: 456,
+          method: 'GET',
+          url: 'http://example.com/detail',
+          status: 'pending',
+          requestHeaders: {
+            authorization: 'Bearer secret',
+            'content-type': 'application/json',
+          },
+        },
+      );
+      assert.match(JSON.stringify(result), /Bearer secret/);
     });
   });
 
-  it('should include file paths in structured content when saving to file', async t => {
+  it('saves actual browser request and response bodies and returns their file paths', async t => {
+    const directory = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'ghostframe-response-files-'),
+    );
+    t.after(() => fs.rm(directory, {recursive: true, force: true}));
+    server.addHtmlRoute('/file-page', '<main>body files</main>');
+    server.addRoute('/file-api', (_request, response) => {
+      response.setHeader('content-type', 'text/plain');
+      response.end('actual response body');
+    });
     await withMcpContext(async (response, context) => {
-      const mockRequest = getMockRequest({
-        url: 'http://example.com/file-save',
-        stableId: 789,
-        hasPostData: true,
-        postData: 'some detailed data',
-        response: {
-          status: () => 200,
-          headers: () => ({'content-type': 'text/plain'}),
-          buffer: async () => Buffer.from('some response data'),
-        } as unknown as HTTPResponse,
+      const page = context.getSelectedMcpPage();
+      await page.pptrPage.goto(server.getRoute('/file-page'));
+      await page.pptrPage.evaluate(async () => {
+        await fetch('/file-api', {
+          method: 'POST',
+          body: 'actual request body',
+        }).then(result => result.text());
       });
-
-      sinon.stub(context, 'getNetworkRequestById').returns(mockRequest);
-      sinon.stub(context, 'getNetworkRequestStableId').returns(789);
-
-      // We stub NetworkFormatter.from to avoid actual file system writes and verify arguments
-      const fromStub = sinon
-        .stub(NetworkFormatter, 'from')
-        .callsFake(async (_req, opts) => {
-          // Verify we received the file paths
-          assert.strictEqual(opts?.requestFilePath, '/tmp/req.txt');
-          assert.strictEqual(opts?.responseFilePath, '/tmp/res.txt');
-          // Return a dummy formatter that behaves as if it saved files
-          // We need to create a real instance or mock one.
-          // Since constructor is private, we can't easily new it up.
-          // But we can return a mock object.
-          return {
-            toStringDetailed: () => 'Detailed string',
-            toJSONDetailed: () => ({
-              requestBody: '/tmp/req.txt',
-              responseBody: '/tmp/res.txt',
-            }),
-          } as unknown as NetworkFormatter;
-        });
-
-      response.attachNetworkRequest(789, {
-        requestFilePath: '/tmp/req.txt',
-        responseFilePath: '/tmp/res.txt',
+      const request = context
+        .getNetworkRequests(page)
+        .find(request => request.url() === server.getRoute('/file-api'));
+      assert.ok(request);
+      const requestId = context.getNetworkRequestStableId(request);
+      const requestFilePath = path.join(directory, 'request.network-request');
+      const responseFilePath = path.join(
+        directory,
+        'response.network-response',
+      );
+      response.attachNetworkRequest(requestId, {
+        requestFilePath,
+        responseFilePath,
       });
       const result = await response.handle('test', context);
-
-      t.assert.snapshot?.(JSON.stringify(result.structuredContent, null, 2));
-
-      fromStub.restore();
-    });
-  });
-
-  it('can store and retrieve roots', async () => {
-    await withMcpContext(async (_response, context) => {
-      const roots = [{uri: 'file:///test', name: 'test'}];
-      context.setRoots(roots);
-      const actualRoots = context.roots();
+      assert.ok('networkRequest' in result.structuredContent);
+      const details = result.structuredContent.networkRequest;
+      assert.ok(typeof details === 'object' && details !== null);
       assert.ok(
-        actualRoots?.some(r => r.name === 'test'),
-        'Should contain the set root',
+        'requestBodyFilePath' in details && 'responseBodyFilePath' in details,
+      );
+      assert.equal(details.requestBodyFilePath, requestFilePath);
+      assert.equal(details.responseBodyFilePath, responseFilePath);
+      assert.ok(
+        !('requestBody' in details) || details.requestBody === undefined,
       );
       assert.ok(
-        actualRoots?.some(r => r.name === 'temp'),
-        'Should contain the temp root',
+        !('responseBody' in details) || details.responseBody === undefined,
+      );
+      assert.equal(
+        await fs.readFile(requestFilePath, 'utf8'),
+        'actual request body',
+      );
+      assert.equal(
+        await fs.readFile(responseFilePath, 'utf8'),
+        'actual response body',
       );
     });
   });

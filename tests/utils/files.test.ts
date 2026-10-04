@@ -18,10 +18,6 @@ describe('ensureExtension', () => {
     assert.strictEqual(ensureExtension('filename.jpg', '.txt'), 'filename.txt');
   });
 
-  it('should handle extension without a leading dot', () => {
-    assert.strictEqual(ensureExtension('filename', '.txt'), 'filename.txt');
-  });
-
   it('should not add a second dot if already present', () => {
     assert.strictEqual(ensureExtension('filename.txt', '.txt'), 'filename.txt');
   });

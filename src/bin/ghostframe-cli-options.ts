@@ -23,6 +23,130 @@ export type Commands = Record<
   }
 >;
 export const commands: Commands = {
+  arm_interception: {
+    description:
+      'Arm a one-shot request or response pause. Returns immediately. Trigger traffic with start_action, read_interception, then resolve_interception. The deadline continues unchanged traffic unless body consumption has begun: complete bodies are reconstructed, incomplete bodies abort.',
+    category: 'Network',
+    args: {
+      urlPattern: {
+        name: 'urlPattern',
+        type: 'string',
+        description:
+          'CDP URL wildcard pattern, for example */api/orders*. Use a narrow pattern.',
+        required: true,
+      },
+      stage: {
+        name: 'stage',
+        type: 'string',
+        description:
+          'Pause before sending a request, or before delivering its response. Default: request.',
+        required: false,
+        enum: ['request', 'response'],
+      },
+      method: {
+        name: 'method',
+        type: 'string',
+        description: 'Optional HTTP method filter.',
+        required: false,
+      },
+      timeout: {
+        name: 'timeout',
+        type: 'integer',
+        description:
+          'Deadline in milliseconds for triggering and resolving the pause. Default: 30000.',
+        required: false,
+      },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
+    },
+  },
+  arm_network_wait: {
+    description:
+      'Arm a network observation before triggering an action. Returns immediately so it does not hold the browser tool queue. Then perform the action and inspect read_network_wait. Only future page traffic can match.',
+    category: 'Network',
+    args: {
+      pageId: {
+        name: 'pageId',
+        type: 'integer',
+        description: '',
+        required: false,
+      },
+      url: {
+        name: 'url',
+        type: 'string',
+        description: 'URL substring to match.',
+        required: false,
+      },
+      method: {
+        name: 'method',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      phase: {
+        name: 'phase',
+        type: 'string',
+        description: '',
+        required: false,
+        enum: ['request', 'response', 'finished'],
+      },
+      timeout: {
+        name: 'timeout',
+        type: 'integer',
+        description: 'Expiry in milliseconds. Default 30000.',
+        required: false,
+      },
+    },
+  },
+  call_handle: {
+    description:
+      'Invoke an actual retained function with its original closure. Optional thisHandle sets the receiver. Execution may change page state; a source string does not replace the retained closure.',
+    category: 'Debugging',
+    args: {
+      handle: {
+        name: 'handle',
+        type: 'string',
+        description: '',
+        required: true,
+      },
+      thisHandle: {
+        name: 'thisHandle',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      args: {
+        name: 'args',
+        type: 'string',
+        description: 'JSON array of {value: JSON} or {handle: ID} arguments.',
+        required: false,
+      },
+      returnMode: {
+        name: 'returnMode',
+        type: 'string',
+        description: '',
+        required: false,
+        enum: ['value', 'handle'],
+      },
+    },
+  },
+  cancel_operation: {
+    description:
+      'Stop loading for a navigation, or terminate JavaScript execution on the action page. JavaScript termination can also stop unrelated scripts in that page.',
+    category: 'Debugging',
+    args: {
+      operationId: {
+        name: 'operationId',
+        type: 'string',
+        description: 'Operation ID to cancel.',
+        required: true,
+      },
+    },
+  },
   click: {
     description: 'Clicks on the provided element',
     category: 'Input automation',
@@ -47,36 +171,10 @@ export const commands: Commands = {
           'Whether to include a snapshot in the response. Default is false.',
         required: false,
       },
-    },
-  },
-  click_at: {
-    description:
-      'Clicks at the provided coordinates (requires flag: --experimentalVision=true)',
-    category: 'Input automation',
-    args: {
-      x: {
-        name: 'x',
+      pageId: {
+        name: 'pageId',
         type: 'number',
-        description: 'The x coordinate',
-        required: true,
-      },
-      y: {
-        name: 'y',
-        type: 'number',
-        description: 'The y coordinate',
-        required: true,
-      },
-      dblClick: {
-        name: 'dblClick',
-        type: 'boolean',
-        description: 'Set to true for double clicks. Default is false.',
-        required: false,
-      },
-      includeSnapshot: {
-        name: 'includeSnapshot',
-        type: 'boolean',
-        description:
-          'Whether to include a snapshot in the response. Default is false.',
+        description: 'Targets a specific page by ID.',
         required: false,
       },
     },
@@ -92,6 +190,136 @@ export const commands: Commands = {
         description:
           'The ID of the page to close. Call list_pages to list pages.',
         required: true,
+      },
+    },
+  },
+  debugger_control: {
+    description:
+      'Manage an explicit bounded debugger investigation: start/status/stop/resume, source/function/XHR/event breakpoints, scripts/source, or paused-frame evaluation. Enabling Debugger changes runtime behavior and timing; it is not guaranteed stealth-safe. Session automatically resumes/stops at its deadline. Use start_action to trigger actions that can pause.',
+    category: 'Debugging',
+    args: {
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
+      targetId: {
+        name: 'targetId',
+        type: 'string',
+        description: 'Target ID from list_targets. Specify targetId or pageId.',
+        required: false,
+      },
+      frameId: {
+        name: 'frameId',
+        type: 'string',
+        description: 'Frame ID from list_targets; defaults to the main frame.',
+        required: false,
+      },
+      world: {
+        name: 'world',
+        type: 'string',
+        description:
+          'Isolated by default for pages; workers have only main world.',
+        required: false,
+        enum: ['isolated', 'main'],
+      },
+      action: {
+        name: 'action',
+        type: 'string',
+        description: '',
+        required: true,
+        enum: [
+          'start',
+          'status',
+          'stop',
+          'resume',
+          'breakpoint',
+          'remove_breakpoint',
+          'scripts',
+          'source',
+          'evaluate',
+        ],
+      },
+      timeoutMs: {
+        name: 'timeoutMs',
+        type: 'integer',
+        description: 'Session deadline; default 60000, maximum 300000ms.',
+        required: false,
+      },
+      kind: {
+        name: 'kind',
+        type: 'string',
+        description: '',
+        required: false,
+        enum: ['source', 'function', 'xhr', 'event'],
+      },
+      url: {
+        name: 'url',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      lineNumber: {
+        name: 'lineNumber',
+        type: 'integer',
+        description: '',
+        required: false,
+      },
+      columnNumber: {
+        name: 'columnNumber',
+        type: 'integer',
+        description: '',
+        required: false,
+      },
+      condition: {
+        name: 'condition',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      handle: {
+        name: 'handle',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      eventName: {
+        name: 'eventName',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      breakpointId: {
+        name: 'breakpointId',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      scriptId: {
+        name: 'scriptId',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      callFrameId: {
+        name: 'callFrameId',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      expression: {
+        name: 'expression',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      returnMode: {
+        name: 'returnMode',
+        type: 'string',
+        description: '',
+        required: false,
+        enum: ['value', 'handle'],
       },
     },
   },
@@ -116,6 +344,12 @@ export const commands: Commands = {
         type: 'boolean',
         description:
           'Whether to include a snapshot in the response. Default is false.',
+        required: false,
+      },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
         required: false,
       },
     },
@@ -188,6 +422,12 @@ export const commands: Commands = {
           "Emulate device viewports as 'WIDTHxHEIGHTxDPR' optionally followed by ',mobile', ',touch', and/or ',landscape' (e.g. '1280x720x1', '412x823x1.75,mobile,touch'). 'touch' and 'mobile' emulate mobile devices; 'landscape' emulates landscape mode.",
         required: false,
       },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
     },
   },
   evaluate_script: {
@@ -223,24 +463,10 @@ export const commands: Commands = {
         required: false,
         enum: ['isolated', 'main'],
       },
-    },
-  },
-  execute_webmcp_tool: {
-    description:
-      'Executes a WebMCP tool exposed by the page. (requires flag: --experimentalWebmcp=true)',
-    category: 'Debugging',
-    args: {
-      toolName: {
-        name: 'toolName',
-        type: 'string',
-        description: 'The name of the WebMCP tool to execute',
-        required: true,
-      },
-      input: {
-        name: 'input',
-        type: 'string',
-        description:
-          'The JSON-stringified parameters to pass to the WebMCP tool',
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
         required: false,
       },
     },
@@ -270,6 +496,12 @@ export const commands: Commands = {
           'Whether to include a snapshot in the response. Default is false.',
         required: false,
       },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
     },
   },
   get_console_message: {
@@ -283,6 +515,37 @@ export const commands: Commands = {
         description:
           'The msgid of a console message on the page from the listed console messages',
         required: true,
+      },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
+    },
+  },
+  get_event_listeners: {
+    description:
+      'Inspect currently registered listeners on a snapshot element and, optionally, its ancestors/document/window. Returns function handles and source coordinates without enabling Debugger. Framework delegation may expose a dispatcher rather than the application callback.',
+    category: 'Debugging',
+    args: {
+      uid: {
+        name: 'uid',
+        type: 'string',
+        description: 'Element UID from a current snapshot.',
+        required: true,
+      },
+      includeAncestors: {
+        name: 'includeAncestors',
+        type: 'boolean',
+        description: 'Default true, to include delegated handlers.',
+        required: false,
+      },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
       },
     },
   },
@@ -312,7 +575,32 @@ export const commands: Commands = {
           'The absolute or relative path to a .network-response file to save the response body to. If omitted, the body is returned inline.',
         required: false,
       },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
     },
+  },
+  get_operation: {
+    description:
+      'Read the state and result of an action. This call does not wait for completion.',
+    category: 'Debugging',
+    args: {
+      operationId: {
+        name: 'operationId',
+        type: 'string',
+        description: 'Operation ID from start_action.',
+        required: true,
+      },
+    },
+  },
+  get_proxy: {
+    description:
+      'Get effective native Chrome proxy settings, scope and connection switching limitations. Proxy credentials are omitted.',
+    category: 'Network',
+    args: {},
   },
   handle_dialog: {
     description:
@@ -330,6 +618,12 @@ export const commands: Commands = {
         name: 'promptText',
         type: 'string',
         description: 'Optional prompt text to enter into the dialog.',
+        required: false,
+      },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
         required: false,
       },
     },
@@ -352,18 +646,112 @@ export const commands: Commands = {
           'Whether to include a snapshot in the response. Default is false.',
         required: false,
       },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
     },
   },
-  install_extension: {
+  inspect_handle: {
     description:
-      'Installs a Chrome extension from the given path. (requires flag: --categoryExtensions=true)',
-    category: 'Extensions',
+      'Inspect remote properties, getter/setter handles and available engine internal/private properties including function scopes. Does not invoke getters. Engine visibility is version-dependent; optimized variables may be unavailable.',
+    category: 'Debugging',
     args: {
-      path: {
-        name: 'path',
+      handle: {
+        name: 'handle',
         type: 'string',
-        description: 'Absolute path to the unpacked extension folder.',
+        description: '',
         required: true,
+      },
+      ownProperties: {
+        name: 'ownProperties',
+        type: 'boolean',
+        description: 'Default true; false includes inherited properties.',
+        required: false,
+      },
+    },
+  },
+  inspect_storage: {
+    description:
+      'Inspect local/session storage, IndexedDB database/store entries, or CacheStorage in an explicit frame storage key. Defaults to the frame storage key so partitioned storage is addressed correctly. IndexedDB object values can be retained handles.',
+    category: 'Debugging',
+    args: {
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
+      targetId: {
+        name: 'targetId',
+        type: 'string',
+        description: 'Target ID from list_targets. Specify targetId or pageId.',
+        required: false,
+      },
+      frameId: {
+        name: 'frameId',
+        type: 'string',
+        description: 'Frame ID from list_targets; defaults to the main frame.',
+        required: false,
+      },
+      world: {
+        name: 'world',
+        type: 'string',
+        description:
+          'Isolated by default for pages; workers have only main world.',
+        required: false,
+        enum: ['isolated', 'main'],
+      },
+      kind: {
+        name: 'kind',
+        type: 'string',
+        description: '',
+        required: true,
+        enum: ['local', 'session', 'indexeddb', 'cache'],
+      },
+      storageKey: {
+        name: 'storageKey',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      databaseName: {
+        name: 'databaseName',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      objectStoreName: {
+        name: 'objectStoreName',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      cacheId: {
+        name: 'cacheId',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      requestURL: {
+        name: 'requestURL',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      skipCount: {
+        name: 'skipCount',
+        type: 'integer',
+        description: '',
+        required: false,
+      },
+      pageSize: {
+        name: 'pageSize',
+        type: 'integer',
+        description: '',
+        required: false,
       },
     },
   },
@@ -401,13 +789,13 @@ export const commands: Commands = {
         required: false,
         default: false,
       },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
     },
-  },
-  list_extensions: {
-    description:
-      'Lists all the Chrome extensions installed in the browser. This includes their name, ID, version, and enabled status. (requires flag: --categoryExtensions=true)',
-    category: 'Extensions',
-    args: {},
   },
   list_network_requests: {
     description:
@@ -443,6 +831,12 @@ export const commands: Commands = {
         required: false,
         default: false,
       },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
     },
   },
   list_pages: {
@@ -450,9 +844,9 @@ export const commands: Commands = {
     category: 'Navigation automation',
     args: {},
   },
-  list_webmcp_tools: {
+  list_targets: {
     description:
-      'Lists all WebMCP tools the page exposes. (requires flag: --experimentalWebmcp=true)',
+      'List live page/worker targets and frame IDs for explicit runtime investigation. Does not enable the debugger or global auto-attachment.',
     category: 'Debugging',
     args: {},
   },
@@ -496,11 +890,24 @@ export const commands: Commands = {
           'A JavaScript script to be executed on each new document before any other scripts for the next navigation.',
         required: false,
       },
+      allowList: {
+        name: 'allowList',
+        type: 'string',
+        description:
+          'Optional comma-separated list of URL patterns to allow. If provided, all other navigations will be blocked.',
+        required: false,
+      },
       timeout: {
         name: 'timeout',
         type: 'integer',
         description:
           'Maximum wait time in milliseconds. If set to 0, the default timeout will be used.',
+        required: false,
+      },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
         required: false,
       },
     },
@@ -528,6 +935,13 @@ export const commands: Commands = {
         type: 'string',
         description:
           'If specified, the page is created in an isolated browser context with the given name. Pages in the same browser context share cookies and storage. Pages in different browser contexts are fully isolated.',
+        required: false,
+      },
+      allowList: {
+        name: 'allowList',
+        type: 'string',
+        description:
+          'Optional comma-separated list of URL patterns to allow. If provided, all other navigations will be blocked.',
         required: false,
       },
       timeout: {
@@ -558,18 +972,108 @@ export const commands: Commands = {
           'Whether to include a snapshot in the response. Default is false.',
         required: false,
       },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
     },
   },
-  reload_extension: {
+  read_capture: {
     description:
-      'Reloads an unpacked Chrome extension by its ID. (requires flag: --categoryExtensions=true)',
-    category: 'Extensions',
+      'Read capture journal records using a cursor. Bodies are immutable file references. Raw extra-info events preserve ordering and explicitly report unresolved redirect-hop associations. Filtering advances the cursor over scanned records.',
+    category: 'Network',
     args: {
-      id: {
-        name: 'id',
+      captureId: {
+        name: 'captureId',
         type: 'string',
-        description: 'ID of the extension to reload.',
+        description: '',
         required: true,
+      },
+      cursor: {
+        name: 'cursor',
+        type: 'integer',
+        description: '',
+        required: false,
+      },
+      limit: {
+        name: 'limit',
+        type: 'integer',
+        description: '',
+        required: false,
+      },
+      url: {
+        name: 'url',
+        type: 'string',
+        description: 'URL substring filter.',
+        required: false,
+      },
+      method: {
+        name: 'method',
+        type: 'string',
+        description: '',
+        required: false,
+      },
+      kind: {
+        name: 'kind',
+        type: 'string',
+        description:
+          'Journal event kind, such as request, response, response_body, websocket_message or action.',
+        required: false,
+      },
+    },
+  },
+  read_interception: {
+    description:
+      'Read the actual paused request or response. Header output reflects Fetch events; use capture extra-info for missing cookie headers. includeBody starts a bounded background stream read and returns immediately; poll again for completion. Consuming the body requires fulfillment or abort. Continue, cancel and expiry reconstruct a complete captured original; incomplete consumed bodies abort on cancel or expiry.',
+    category: 'Network',
+    args: {
+      interceptionId: {
+        name: 'interceptionId',
+        type: 'string',
+        description: 'ID from arm_interception.',
+        required: true,
+      },
+      includeBody: {
+        name: 'includeBody',
+        type: 'boolean',
+        description:
+          'Start or poll a bounded response body stream read. A complete result contains base64 bytes. Default: false.',
+        required: false,
+      },
+      maxBodyBytes: {
+        name: 'maxBodyBytes',
+        type: 'integer',
+        description:
+          'Maximum retained body bytes. Set on the first read; later polls preserve that limit. Default and maximum: 1048576.',
+        required: false,
+      },
+    },
+  },
+  read_network_wait: {
+    description:
+      'Read the nonblocking network observation status: pending, matched, timed_out or cancelled. A matched observation includes the event metadata without header/body values.',
+    category: 'Network',
+    args: {
+      observationId: {
+        name: 'observationId',
+        type: 'string',
+        description: '',
+        required: true,
+      },
+    },
+  },
+  release_handles: {
+    description:
+      'Release retained remote handles. Omit handles to release all investigation handles.',
+    category: 'Debugging',
+    args: {
+      handles: {
+        name: 'handles',
+        type: 'array',
+        description: '',
+        required: false,
       },
     },
   },
@@ -590,6 +1094,133 @@ export const commands: Commands = {
         description: 'Page height',
         required: true,
       },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
+    },
+  },
+  resolve_interception: {
+    description:
+      'Continue or mutate a paused request, replace its actual response, abort it, or cancel the rule. This acts on browser traffic without replaying a new request.',
+    category: 'Network',
+    args: {
+      interceptionId: {
+        name: 'interceptionId',
+        type: 'string',
+        description: 'ID from arm_interception.',
+        required: true,
+      },
+      action: {
+        name: 'action',
+        type: 'string',
+        description:
+          'How to release the pause. cancel removes the rule and continues untouched traffic or reconstructs a complete consumed body; incomplete consumed bodies abort.',
+        required: true,
+        enum: ['continue', 'fulfill', 'abort', 'cancel'],
+      },
+      url: {
+        name: 'url',
+        type: 'string',
+        description: 'Replacement request URL, for continue at request stage.',
+        required: false,
+      },
+      method: {
+        name: 'method',
+        type: 'string',
+        description:
+          'Replacement request method, for continue at request stage.',
+        required: false,
+      },
+      postData: {
+        name: 'postData',
+        type: 'string',
+        description:
+          'Replacement UTF-8 request body, for continue at request stage.',
+        required: false,
+      },
+      headers: {
+        name: 'headers',
+        type: 'array',
+        description:
+          'Complete replacement headers in Header-Name: value format. Duplicate names are supported.',
+        required: false,
+      },
+      status: {
+        name: 'status',
+        type: 'integer',
+        description:
+          'Replacement response status, for fulfill. Defaults to the original status or 200.',
+        required: false,
+      },
+      body: {
+        name: 'body',
+        type: 'string',
+        description: 'Replacement response body, required for fulfill.',
+        required: false,
+      },
+      bodyEncoding: {
+        name: 'bodyEncoding',
+        type: 'string',
+        description: 'Encoding of replacement body. Default: utf8.',
+        required: false,
+        enum: ['utf8', 'base64'],
+      },
+    },
+  },
+  runtime_evaluate: {
+    description:
+      'Execute a JavaScript function in an explicit page frame or worker. Return a value or retain a remote handle for non-JSON objects and functions. Handles expire on navigation/target destruction. For actions that may pause on a breakpoint, use start_action.',
+    category: 'Debugging',
+    args: {
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
+      targetId: {
+        name: 'targetId',
+        type: 'string',
+        description: 'Target ID from list_targets. Specify targetId or pageId.',
+        required: false,
+      },
+      frameId: {
+        name: 'frameId',
+        type: 'string',
+        description: 'Frame ID from list_targets; defaults to the main frame.',
+        required: false,
+      },
+      world: {
+        name: 'world',
+        type: 'string',
+        description:
+          'Isolated by default for pages; workers have only main world.',
+        required: false,
+        enum: ['isolated', 'main'],
+      },
+      function: {
+        name: 'function',
+        type: 'string',
+        description: 'JavaScript function declaration to invoke.',
+        required: true,
+      },
+      args: {
+        name: 'args',
+        type: 'string',
+        description:
+          'JSON array of {value: JSON} or {handle: ID}; handles must share the target/frame/world.',
+        required: false,
+      },
+      returnMode: {
+        name: 'returnMode',
+        type: 'string',
+        description: '',
+        required: false,
+        enum: ['value', 'handle'],
+      },
     },
   },
   screencast_start: {
@@ -604,13 +1235,26 @@ export const commands: Commands = {
           'Output file path (.webm,.mp4 are supported). Uses mkdtemp to generate a unique path if not provided.',
         required: false,
       },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
     },
   },
   screencast_stop: {
     description:
       'Stops the active screencast recording on the selected page. (requires flag: --experimentalScreencast=true)',
     category: 'Debugging',
-    args: {},
+    args: {
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
+    },
   },
   select_page: {
     description: 'Select a page as a context for future tool calls.',
@@ -631,6 +1275,33 @@ export const commands: Commands = {
       },
     },
   },
+  session_cookies: {
+    description:
+      'Read, set or remove cookies in a page browser context, including HttpOnly cookies. Cookie mutations require explicit set/remove action and exact cookie scope.',
+    category: 'Debugging',
+    args: {
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
+      action: {
+        name: 'action',
+        type: 'string',
+        description: '',
+        required: true,
+        enum: ['list', 'set', 'remove'],
+      },
+      cookies: {
+        name: 'cookies',
+        type: 'string',
+        description:
+          'JSON array of cookies: name/domain, value for set, optional path/secure/httpOnly/expires/sameSite/partitionKey. Remove matches exact name/domain/path/partition.',
+        required: false,
+      },
+    },
+  },
   set_blocked_urls: {
     description:
       'Block requests for URLs matching any of the given patterns. Patterns may include the * wildcard. Pass an empty array to clear all blocks. Useful for blocking trackers, ad networks, or fingerprint-collection endpoints during stealth runs.',
@@ -641,6 +1312,236 @@ export const commands: Commands = {
         type: 'array',
         description:
           'URL patterns to block. Wildcard `*` matches any character sequence. Examples: `*.doubleclick.net*`, `https://example.com/track/*`. Pass an empty array to clear.',
+        required: true,
+      },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
+    },
+  },
+  set_proxy: {
+    description:
+      'Change the regular Chrome profile proxy after launch while preserving tabs and page state. Existing connections and streams may continue on their old route. Explicit context proxy overrides may differ. Changing previously configured credentials on the same host/port is unsupported because Chrome may cache authentication. Does not verify connectivity or route UDP/WebRTC traffic.',
+    category: 'Network',
+    args: {
+      mode: {
+        name: 'mode',
+        type: 'string',
+        description: 'Choose direct access or a single upstream proxy.',
+        required: true,
+        enum: ['direct', 'proxy'],
+      },
+      server: {
+        name: 'server',
+        type: 'string',
+        description:
+          'Proxy URL (http, https, socks4 or socks5), or host:port. Required in proxy mode. Supply credentials separately.',
+        required: false,
+      },
+      username: {
+        name: 'username',
+        type: 'string',
+        description: 'HTTP/HTTPS proxy username.',
+        required: false,
+      },
+      password: {
+        name: 'password',
+        type: 'string',
+        description: 'HTTP/HTTPS proxy password.',
+        required: false,
+      },
+      bypassList: {
+        name: 'bypassList',
+        type: 'array',
+        description:
+          'Chrome proxy bypass rules. Chrome also bypasses loopback/link-local hosts implicitly.',
+        required: false,
+      },
+      connectionPolicy: {
+        name: 'connectionPolicy',
+        type: 'string',
+        description:
+          'Only new_connections is supported. disconnect_existing fails without changing settings because native Chrome exposes no explicit socket close control here.',
+        required: false,
+        enum: ['new_connections', 'disconnect_existing'],
+      },
+    },
+  },
+  start_action: {
+    description:
+      'Start an action and return an operation ID immediately. Use this before a breakpoint or request interception. Read progress with get_operation.',
+    category: 'Debugging',
+    args: {
+      action: {
+        name: 'action',
+        type: 'string',
+        description: 'Browser action to start.',
+        required: true,
+        enum: [
+          'navigate',
+          'click',
+          'fill',
+          'type_text',
+          'press_key',
+          'evaluate',
+          'call_handle',
+        ],
+      },
+      url: {
+        name: 'url',
+        type: 'string',
+        description: 'URL for a navigate action.',
+        required: false,
+      },
+      uid: {
+        name: 'uid',
+        type: 'string',
+        description: 'Snapshot element UID for a click action.',
+        required: false,
+      },
+      value: {
+        name: 'value',
+        type: 'string',
+        description: 'Replacement field value for a fill action.',
+        required: false,
+      },
+      text: {
+        name: 'text',
+        type: 'string',
+        description:
+          'Text to type into the focused input for a type_text action.',
+        required: false,
+      },
+      key: {
+        name: 'key',
+        type: 'string',
+        description:
+          'Key or combination for a press_key action, for example Enter or Control+A.',
+        required: false,
+      },
+      function: {
+        name: 'function',
+        type: 'string',
+        description:
+          'JavaScript function for an evaluate action, for example () => fetch("/api").then(r => r.json()).',
+        required: false,
+      },
+      handle: {
+        name: 'handle',
+        type: 'string',
+        description: 'Retained function handle for a call_handle action.',
+        required: false,
+      },
+      thisHandle: {
+        name: 'thisHandle',
+        type: 'string',
+        description: 'Retained receiver for a call_handle action.',
+        required: false,
+      },
+      args: {
+        name: 'args',
+        type: 'string',
+        description:
+          'JSON array of {value: JSON} or {handle: ID} arguments for evaluation or a handle call.',
+        required: false,
+      },
+      targetId: {
+        name: 'targetId',
+        type: 'string',
+        description:
+          'Explicit runtime target for evaluation. Get IDs from list_targets.',
+        required: false,
+      },
+      frameId: {
+        name: 'frameId',
+        type: 'string',
+        description:
+          'Explicit frame for evaluation. Get IDs from list_targets.',
+        required: false,
+      },
+      returnMode: {
+        name: 'returnMode',
+        type: 'string',
+        description:
+          'Return a JSON value or retain a remote handle. Default: value.',
+        required: false,
+        enum: ['value', 'handle'],
+      },
+      world: {
+        name: 'world',
+        type: 'string',
+        description: 'Evaluation world. Default: main.',
+        required: false,
+        enum: ['main', 'isolated'],
+      },
+      timeout: {
+        name: 'timeout',
+        type: 'integer',
+        description:
+          'Observation deadline in milliseconds. Default: 30000. Expiry does not stop JavaScript.',
+        required: false,
+      },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
+    },
+  },
+  start_capture: {
+    description:
+      'Start durable passive network capture. Saves metadata and eager bodies across navigations and page closure. Covers page primary sessions; independent workers and browser background traffic are excluded. Collected header values and body contents are saved unchanged. Optional fetch streaming uses experimental CDP support and reports gaps.',
+    category: 'Network',
+    args: {
+      directory: {
+        name: 'directory',
+        type: 'string',
+        description:
+          'Parent directory for a unique capture folder. Defaults to a temporary directory.',
+        required: false,
+      },
+      pageId: {
+        name: 'pageId',
+        type: 'integer',
+        description:
+          'Capture only this page. Omit to capture all pages and future tabs.',
+        required: false,
+      },
+      maxBodyBytes: {
+        name: 'maxBodyBytes',
+        type: 'integer',
+        description: 'Maximum size of each body/chunk. Default 5 MiB.',
+        required: false,
+      },
+      maxTotalBytes: {
+        name: 'maxTotalBytes',
+        type: 'integer',
+        description:
+          'Capture byte budget. Default 100 MiB; terminal gap records can exceed it slightly.',
+        required: false,
+      },
+      streaming: {
+        name: 'streaming',
+        type: 'boolean',
+        description:
+          'Capture fetch/EventSource response chunks using experimental streamResourceContent. Default false. WebSocket and EventSource messages are always captured.',
+        required: false,
+      },
+    },
+  },
+  stop_capture: {
+    description:
+      'Stop a network capture and flush pending bodies and its journal. Artifacts remain readable after stopping.',
+    category: 'Network',
+    args: {
+      captureId: {
+        name: 'captureId',
+        type: 'string',
+        description: '',
         required: true,
       },
     },
@@ -686,6 +1587,12 @@ export const commands: Commands = {
           'The absolute path, or a path relative to the current working directory, to save the screenshot to instead of attaching it to the response.',
         required: false,
       },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
+      },
     },
   },
   take_snapshot: {
@@ -707,18 +1614,11 @@ export const commands: Commands = {
           'The absolute path, or a path relative to the current working directory, to save the snapshot to instead of attaching it to the response.',
         required: false,
       },
-    },
-  },
-  trigger_extension_action: {
-    description:
-      'Triggers the default action of an extension by its ID. (requires flag: --categoryExtensions=true)',
-    category: 'Extensions',
-    args: {
-      id: {
-        name: 'id',
-        type: 'string',
-        description: 'ID of the extension to trigger the action for.',
-        required: true,
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
       },
     },
   },
@@ -739,18 +1639,11 @@ export const commands: Commands = {
           'Optional key to press after typing. E.g., "Enter", "Tab", "Escape"',
         required: false,
       },
-    },
-  },
-  uninstall_extension: {
-    description:
-      'Uninstalls a Chrome extension by its ID. (requires flag: --categoryExtensions=true)',
-    category: 'Extensions',
-    args: {
-      id: {
-        name: 'id',
-        type: 'string',
-        description: 'ID of the extension to uninstall.',
-        required: true,
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
+        required: false,
       },
     },
   },
@@ -776,6 +1669,12 @@ export const commands: Commands = {
         type: 'boolean',
         description:
           'Whether to include a snapshot in the response. Default is false.',
+        required: false,
+      },
+      pageId: {
+        name: 'pageId',
+        type: 'number',
+        description: 'Targets a specific page by ID.',
         required: false,
       },
     },

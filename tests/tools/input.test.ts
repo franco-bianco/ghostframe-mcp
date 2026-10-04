@@ -22,7 +22,6 @@ import {
   typeText,
 } from '../../src/tools/input.js';
 import {setHumanInputTestHooks} from '../../src/utils/humanInput.js';
-import {parseKey} from '../../src/utils/keyboard.js';
 import {serverHooks} from '../server.js';
 import {html, withMcpContext} from '../utils.js';
 
@@ -97,7 +96,7 @@ describe('input', () => {
           response.responseLines[0],
           'Successfully clicked on the element',
         );
-        assert.ok(response.includeSnapshot);
+
         assert.ok(await page.$('text/clicked'));
       });
     });
@@ -127,7 +126,7 @@ describe('input', () => {
           response.responseLines[0],
           'Successfully double clicked on the element',
         );
-        assert.ok(response.includeSnapshot);
+
         assert.ok(await page.$('text/dblclicked'));
       });
     });
@@ -238,7 +237,14 @@ describe('input', () => {
           response.responseLines[0],
           'Successfully clicked on the element',
         );
-        assert.strictEqual(response.snapshotParams, undefined);
+        const output = await response.handle('click', context);
+        assert.strictEqual('snapshot' in output.structuredContent, false);
+        assert.strictEqual(
+          await page.evaluate(
+            () => document.querySelector('button')?.textContent,
+          ),
+          'clicked',
+        );
       });
     });
 
@@ -266,7 +272,11 @@ describe('input', () => {
           response.responseLines[0],
           'Successfully clicked on the element',
         );
-        assert.notStrictEqual(response.snapshotParams, undefined);
+        const output = await response.handle('click', context);
+        assert.ok('snapshot' in output.structuredContent);
+        assert.ok(
+          JSON.stringify(output.structuredContent.snapshot).includes('clicked'),
+        );
       });
     });
   });
@@ -295,7 +305,7 @@ describe('input', () => {
           response.responseLines[0],
           'Successfully hovered over the element',
         );
-        assert.ok(response.includeSnapshot);
+
         assert.ok(await page.$('text/hovered'));
       });
     });
@@ -374,7 +384,7 @@ describe('input', () => {
           response.responseLines[0],
           'Successfully filled out the element',
         );
-        assert.ok(response.includeSnapshot);
+
         assert.ok(await page.$('text/test'));
       });
     });
@@ -406,9 +416,9 @@ describe('input', () => {
           response.responseLines[0],
           'Successfully filled out the element',
         );
-        assert.ok(response.includeSnapshot);
+
         const selectedValue = await page.evaluate(
-          () => document.querySelector('select')!.value,
+          () => document.querySelector('select')?.value,
         );
         assert.strictEqual(selectedValue, 'v2');
       });
@@ -436,7 +446,7 @@ describe('input', () => {
           response.responseLines[0],
           'Successfully filled out the element',
         );
-        assert.ok(response.includeSnapshot);
+
         assert.ok(
           await page.evaluate(() => {
             return document.body.querySelector('textarea')?.value === '1';
@@ -468,7 +478,7 @@ describe('input', () => {
           response.responseLines[0],
           'Successfully filled out the element',
         );
-        assert.ok(response.includeSnapshot);
+
         assert.ok(
           await page.evaluate(() => {
             return (
@@ -629,11 +639,15 @@ describe('input', () => {
 
         // Verify values
         const values = await page.evaluate(() => {
-          return {
-            email: (document.getElementById('email') as HTMLInputElement).value,
-            password: (document.getElementById('password') as HTMLInputElement)
-              .value,
-          };
+          const email = document.getElementById('email');
+          const password = document.getElementById('password');
+          if (
+            !(email instanceof HTMLInputElement) ||
+            !(password instanceof HTMLInputElement)
+          ) {
+            throw new Error('Missing form inputs');
+          }
+          return {email: email.value, password: password.value};
         });
 
         assert.strictEqual(
@@ -697,7 +711,7 @@ describe('input', () => {
           response,
           context,
         );
-        assert.ok(response.includeSnapshot);
+
         assert.strictEqual(
           response.responseLines[0],
           'Successfully dragged an element',
@@ -751,7 +765,7 @@ describe('input', () => {
           response,
           context,
         );
-        assert.ok(response.includeSnapshot);
+
         assert.strictEqual(
           response.responseLines[0],
           'Successfully filled out the form',
@@ -800,7 +814,7 @@ describe('input', () => {
           response,
           context,
         );
-        assert.ok(response.includeSnapshot);
+
         assert.strictEqual(
           response.responseLines[0],
           `File uploaded from ${testFilePath}.`,
@@ -845,13 +859,16 @@ describe('input', () => {
           response,
           context,
         );
-        assert.ok(response.includeSnapshot);
+
         assert.strictEqual(
           response.responseLines[0],
           `File uploaded from ${testFilePath}.`,
         );
         const uploadedFileName = await page.$eval('#file-input', el => {
-          const input = el as HTMLInputElement;
+          if (!(el instanceof HTMLInputElement)) {
+            throw new Error('Expected file input');
+          }
+          const input = el;
           return input.files?.[0]?.name;
         });
         assert.strictEqual(uploadedFileName, 'test.txt');
@@ -890,7 +907,6 @@ describe('input', () => {
         );
 
         assert.strictEqual(response.responseLines.length, 0);
-        assert.strictEqual(response.snapshotParams, undefined);
 
         await fs.unlink(testFilePath);
       });
@@ -898,30 +914,37 @@ describe('input', () => {
   });
 
   describe('press_key', () => {
-    it('parses keys', () => {
-      assert.deepStrictEqual(parseKey('Shift+A'), ['A', 'Shift']);
-      assert.deepStrictEqual(parseKey('Shift++'), ['+', 'Shift']);
-      assert.deepStrictEqual(parseKey('Control+Shift++'), [
-        '+',
-        'Control',
-        'Shift',
-      ]);
-      assert.deepStrictEqual(parseKey('Shift'), ['Shift']);
-      assert.deepStrictEqual(parseKey('KeyA'), ['KeyA']);
-    });
-    it('throws on empty key', () => {
-      assert.throws(() => {
-        parseKey('');
+    it('types the literal plus key using the public chord syntax', async () => {
+      await withMcpContext(async (response, context) => {
+        const page = context.getSelectedPptrPage();
+        await page.setContent(html`<input autofocus />`);
+        await page.locator('input').click();
+        await pressKey.handler(
+          {params: {key: 'Shift++'}, page: context.getSelectedMcpPage()},
+          response,
+          context,
+        );
+        assert.strictEqual(
+          await page
+            .locator('input')
+            .map(el => el.value)
+            .wait(),
+          '+',
+        );
       });
     });
-    it('throws on invalid key', () => {
-      assert.throws(() => {
-        parseKey('aaaaa');
-      });
-    });
-    it('throws on multiple keys', () => {
-      assert.throws(() => {
-        parseKey('Shift+Shift');
+
+    it('rejects empty, unsupported and duplicate key chords', async () => {
+      await withMcpContext(async (response, context) => {
+        for (const key of ['', 'aaaaa', 'Shift+Shift']) {
+          await assert.rejects(
+            pressKey.handler(
+              {params: {key}, page: context.getSelectedMcpPage()},
+              response,
+              context,
+            ),
+          );
+        }
       });
     });
 

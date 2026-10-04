@@ -1,29 +1,81 @@
-# Design Principles
+# Design principles
 
-Guidelines for shipping features in this stealth fork. Apply with nuance — when a stealth principle and a general principle disagree, stealth wins.
+Ghostframe helps agents understand website flows and reproduce frontend API behavior.
+It provides browser evidence and browser controls through MCP and a CLI.
+See [feature priorities](feature-priorities.md) for implemented capabilities and remaining browser boundaries.
 
-## General principles (inherited)
+## Add capabilities that expose new evidence or control
 
-- **Agent-agnostic API**: Use MCP. Do not lock to one LLM. Interoperability is non-negotiable.
-- **Token-optimized**: Return semantic summaries. "Detected on creepjs (lies: 3)" beats 50k of fingerprint JSON. Files are the right home for large data.
-- **Small deterministic blocks**: Composable tools (`click`, `evaluate_script`), not magic buttons.
-- **Self-healing errors**: Errors carry context and a next-step. A failed click that returns "no element with uid X — take a fresh `take_snapshot`" is the goal shape.
-- **Human and agent readable**: Structured payloads for machines, summaries for humans.
-- **Reference over value**: Heavy assets (screenshots, traces) return a path or resource URI, not the raw bytes.
+Add a tool when existing tool output cannot supply the required evidence or action.
+Examples include a retained closure, an actual paused response, or a live proxy change.
+Do not add tools that only repackage evidence an agent can already analyze.
 
-## Stealth principles (specific to this fork)
+Keep tools small and composable.
+Use explicit target, frame, realm, and storage identities where they affect correctness.
+Return references for large bodies and remote objects.
+Bound retained state and report missing data.
 
-- **Detection-signal awareness**: Every code change is a signal change. Before adding a CDP domain enable, a new launch flag, or a `Runtime.evaluate` call, ask which detection layer it touches (CDP, launch, DOM, fingerprint, behavioral, network) and whether it adds entropy or removes it. See `docs/detection-signals.md`.
-- **Fingerprint coherence**: User-agent string, UA-CH metadata, `Accept-Language`, `navigator.platform`, `Intl.DateTimeFormat().resolvedOptions().timeZone`, viewport, and proxy egress IP must agree. A change to one is a change to all. The `emulate` tool bundles persona attributes into one coherent change.
-- **Do no harm to entropy**: Do not introduce constants where the stock browser has variance. Hardcoded screen sizes, fixed viewport, uniform input timings, and zero-delay typing are bot tells. Default to plausible distributions; expose a single global off-switch for tests, not per-call overrides.
-- **Isolated by default for agent eval**: Scripts the agent injects run in an isolated world. Code the user explicitly hands to `evaluate_script` defaults to isolated and may opt into main world. The DevTools-MCP `Universe` (which keeps `Runtime.enable` + `Debugger.enable` open) is gated off in stealth mode and the affordances it provides are forfeit. See `docs/stealth-configuration.md`.
-- **Polyfills are arms-race**: DOM polyfills (`chrome.runtime`, permissions coherence, `Function.prototype.toString`) are detected by their _shape_, not their absence. Track an upstream reference (Patchright) and expect to maintain. See `docs/detection-signals.md`.
-- **Inherit Chrome's network stack**: TLS, JA3/JA4, and HTTP/2 fingerprints come from real Chrome via CDP. Do not interpose. This is a stealth feature, not a limitation.
-- **One persona per session**: Mixing UA, locale, and timezone within a session is a stronger tell than any single mismatched value. Pick a coherent set and hold it.
-- **Tool surface stays narrow**: Every tool is a code path detectors can probe. Lighthouse, heap snapshots, and performance tracing are out of scope for this fork — they require CDP domains that leak. Reject feature requests that re-add them.
+## Reuse Chrome and Puppeteer
 
-## Trade-offs documented inline
+Use existing CDP commands, Puppeteer APIs, and DevTools helpers before adding browser code.
+These interfaces expose network events, runtime objects, listeners, debugging, and browser storage.
+The proxy controller uses a private extension and Chrome's proxy API.
+These features do not require a Chromium fork.
 
-- Stealth mode loses DevTools-frontend Universe affordances (CDP-frontend probing). This is the cost of not pinning `Runtime.enable` open.
-- Humanized input is slower than instant input. For tests that don't need stealth, the global off-switch exists.
-- Polyfilling `chrome.runtime` to Patchright shape will outdate when Chrome changes the surface. Expected. Update the reference, not the heuristic.
+Keep Chrome responsible for origin connections and browser protocol behavior.
+Do not reconstruct its TLS or HTTP stack in application code.
+If a future capability requires a relay, document which connections it owns and which traffic it cannot route.
+
+## Keep the default observation path small
+
+Use the page's existing CDP session for passive capture where possible.
+Do not enable Debugger or attach to every worker at startup.
+Do not introduce page globals for investigation state.
+Run injected evaluation in an isolated world by default.
+
+Some investigations require behavior that changes the runtime.
+Enable those controls only when the caller requests them.
+Use a specific target, a deadline, and deterministic cleanup.
+Explain detection and timing effects in the tool description.
+
+The scoped debugger is an explicit exception to the default passive posture.
+Request interception also changes network timing.
+Neither feature guarantees stealth.
+See [investigation workflows](investigation.md) and [detection signals](detection-signals.md).
+
+## Preserve coherent browser state
+
+Keep the user agent, client hints, language, platform, timezone, and viewport consistent.
+Proxy egress can change the website's view of the session.
+Changing the proxy does not automatically change the browser persona.
+
+Use the existing human input helpers for agent input.
+Keep plausible timing variation in production.
+Tests can use the existing global stealth switch.
+
+Treat DOM polyfills as compatibility code that needs maintenance.
+Check their shape against the chosen upstream reference when Chrome changes.
+See [stealth configuration](stealth-configuration.md).
+
+## Make pauses recoverable
+
+Arm observations and interceptions before triggering traffic.
+Start actions that can pause through `start_action`.
+Return an operation ID immediately so another tool can inspect or release the pause.
+Do not hold the MCP tool mutex while an action waits for debugger or interception input.
+
+Resume and disable debugger sessions at their deadlines.
+Continue untouched intercepted traffic when its deadline expires.
+Reconstruct a complete consumed response body; abort an incomplete consumed body.
+Report action observation expiry separately from actual browser execution.
+Explicit cancellation can terminate unrelated JavaScript in the same target; describe that effect.
+
+## Document what tests establish
+
+Test the browser behavior a feature promises.
+For proxy changes, verify the route and retained session state.
+For interception, verify the original request and the page-visible response.
+For runtime handles, verify closure behavior and invalidation after navigation.
+For capture, verify durable files, bounds, streams, and explicit gaps.
+
+Follow [the documentation guidelines](documentation-guidelines.md) when writing instructions and limits.

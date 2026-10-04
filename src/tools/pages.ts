@@ -186,6 +186,10 @@ export const newPage = defineTool(() => {
         request.params.isolatedContext,
       );
 
+      context
+        .getInterceptionController()
+        .assertNavigationAllowed(page.pptrPage, request.params.allowList);
+
       await navigateWithInterception(
         page,
         () =>
@@ -242,8 +246,11 @@ export const navigatePage = definePageTool(() => {
       ...timeoutSchema,
     },
     blockedByDialog: false,
-    handler: async (request, response) => {
+    handler: async (request, response, context) => {
       const page = request.page;
+      context
+        .getInterceptionController()
+        .assertNavigationAllowed(page.pptrPage, request.params.allowList);
       const options = {
         timeout: request.params.timeout,
       };

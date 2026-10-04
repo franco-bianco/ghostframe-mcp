@@ -10,8 +10,18 @@ import {describe, it} from 'node:test';
 import type {ElementHandle} from 'puppeteer-core';
 
 import {SnapshotFormatter} from '../../src/formatters/SnapshotFormatter.js';
-import type {TextSnapshot} from '../../src/TextSnapshot.js';
+import {TextSnapshot} from '../../src/TextSnapshot.js';
 import type {TextSnapshotNode} from '../../src/types.js';
+
+function snapshotWithRoot(root: TextSnapshotNode): TextSnapshot {
+  return new TextSnapshot({
+    root,
+    snapshotId: '1',
+    idToNode: new Map(),
+    hasSelectedElement: false,
+    verbose: false,
+  });
+}
 
 describe('snapshotFormatter', () => {
   it('formats a snapshot with value properties', () => {
@@ -40,7 +50,7 @@ describe('snapshotFormatter', () => {
       },
     };
 
-    const formatter = new SnapshotFormatter({root: node} as TextSnapshot);
+    const formatter = new SnapshotFormatter(snapshotWithRoot(node));
     const formatted = formatter.toString();
     assert.strictEqual(
       formatted,
@@ -74,7 +84,7 @@ describe('snapshotFormatter', () => {
       },
     };
 
-    const formatter = new SnapshotFormatter({root: node} as TextSnapshot);
+    const formatter = new SnapshotFormatter(snapshotWithRoot(node));
     const formatted = formatter.toString();
     assert.strictEqual(
       formatted,
@@ -106,7 +116,7 @@ describe('snapshotFormatter', () => {
       },
     };
 
-    const formatter = new SnapshotFormatter({root: node} as TextSnapshot);
+    const formatter = new SnapshotFormatter(snapshotWithRoot(node));
     const formatted = formatter.toString();
     assert.strictEqual(
       formatted,
@@ -149,7 +159,7 @@ describe('snapshotFormatter', () => {
       },
     };
 
-    const formatter = new SnapshotFormatter({root: node} as TextSnapshot);
+    const formatter = new SnapshotFormatter(snapshotWithRoot(node));
     const formatted = formatter.toString();
     assert.strictEqual(
       formatted,
@@ -160,7 +170,7 @@ describe('snapshotFormatter', () => {
     );
   });
 
-  it('formats with DevTools data not included into a snapshot', t => {
+  it('guides the caller to verbose mode when the selected element is absent', () => {
     const node: TextSnapshotNode = {
       id: '1_1',
       role: 'checkbox',
@@ -191,10 +201,14 @@ describe('snapshotFormatter', () => {
     });
     const formatted = formatter.toString();
 
-    t.assert.snapshot?.(formatted);
+    assert.match(formatted, /selected element/i);
+    assert.match(formatted, /verbose snapshot/i);
+    assert.match(formatted, /uid=1_1 checkbox/);
+    assert.match(formatted, /uid=1_2 statictext/);
+    assert.doesNotMatch(formatted, /\[selected in/);
   });
 
-  it('does not include a note if the snapshot is already verbose', t => {
+  it('does not include a note if the snapshot is already verbose', () => {
     const node: TextSnapshotNode = {
       id: '1_1',
       role: 'checkbox',
@@ -225,10 +239,12 @@ describe('snapshotFormatter', () => {
     });
     const formatted = formatter.toString();
 
-    t.assert.snapshot?.(formatted);
+    assert.match(formatted, /^uid=1_1 checkbox/);
+    assert.match(formatted, /uid=1_2 statictext/);
+    assert.doesNotMatch(formatted, /Note:|verbose snapshot/i);
   });
 
-  it('formats with DevTools data included into a snapshot', t => {
+  it('marks only the selected element in the snapshot', () => {
     const node: TextSnapshotNode = {
       id: '1_1',
       role: 'checkbox',
@@ -260,7 +276,14 @@ describe('snapshotFormatter', () => {
     });
     const formatted = formatter.toString();
 
-    t.assert.snapshot?.(formatted);
+    const lines = formatted.trimEnd().split('\n');
+    assert.match(
+      lines[0],
+      /uid=1_1.*\[selected in the DevTools Elements panel\]/,
+    );
+    assert.match(lines[1], /uid=1_2 statictext/);
+    assert.doesNotMatch(lines[1], /\[selected in/);
+    assert.doesNotMatch(formatted, /Note:|verbose snapshot/i);
   });
 
   it('toJSON returns expected structure', () => {
@@ -283,7 +306,7 @@ describe('snapshotFormatter', () => {
       elementHandle: async () => null,
     };
 
-    const formatter = new SnapshotFormatter({root: node} as TextSnapshot);
+    const formatter = new SnapshotFormatter(snapshotWithRoot(node));
     const json = formatter.toJSON();
 
     assert.deepStrictEqual(json, {

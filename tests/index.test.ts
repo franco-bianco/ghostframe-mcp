@@ -5,23 +5,33 @@
  */
 
 import assert from 'node:assert';
-import fs from 'node:fs';
+import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, it} from 'node:test';
 
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
-import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
+import {
+  getDefaultEnvironment,
+  StdioClientTransport,
+} from '@modelcontextprotocol/sdk/client/stdio.js';
 import {
   ListRootsRequestSchema,
   RootsListChangedNotificationSchema,
   type ClientCapabilities,
-  type TextContent,
 } from '@modelcontextprotocol/sdk/types.js';
 import {executablePath} from 'puppeteer';
 
-import type {ToolCategory} from '../src/tools/categories.js';
-import type {ToolDefinition} from '../src/tools/ToolDefinition.js';
+import {zod} from '../src/third_party/index.js';
+
+const pagesSchema = zod.object({
+  pages: zod.array(
+    zod.object({id: zod.number(), url: zod.string(), selected: zod.boolean()}),
+  ),
+});
+const dialogSchema = zod.object({
+  dialog: zod.object({type: zod.literal('alert'), message: zod.string()}),
+});
 
 describe('e2e', () => {
   async function withClient(
@@ -31,6 +41,7 @@ describe('e2e', () => {
   ) {
     const transport = new StdioClientTransport({
       command: 'node',
+      env: {...getDefaultEnvironment(), TMPDIR: os.tmpdir()},
       args: [
         'build/src/bin/ghostframe-mcp.js',
         '--headless',
@@ -57,38 +68,85 @@ describe('e2e', () => {
       await client.close();
     }
   }
-  it('calls a tool', async t => {
+  it('preserves browser state between MCP calls', async () => {
     await withClient(async client => {
       const result = await client.callTool({
         name: 'list_pages',
         arguments: {},
       });
-      t.assert.snapshot?.(JSON.stringify(result.content));
-    });
-  });
-
-  it('calls a tool multiple times', async t => {
-    await withClient(async client => {
-      let result = await client.callTool({
+      assert.equal(result.isError, undefined);
+      const initial = pagesSchema.parse(result.structuredContent);
+      assert(
+        initial.pages.some(page => page.url === 'about:blank' && page.selected),
+      );
+      const url = 'data:text/html,<title>Persistent MCP state</title>';
+      await client.callTool({name: 'new_page', arguments: {url}});
+      const listed = await client.callTool({
         name: 'list_pages',
         arguments: {},
       });
-      result = await client.callTool({
-        name: 'list_pages',
-        arguments: {},
-      });
-      t.assert.snapshot?.(JSON.stringify(result.content));
+      const current = pagesSchema.parse(listed.structuredContent);
+      assert(current.pages.some(page => page.url === url && page.selected));
+      assert(
+        initial.pages.every(page =>
+          current.pages.some(
+            current => current.id === page.id && current.url === page.url,
+          ),
+        ),
+      );
     });
   });
 
-  it('has all tools', async () => {
+  it('advertises required investigation capabilities and applies category settings', async () => {
     await withClient(async client => {
       const {tools} = await client.listTools();
-      const exposedNames = tools.map(t => t.name).sort();
-      const definedNames = await getToolsWithFilteredCategories();
-      definedNames.sort();
-      assert.deepStrictEqual(exposedNames, definedNames);
+      const names = new Set(tools.map(tool => tool.name));
+      for (const name of [
+        'new_page',
+        'click',
+        'evaluate_script',
+        'start_capture',
+        'read_capture',
+        'arm_interception',
+        'start_action',
+        'runtime_evaluate',
+        'get_event_listeners',
+        'debugger_control',
+        'session_cookies',
+        'set_proxy',
+      ]) {
+        assert(
+          names.has(name),
+          `Required capability ${name} was not advertised.`,
+        );
+      }
+      for (const name of [
+        'lighthouse_audit',
+        'performance_start_trace',
+        'take_heap_snapshot',
+      ]) {
+        assert.equal(
+          names.has(name),
+          false,
+          `Excluded capability ${name} was advertised.`,
+        );
+      }
+      const action = tools.find(tool => tool.name === 'start_action');
+      assert(
+        action?.inputSchema.properties?.pageId,
+        'Actions must permit explicit page selection.',
+      );
     });
+    await withClient(
+      async client => {
+        const {tools} = await client.listTools();
+        const names = new Set(tools.map(tool => tool.name));
+        assert.equal(names.has('set_proxy'), false);
+        assert.equal(names.has('start_capture'), false);
+        assert(names.has('new_page'));
+      },
+      ['--category-network=false'],
+    );
   });
 
   it('updates roots when client notifies', async () => {
@@ -136,8 +194,9 @@ describe('e2e', () => {
         });
 
         assert.strictEqual(result.isError, true);
-        const content = result.content as TextContent[];
-        assert.match(content[0].text, /Access denied/);
+        zod
+          .object({errorMessage: zod.string()})
+          .parse(result.structuredContent);
       },
       [],
       {
@@ -149,24 +208,40 @@ describe('e2e', () => {
   });
 
   it('allows file access if roots capability is missing', async () => {
-    await withClient(
-      async client => {
-        const result = await client.callTool({
-          name: 'take_screenshot',
-          arguments: {
-            filePath: '/tmp/test.png',
-          },
-        });
-
-        assert.strictEqual(result.isError, undefined);
-        const content = result.content as TextContent[];
-        assert.match(content[0].text, /Saved screenshot to/);
-      },
-      [],
-      {
-        capabilities: {},
-      },
+    const directory = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'ghostframe-roots-contract-'),
     );
+    const filePath = path.join(directory, 'capture.png');
+    try {
+      await withClient(
+        async client => {
+          const result = await client.callTool({
+            name: 'take_screenshot',
+            arguments: {
+              filePath,
+            },
+          });
+
+          assert.strictEqual(
+            result.isError,
+            undefined,
+            JSON.stringify(result.content),
+          );
+          const image = await fs.readFile(filePath);
+          assert(
+            image
+              .subarray(0, 8)
+              .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+          );
+        },
+        [],
+        {
+          capabilities: {},
+        },
+      );
+    } finally {
+      await fs.rm(directory, {recursive: true, force: true});
+    }
   });
 
   describe('Dialogs', () => {
@@ -184,9 +259,22 @@ describe('e2e', () => {
         arguments: {},
       });
 
-      const snapshotText = (snapshotResult.content as TextContent[])[0].text;
+      const snapshotContent = snapshotResult.content;
+      assert(Array.isArray(snapshotContent));
+      const textBlock = snapshotContent.find(
+        block =>
+          typeof block === 'object' &&
+          block !== null &&
+          'type' in block &&
+          block.type === 'text',
+      );
+      assert(
+        textBlock && 'text' in textBlock && typeof textBlock.text === 'string',
+      );
+      const snapshotText = textBlock.text;
       const match = snapshotText.match(/uid=(\d+_\d+)\s+button "Click me"/);
-      const uid = match ? match[1] : '1_1';
+      assert(match, 'The browser snapshot must provide a button UID.');
+      const uid = match[1];
 
       // Trigger the dialog
       const result = await client.callTool({
@@ -199,16 +287,13 @@ describe('e2e', () => {
       return result;
     }
 
-    it('returns blocked message when dialog is opened during tool execution', async t => {
+    it('reports an alert and blocks actions until the dialog is handled', async () => {
       await withClient(async client => {
-        const result = await createNewPageAndTriggerDialog(client);
-        t.assert.snapshot?.(JSON.stringify(result));
-      });
-    });
-
-    it('when dialog is open and tool is blocked, returns an error', async t => {
-      await withClient(async client => {
-        await createNewPageAndTriggerDialog(client);
+        const opened = await createNewPageAndTriggerDialog(client);
+        assert.equal(
+          dialogSchema.parse(opened.structuredContent).dialog.message,
+          'test dialog',
+        );
         const result = await client.callTool({
           name: 'take_screenshot',
           arguments: {
@@ -216,11 +301,31 @@ describe('e2e', () => {
           },
         });
 
-        t.assert.snapshot?.(JSON.stringify(result));
+        assert.equal(result.isError, true);
+        assert.equal(
+          dialogSchema.parse(result.structuredContent).dialog.message,
+          'test dialog',
+        );
+        const handled = await client.callTool({
+          name: 'handle_dialog',
+          arguments: {action: 'accept'},
+        });
+        assert.equal(handled.isError, undefined);
+        const resumed = await client.callTool({
+          name: 'take_snapshot',
+          arguments: {},
+        });
+        assert.equal(resumed.isError, undefined);
+        assert.equal(
+          zod
+            .record(zod.string(), zod.unknown())
+            .parse(resumed.structuredContent).dialog,
+          undefined,
+        );
       });
     });
 
-    it('when dialog is open and tool is not blocked, executes tool', async t => {
+    it('permits a new page while another page has an alert', async () => {
       await withClient(async client => {
         await createNewPageAndTriggerDialog(client);
         const result = await client.callTool({
@@ -230,63 +335,14 @@ describe('e2e', () => {
           },
         });
 
-        t.assert.snapshot?.(JSON.stringify(result));
+        assert.equal(result.isError, undefined);
+        const pages = pagesSchema.parse(result.structuredContent).pages;
+        assert(
+          pages.some(
+            page => page.url === 'data:text/html,<h1>New</h1>' && page.selected,
+          ),
+        );
       });
     });
   });
 });
-
-async function getToolsWithFilteredCategories(
-  filterOutCategories: ToolCategory[] = [],
-): Promise<string[]> {
-  const files = fs.readdirSync('build/src/tools');
-  const definedNames = [];
-  for (const file of files) {
-    if (
-      !file.endsWith('.js') ||
-      file === 'ToolDefinition.js' ||
-      file === 'tools.js' ||
-      file === 'slim'
-    ) {
-      continue;
-    }
-    const fileTools = await import(`../src/tools/${file}`);
-
-    for (const maybeTool of Object.values<unknown>(fileTools)) {
-      let tool;
-      if (typeof maybeTool === 'function') {
-        tool = (maybeTool as (val: boolean) => ToolDefinition)(false);
-      } else {
-        tool = maybeTool as ToolDefinition;
-      }
-
-      // Skipping all files that are not tool files
-      if (tool === null || typeof tool !== 'object' || !('name' in tool)) {
-        continue;
-      }
-
-      if (toolShouldBeSkipped(tool, filterOutCategories)) {
-        continue;
-      }
-      definedNames.push(tool.name);
-    }
-  }
-  return definedNames;
-}
-
-function toolShouldBeSkipped(
-  tool: ToolDefinition,
-  filteredOutCategories: ToolCategory[],
-) {
-  if (tool.annotations?.conditions) {
-    return true;
-  }
-  if (
-    tool.annotations?.category &&
-    filteredOutCategories.includes(tool.annotations?.category)
-  ) {
-    return true;
-  }
-
-  return false;
-}

@@ -34,6 +34,15 @@ export class WaitForHelper {
    * for the DOM to be stable before returning.
    */
   async waitForStableDom(): Promise<void> {
+    return Promise.race([
+      this.#observeStableDom(),
+      this.timeout(this.#stableDomTimeout).then(() => {
+        throw new Error('Timeout');
+      }),
+    ]);
+  }
+
+  async #observeStableDom(): Promise<void> {
     const stableDomObserver = await this.#page.evaluateHandle(timeout => {
       let timeoutId: ReturnType<typeof setTimeout>;
       function callback() {
@@ -60,7 +69,7 @@ export class WaitForHelper {
       return domObserver;
     }, this.#stableDomFor);
 
-    this.#abortController.signal.addEventListener('abort', async () => {
+    const cleanup = async () => {
       try {
         await stableDomObserver.evaluate(observer => {
           observer.observer.disconnect();
@@ -70,16 +79,21 @@ export class WaitForHelper {
       } catch {
         // Ignored cleanup errors
       }
+    };
+    if (this.#abortController.signal.aborted) {
+      await cleanup();
+      return;
+    }
+    this.#abortController.signal.addEventListener(
+      'abort',
+      () => {
+        void cleanup();
+      },
+      {once: true},
+    );
+    await stableDomObserver.evaluate(async observer => {
+      return await observer.resolver.promise;
     });
-
-    return Promise.race([
-      stableDomObserver.evaluate(async observer => {
-        return await observer.resolver.promise;
-      }),
-      this.timeout(this.#stableDomTimeout).then(() => {
-        throw new Error('Timeout');
-      }),
-    ]);
   }
 
   async waitForNavigationStarted() {
@@ -129,22 +143,29 @@ export class WaitForHelper {
     options?: {timeout?: number; handleDialog?: 'accept' | 'dismiss' | string},
   ): Promise<void> {
     let dialogOpened = false;
-    if (options?.handleDialog) {
-      const dialogHandler = (dialog: Pick<Dialog, 'accept' | 'dismiss'>) => {
-        dialogOpened = true;
-        if (options.handleDialog === 'dismiss') {
-          void dialog.dismiss();
-        } else if (options.handleDialog === 'accept') {
-          void dialog.accept();
-        } else {
-          void dialog.accept(options.handleDialog);
-        }
-      };
-      this.#page.on('dialog', dialogHandler);
-      this.#abortController.signal.addEventListener('abort', () => {
-        this.#page.off('dialog', dialogHandler);
-      });
-    }
+    let notifyUnhandledDialog: (() => void) | undefined;
+    const unhandledDialog = new Promise<void>(resolve => {
+      notifyUnhandledDialog = resolve;
+    });
+    const dialogHandler = (dialog: Pick<Dialog, 'accept' | 'dismiss'>) => {
+      dialogOpened = true;
+      if ('handled' in dialog && dialog.handled === true) {
+        return;
+      }
+      if (options?.handleDialog === 'dismiss') {
+        void dialog.dismiss();
+      } else if (options?.handleDialog === 'accept') {
+        void dialog.accept();
+      } else if (options?.handleDialog !== undefined) {
+        void dialog.accept(options.handleDialog);
+      } else {
+        notifyUnhandledDialog?.();
+      }
+    };
+    this.#page.on('dialog', dialogHandler);
+    this.#abortController.signal.addEventListener('abort', () => {
+      this.#page.off('dialog', dialogHandler);
+    });
 
     const navigationFinished = this.waitForNavigationStarted()
       .then(navigationStated => {
@@ -159,7 +180,14 @@ export class WaitForHelper {
       .catch(error => logger(error));
 
     try {
-      await action();
+      await Promise.race([
+        action(),
+        unhandledDialog.then(() => {
+          throw new Error(
+            'The action opened a dialog. Call handle_dialog before continuing.',
+          );
+        }),
+      ]);
     } catch (error) {
       // Clear up pending promises
       this.#abortController.abort();

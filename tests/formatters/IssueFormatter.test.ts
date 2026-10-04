@@ -53,14 +53,6 @@ describe('IssueFormatter', () => {
   }
 
   formatterTestConcise('formats an issue message', async () => {
-    const testGenericIssue = {
-      details: () => {
-        return {
-          violatingNodeId: 2,
-          violatingNodeAttribute: 'test',
-        };
-      },
-    };
     const mockAggregatedIssue = getMockAggregatedIssue();
     const mockDescription = {
       file: 'mock.md',
@@ -73,9 +65,6 @@ describe('IssueFormatter', () => {
       ],
     };
     mockAggregatedIssue.getDescription.returns(mockDescription);
-    // @ts-expect-error generic issue stub bypass
-    mockAggregatedIssue.getGenericIssues.returns(new Set([testGenericIssue]));
-
     const mockDescriptionFileContent =
       '# Mock Issue Title\n\nThis is a mock issue description';
 

@@ -7,14 +7,12 @@
 import assert from 'node:assert';
 import {describe, it} from 'node:test';
 
-import type {ParsedArguments} from '../../src/bin/ghostframe-mcp-cli-options.js';
 import {navigatePage} from '../../src/tools/pages.js';
 import {serverHooks} from '../server.js';
 import {withMcpContext} from '../utils.js';
 
 describe('pages allowList', () => {
   const server = serverHooks();
-  const args = {} as ParsedArguments;
 
   it('navigates through redirects when all URLs are allowed', async () => {
     server.addRoute('/a.html', (_req, res) => {
@@ -35,7 +33,7 @@ describe('pages allowList', () => {
       const baseUrl = server.baseUrl;
       const allowList = `${baseUrl}/a.html,${baseUrl}/b.html,${baseUrl}/c.html`;
 
-      await navigatePage(args).handler(
+      await navigatePage().handler(
         {
           params: {
             url: `${baseUrl}/a.html`,
@@ -75,7 +73,7 @@ describe('pages allowList', () => {
       // b.html is missing from allowList
       const allowList = `${baseUrl}/a.html,${baseUrl}/c.html`;
 
-      await navigatePage(args).handler(
+      await navigatePage().handler(
         {
           params: {
             url: `${baseUrl}/a.html`,

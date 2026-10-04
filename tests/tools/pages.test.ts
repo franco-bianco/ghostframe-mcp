@@ -5,10 +5,9 @@
  */
 
 import assert from 'node:assert';
-import {afterEach, describe, it} from 'node:test';
+import {describe, it} from 'node:test';
 
 import type {Dialog} from 'puppeteer-core';
-import sinon from 'sinon';
 
 import {
   listPages,
@@ -19,18 +18,29 @@ import {
   resizePage,
   handleDialog,
 } from '../../src/tools/pages.js';
+import {evaluateScript} from '../../src/tools/script.js';
+import {serverHooks} from '../server.js';
 import {html, withMcpContext} from '../utils.js';
 
 describe('pages', () => {
-  afterEach(() => {
-    sinon.restore();
-  });
+  const server = serverHooks();
 
   describe('list_pages', () => {
     it('list pages', async () => {
       await withMcpContext(async (response, context) => {
         await listPages().handler({params: {}}, response, context);
-        assert.ok(response.includePages);
+        const result = await response.handle('list_pages', context);
+        assert.ok(
+          'pages' in result.structuredContent &&
+            Array.isArray(result.structuredContent.pages),
+        );
+        const pages: unknown[] = result.structuredContent.pages;
+        assert.strictEqual(pages.length, 1);
+        const entry = pages[0];
+        assert.ok(
+          entry && typeof entry === 'object' && 'id' in entry && entry.id === 1,
+        );
+        assert.ok('selected' in entry && entry.selected === true);
       });
     });
     it('list pages after selected page is closed', async () => {
@@ -44,11 +54,22 @@ describe('pages', () => {
 
         // list_pages should still work even though the selected page is gone.
         await listPages().handler({params: {}}, response, context);
-        assert.ok(response.includePages);
+        const result = await response.handle('list_pages', context);
+        assert.ok(
+          'pages' in result.structuredContent &&
+            Array.isArray(result.structuredContent.pages),
+        );
+        const pages: unknown[] = result.structuredContent.pages;
+        assert.strictEqual(pages.length, 1);
+        const entry = pages[0];
+        assert.ok(
+          entry && typeof entry === 'object' && 'id' in entry && entry.id === 1,
+        );
+        assert.ok('selected' in entry && entry.selected === true);
       });
     });
 
-    it('when dialog is open', async t => {
+    it('when dialog is open', async () => {
       await withMcpContext(async (response, context) => {
         const page = context.getSelectedPptrPage();
 
@@ -66,28 +87,54 @@ describe('pages', () => {
         await listPages().handler({params: {}}, response, context);
 
         const result = await response.handle('list_pages', context);
-        t.assert.snapshot?.(JSON.stringify(result));
+        assert.ok(
+          'pages' in result.structuredContent &&
+            Array.isArray(result.structuredContent.pages),
+        );
+        assert.ok('dialog' in result.structuredContent);
+        assert.ok(
+          JSON.stringify(result.structuredContent.dialog).includes(
+            'test dialog',
+          ),
+        );
         await dialog.dismiss();
       });
     });
   });
   describe('new_page', () => {
-    it('create a page', async () => {
+    it('creates, loads and selects the requested page', async () => {
       await withMcpContext(async (response, context) => {
-        assert.strictEqual(
-          context.getPageById(1),
-          context.getSelectedMcpPage(),
-        );
         await newPage().handler(
-          {params: {url: 'about:blank'}},
+          {params: {url: 'data:text/html,<title>Fresh page</title>'}},
+          response,
+          context,
+        );
+        const output = await response.handle('new_page', context);
+        assert.ok(
+          'pages' in output.structuredContent &&
+            Array.isArray(output.structuredContent.pages),
+        );
+        const pages: unknown[] = output.structuredContent.pages;
+        assert.strictEqual(pages.length, 2);
+        const created = pages[1];
+        assert.ok(
+          created &&
+            typeof created === 'object' &&
+            'selected' in created &&
+            created.selected === true,
+        );
+        response.resetResponseLineForTesting();
+        await evaluateScript().handler(
+          {params: {function: '() => document.title'}},
           response,
           context,
         );
         assert.strictEqual(
-          context.getPageById(2),
-          context.getSelectedMcpPage(),
+          JSON.parse(
+            response.responseLines.at(2) ?? assert.fail('Missing result'),
+          ),
+          'Fresh page',
         );
-        assert.ok(response.includePages);
       });
     });
     it('create a page in the background', async () => {
@@ -114,62 +161,65 @@ describe('pages', () => {
           await originalPage.pptrPage.evaluate(() => document.hasFocus()),
           true,
         );
-        assert.ok(response.includePages);
       });
     });
   });
   describe('new_page with isolatedContext', () => {
-    it('creates a page in an isolated context', async () => {
+    it('shares cookies within a named context and isolates different names and the default context', async () => {
+      server.addHtmlRoute('/sessions', html`<main>Sessions</main>`);
       await withMcpContext(async (response, context) => {
+        const original = context.getSelectedPptrPage();
+        await original.goto(server.getRoute('/sessions'));
+        await original.evaluate(() => {
+          document.cookie = 'session=default; path=/';
+        });
         await newPage().handler(
-          {params: {url: 'about:blank', isolatedContext: 'session-a'}},
+          {
+            params: {
+              url: server.getRoute('/sessions'),
+              isolatedContext: 'session-a',
+            },
+          },
           response,
           context,
         );
-        const page = context.getSelectedPptrPage();
-        assert.strictEqual(context.getIsolatedContextName(page), 'session-a');
-        assert.ok(response.includePages);
-      });
-    });
-
-    it('reuses the same context for the same isolatedContext name', async () => {
-      await withMcpContext(async (response, context) => {
+        const first = context.getSelectedPptrPage();
+        assert.strictEqual(await first.evaluate(() => document.cookie), '');
+        await first.evaluate(() => {
+          document.cookie = 'session=alice; path=/';
+        });
         await newPage().handler(
-          {params: {url: 'about:blank', isolatedContext: 'session-a'}},
+          {
+            params: {
+              url: server.getRoute('/sessions'),
+              isolatedContext: 'session-a',
+            },
+          },
           response,
           context,
         );
-        const page1 = context.getSelectedPptrPage();
+        assert.strictEqual(
+          await context.getSelectedPptrPage().evaluate(() => document.cookie),
+          'session=alice',
+        );
         await newPage().handler(
-          {params: {url: 'about:blank', isolatedContext: 'session-a'}},
+          {
+            params: {
+              url: server.getRoute('/sessions'),
+              isolatedContext: 'session-b',
+            },
+          },
           response,
           context,
         );
-        const page2 = context.getSelectedPptrPage();
-        assert.notStrictEqual(page1, page2);
-        assert.strictEqual(context.getIsolatedContextName(page1), 'session-a');
-        assert.strictEqual(context.getIsolatedContextName(page2), 'session-a');
-        assert.strictEqual(page1.browserContext(), page2.browserContext());
-      });
-    });
-
-    it('creates separate contexts for different isolatedContext names', async () => {
-      await withMcpContext(async (response, context) => {
-        await newPage().handler(
-          {params: {url: 'about:blank', isolatedContext: 'session-a'}},
-          response,
-          context,
+        assert.strictEqual(
+          await context.getSelectedPptrPage().evaluate(() => document.cookie),
+          '',
         );
-        const pageA = context.getSelectedPptrPage();
-        await newPage().handler(
-          {params: {url: 'about:blank', isolatedContext: 'session-b'}},
-          response,
-          context,
+        assert.strictEqual(
+          await original.evaluate(() => document.cookie),
+          'session=default',
         );
-        const pageB = context.getSelectedPptrPage();
-        assert.strictEqual(context.getIsolatedContextName(pageA), 'session-a');
-        assert.strictEqual(context.getIsolatedContextName(pageB), 'session-b');
-        assert.notStrictEqual(pageA.browserContext(), pageB.browserContext());
       });
     });
 
@@ -181,27 +231,19 @@ describe('pages', () => {
           context,
         );
         const result = await response.handle('new_page', context);
-        const pages = (
-          result.structuredContent as {pages: Array<{isolatedContext?: string}>}
-        ).pages;
-        const isolatedPage = pages.find(p => p.isolatedContext === 'session-a');
+        assert.ok(
+          'pages' in result.structuredContent &&
+            Array.isArray(result.structuredContent.pages),
+        );
+        const pages: unknown[] = result.structuredContent.pages;
+        const isolatedPage = pages.find(
+          p =>
+            p &&
+            typeof p === 'object' &&
+            'isolatedContext' in p &&
+            p.isolatedContext === 'session-a',
+        );
         assert.ok(isolatedPage);
-      });
-    });
-
-    it('does not set isolatedContext for pages in the default context', async () => {
-      await withMcpContext(async (response, context) => {
-        const page = context.getSelectedPptrPage();
-        assert.strictEqual(context.getIsolatedContextName(page), undefined);
-        await newPage().handler(
-          {params: {url: 'about:blank'}},
-          response,
-          context,
-        );
-        assert.strictEqual(
-          context.getIsolatedContextName(context.getSelectedPptrPage()),
-          undefined,
-        );
       });
     });
 
@@ -213,14 +255,15 @@ describe('pages', () => {
           context,
         );
         const page = context.getSelectedPptrPage();
-        const pageId = context.getPageId(page)!;
+        const pageId = context.getPageId(page);
+        assert.ok(typeof pageId === 'number');
         assert.ok(!page.isClosed());
         await closePage.handler({params: {pageId}}, response, context);
         assert.ok(page.isClosed());
       });
     });
 
-    it('when dialog is open', async t => {
+    it('when dialog is open', async () => {
       await withMcpContext(async (response, context) => {
         const page = context.getSelectedPptrPage();
 
@@ -242,7 +285,11 @@ describe('pages', () => {
         );
 
         const result = await response.handle('new_page', context);
-        t.assert.snapshot?.(JSON.stringify(result));
+        assert.ok(
+          'pages' in result.structuredContent &&
+            Array.isArray(result.structuredContent.pages),
+        );
+        assert.strictEqual(result.structuredContent.pages.length, 2);
         await dialog.dismiss();
       });
     });
@@ -303,7 +350,6 @@ describe('pages', () => {
         assert.strictEqual(context.getPageById(2), page);
         await closePage.handler({params: {pageId: 2}}, response, context);
         assert.ok(page.pptrPage.isClosed());
-        assert.ok(response.includePages);
       });
     });
     it('cannot close the last page', async () => {
@@ -314,12 +360,12 @@ describe('pages', () => {
           response.responseLines[0],
           `The last open page cannot be closed. It is fine to keep it open.`,
         );
-        assert.ok(response.includePages);
+
         assert.ok(!page.isClosed());
       });
     });
 
-    it('when dialog is open', async t => {
+    it('when dialog is open', async () => {
       await withMcpContext(async (response, context) => {
         const page = await context.newPage();
         assert.strictEqual(
@@ -344,24 +390,36 @@ describe('pages', () => {
         await closePage.handler({params: {pageId: 2}}, response, context);
 
         const result = await response.handle('close_page', context);
-        t.assert.snapshot?.(JSON.stringify(result));
+        assert.ok(page.pptrPage.isClosed());
+        assert.ok(
+          'pages' in result.structuredContent &&
+            Array.isArray(result.structuredContent.pages),
+        );
+        assert.strictEqual(result.structuredContent.pages.length, 1);
       });
     });
   });
   describe('select_page', () => {
-    it('selects a page', async () => {
+    it('routes subsequent evaluation to the selected page', async () => {
       await withMcpContext(async (response, context) => {
-        await context.newPage();
-        assert.strictEqual(
-          context.getPageById(2),
-          context.getSelectedMcpPage(),
-        );
+        await context
+          .getSelectedPptrPage()
+          .setContent('<title>Original page</title>');
+        const other = await context.newPage();
+        await other.pptrPage.setContent('<title>Other page</title>');
         await selectPage.handler({params: {pageId: 1}}, response, context);
-        assert.strictEqual(
-          context.getPageById(1),
-          context.getSelectedMcpPage(),
+        response.resetResponseLineForTesting();
+        await evaluateScript().handler(
+          {params: {function: '() => document.title'}},
+          response,
+          context,
         );
-        assert.ok(response.includePages);
+        assert.strictEqual(
+          JSON.parse(
+            response.responseLines.at(2) ?? assert.fail('Missing result'),
+          ),
+          'Original page',
+        );
       });
     });
     it('selects a page and keeps it focused in the background', async () => {
@@ -388,7 +446,6 @@ describe('pages', () => {
             .pptrPage.evaluate(() => document.hasFocus()),
           true,
         );
-        assert.ok(response.includePages);
       });
     });
     it('preserves focus across different browser contexts', async () => {
@@ -400,7 +457,8 @@ describe('pages', () => {
           context,
         );
         const pageA = context.getSelectedPptrPage();
-        const pageAId = context.getPageId(pageA)!;
+        const pageAId = context.getPageId(pageA);
+        assert.ok(typeof pageAId === 'number');
 
         await newPage().handler(
           {params: {url: 'about:blank', isolatedContext: 'ctx-b'}},
@@ -436,7 +494,7 @@ describe('pages', () => {
       });
     });
 
-    it('when dialog is open', async t => {
+    it('when dialog is open', async () => {
       await withMcpContext(async (response, context) => {
         const page = context.getSelectedPptrPage();
 
@@ -454,7 +512,8 @@ describe('pages', () => {
         await selectPage.handler({params: {pageId: 1}}, response, context);
 
         const result = await response.handle('select_page', context);
-        t.assert.snapshot?.(JSON.stringify(result));
+        assert.ok('dialog' in result.structuredContent);
+        assert.strictEqual(context.getSelectedPptrPage(), page);
         await dialog.dismiss();
       });
     });
@@ -475,7 +534,6 @@ describe('pages', () => {
           await page.evaluate(() => document.querySelector('div')?.textContent),
           'Hello MCP',
         );
-        assert.ok(response.includePages);
       });
     });
 
@@ -509,32 +567,22 @@ describe('pages', () => {
       });
     });
 
-    it('respects the timeout parameter', async () => {
+    it('bounds a navigation whose server never responds', async () => {
+      server.addRoute('/stalled', (_req, _res) => {
+        // Keep the HTTP response pending until the test server shuts down.
+      });
       await withMcpContext(async (response, context) => {
-        const page = context.getSelectedPptrPage();
-        const stub = sinon.stub(page, 'waitForNavigation').resolves(null);
-
-        try {
-          await navigatePage().handler(
-            {
-              params: {
-                url: 'about:blank',
-                timeout: 12345,
-              },
-              page: context.getSelectedMcpPage(),
-            },
-            response,
-            context,
-          );
-        } finally {
-          stub.restore();
-        }
-
-        assert.strictEqual(
-          stub.firstCall.args[0]?.timeout,
-          12345,
-          'The timeout parameter should be passed to waitForNavigation',
+        const started = Date.now();
+        await navigatePage().handler(
+          {
+            params: {url: server.getRoute('/stalled'), timeout: 150},
+            page: context.getSelectedMcpPage(),
+          },
+          response,
+          context,
         );
+        assert.ok(Date.now() - started < 5000);
+        assert.ok(response.responseLines.some(line => /timeout/i.test(line)));
       });
     });
     it('go back', async () => {
@@ -551,7 +599,6 @@ describe('pages', () => {
           await page.evaluate(() => document.location.href),
           'about:blank',
         );
-        assert.ok(response.includePages);
       });
     });
     it('go forward', async () => {
@@ -569,7 +616,6 @@ describe('pages', () => {
           await page.evaluate(() => document.querySelector('div')?.textContent),
           'Hello MCP',
         );
-        assert.ok(response.includePages);
       });
     });
     it('reload', async () => {
@@ -586,7 +632,6 @@ describe('pages', () => {
           await page.evaluate(() => document.location.href),
           'data:text/html,<div>Hello MCP</div>',
         );
-        assert.ok(response.includePages);
       });
     });
 
@@ -609,7 +654,7 @@ describe('pages', () => {
         );
 
         assert.strictEqual(context.getSelectedMcpPage().getDialog(), undefined);
-        assert.ok(response.includePages);
+
         assert.strictEqual(
           response.responseLines.join('\n'),
           'Accepted a beforeunload dialog.\nSuccessfully reloaded the page.',
@@ -643,7 +688,7 @@ describe('pages', () => {
         );
 
         assert.strictEqual(context.getSelectedMcpPage().getDialog(), undefined);
-        assert.ok(response.includePages);
+
         assert.strictEqual(
           response.responseLines.join('\n'),
           'Declined a beforeunload dialog.\nUnable to reload the selected page: Navigation timeout of 500 ms exceeded.',
@@ -664,7 +709,6 @@ describe('pages', () => {
             .at(0)
             ?.startsWith('Unable to navigate forward in the selected page:'),
         );
-        assert.ok(response.includePages);
       });
     });
     it('go back with error', async () => {
@@ -680,7 +724,6 @@ describe('pages', () => {
             .at(0)
             ?.startsWith('Unable to navigate back in the selected page:'),
         );
-        assert.ok(response.includePages);
       });
     });
     it('navigates to correct page with initScript', async () => {
@@ -688,7 +731,7 @@ describe('pages', () => {
         await navigatePage().handler(
           {
             params: {
-              url: 'data:text/html,<div>Hello MCP</div>',
+              url: 'data:text/html,<script>document.title = window.initScript || "missing"</script>',
               initScript: 'window.initScript = "completed"',
             },
             page: context.getSelectedMcpPage(),
@@ -699,15 +742,15 @@ describe('pages', () => {
         const page = context.getSelectedPptrPage();
 
         // wait for up to 1s for the global variable to set by the initScript to exist
-        await page.waitForFunction("window.initScript==='completed'", {
-          timeout: 1000,
-        });
-
-        assert.ok(response.includePages);
+        assert.strictEqual(await page.title(), 'completed');
+        await page.goto(
+          'data:text/html,<script>document.title = window.initScript || "missing"</script>',
+        );
+        assert.strictEqual(await page.title(), 'missing');
       });
     });
 
-    it('when dialog is open', async t => {
+    it('when dialog is open', async () => {
       await withMcpContext(async (response, context) => {
         const page = context.getSelectedPptrPage();
         const dialogPromise = new Promise<void>(resolve => {
@@ -728,8 +771,11 @@ describe('pages', () => {
           context,
         );
 
-        const result = await response.handle('navigate_page', context);
-        t.assert.snapshot?.(JSON.stringify(result));
+        await response.handle('navigate_page', context);
+        assert.strictEqual(
+          await page.evaluate(() => document.querySelector('div')?.textContent),
+          'Navigated',
+        );
       });
     });
   });
@@ -897,7 +943,7 @@ describe('pages', () => {
       });
     });
 
-    it('when dialog is open', async t => {
+    it('when dialog is open', async () => {
       await withMcpContext(async (response, context) => {
         const page = context.getSelectedPptrPage();
         const dialogPromise = new Promise<Dialog>(resolve => {
@@ -921,182 +967,85 @@ describe('pages', () => {
         );
 
         const result = await response.handle('resize_page', context);
-        t.assert.snapshot?.(JSON.stringify(result));
+        assert.ok('dialog' in result.structuredContent);
         await dialog.dismiss();
+        assert.deepStrictEqual(
+          await page.evaluate(() => [innerWidth, innerHeight]),
+          [1600, 1400],
+        );
       });
     });
   });
 
   describe('dialogs', () => {
-    it('can accept dialogs', async () => {
+    it('returns the accepted or dismissed confirmation to page JavaScript', async () => {
       await withMcpContext(async (response, context) => {
-        const page = context.getSelectedPptrPage();
-        const dialogPromise = new Promise<void>(resolve => {
-          page.on('dialog', () => {
-            resolve();
-          });
-        });
-        page.evaluate(() => {
-          alert('test');
-        });
-        await dialogPromise;
-        await handleDialog.handler(
-          {
-            params: {
-              action: 'accept',
-            },
-            page: context.getSelectedMcpPage(),
-          },
-          response,
-          context,
-        );
-        assert.strictEqual(context.getSelectedMcpPage().getDialog(), undefined);
-        assert.strictEqual(
-          response.responseLines[0],
-          'Successfully accepted the dialog',
-        );
+        const page = context.getSelectedMcpPage();
+        const actions: Array<'accept' | 'dismiss'> = ['accept', 'dismiss'];
+        for (const action of actions) {
+          const opened = new Promise<void>(resolve =>
+            page.pptrPage.once('dialog', () => resolve()),
+          );
+          const result = page.pptrPage.evaluate(() => confirm('Continue?'));
+          await opened;
+          await handleDialog.handler(
+            {params: {action}, page},
+            response,
+            context,
+          );
+          assert.strictEqual(await result, action === 'accept');
+        }
       });
     });
-    it('can dismiss dialogs', async () => {
+
+    it('handles an externally dismissed dialog without repeating its effect', async () => {
       await withMcpContext(async (response, context) => {
-        const page = context.getSelectedPptrPage();
-        const dialogPromise = new Promise<void>(resolve => {
-          page.on('dialog', () => {
-            resolve();
-          });
-        });
-        page.evaluate(() => {
-          alert('test');
-        });
-        await dialogPromise;
+        const page = context.getSelectedMcpPage();
+        const opened = new Promise<Dialog>(resolve =>
+          page.pptrPage.once('dialog', resolve),
+        );
+        const result = page.pptrPage.evaluate(() => confirm('Continue?'));
+        await (await opened).dismiss();
         await handleDialog.handler(
-          {
-            params: {
-              action: 'dismiss',
-            },
-            page: context.getSelectedMcpPage(),
-          },
+          {params: {action: 'dismiss'}, page},
           response,
           context,
         );
-        assert.strictEqual(context.getSelectedMcpPage().getDialog(), undefined);
-        assert.strictEqual(
-          response.responseLines[0],
-          'Successfully dismissed the dialog',
-        );
+        assert.strictEqual(await result, false);
       });
     });
-    it('can dismiss already dismissed dialog dialogs', async () => {
+
+    it('routes independent prompt dialogs to their owning pages', async () => {
       await withMcpContext(async (response, context) => {
-        const page = context.getSelectedPptrPage();
-        const dialogPromise = new Promise<Dialog>(resolve => {
-          page.on('dialog', dialog => {
-            resolve(dialog);
-          });
-        });
-        page.evaluate(() => {
-          alert('test');
-        });
-        const dialog = await dialogPromise;
-        await dialog.dismiss();
+        const first = context.getSelectedMcpPage();
+        const second = await context.newPage();
+        const firstOpened = new Promise<void>(resolve =>
+          first.pptrPage.once('dialog', () => resolve()),
+        );
+        const firstResult = first.pptrPage.evaluate(() =>
+          prompt('First session?'),
+        );
+        await firstOpened;
+        const secondOpened = new Promise<void>(resolve =>
+          second.pptrPage.once('dialog', () => resolve()),
+        );
+        const secondResult = second.pptrPage.evaluate(() =>
+          prompt('Second session?'),
+        );
+        await secondOpened;
         await handleDialog.handler(
-          {
-            params: {
-              action: 'dismiss',
-            },
-            page: context.getSelectedMcpPage(),
-          },
+          {params: {action: 'accept', promptText: 'alice'}, page: first},
           response,
           context,
         );
-        assert.strictEqual(context.getSelectedMcpPage().getDialog(), undefined);
-        assert.strictEqual(
-          response.responseLines[0],
-          'Successfully dismissed the dialog',
-        );
-      });
-    });
-    it('can handle a dialog on a non-selected page via pageId', async () => {
-      await withMcpContext(async (response, context) => {
-        const page1 = context.getSelectedMcpPage();
-        await context.newPage(); // page2 is now selected
-
-        const dialogPromise = new Promise<void>(resolve => {
-          page1.pptrPage.once('dialog', () => {
-            resolve();
-          });
-        });
-        page1.pptrPage.evaluate(() => {
-          alert('test');
-        });
-        await dialogPromise;
-
-        // page1 is not selected, but its dialog should be accessible via page.
+        assert.strictEqual(await firstResult, 'alice');
+        assert.strictEqual(second.getDialog()?.message(), 'Second session?');
         await handleDialog.handler(
-          {
-            params: {
-              action: 'accept',
-            },
-            page: page1,
-          },
+          {params: {action: 'dismiss'}, page: second},
           response,
           context,
         );
-        assert.strictEqual(page1.getDialog(), undefined);
-        assert.strictEqual(
-          response.responseLines[0],
-          'Successfully accepted the dialog',
-        );
-      });
-    });
-    it('tracks dialogs independently per page', async () => {
-      await withMcpContext(async (response, context) => {
-        const page1 = context.getSelectedMcpPage();
-        await context.newPage();
-        const page2 = context.getSelectedMcpPage();
-
-        // Trigger dialog on page1.
-        const dialog1Promise = new Promise<void>(resolve => {
-          page1.pptrPage.once('dialog', () => {
-            resolve();
-          });
-        });
-        page1.pptrPage.evaluate(() => {
-          alert('dialog1');
-        });
-        await dialog1Promise;
-
-        // Trigger dialog on page2.
-        const dialog2Promise = new Promise<void>(resolve => {
-          page2.pptrPage.once('dialog', () => {
-            resolve();
-          });
-        });
-        page2.pptrPage.evaluate(() => {
-          alert('dialog2');
-        });
-        await dialog2Promise;
-
-        // Both dialogs should be tracked.
-        assert.ok(page1.getDialog());
-        assert.ok(page2.getDialog());
-
-        // Handle page1's dialog; page2's should remain.
-        await handleDialog.handler(
-          {params: {action: 'accept'}, page: page1},
-          response,
-          context,
-        );
-        assert.strictEqual(page1.getDialog(), undefined);
-        assert.ok(page2.getDialog());
-
-        // Handle page2's dialog.
-        await handleDialog.handler(
-          {params: {action: 'dismiss'}, page: page2},
-          response,
-          context,
-        );
-        assert.strictEqual(page2.getDialog(), undefined);
+        assert.strictEqual(await secondResult, null);
       });
     });
   });

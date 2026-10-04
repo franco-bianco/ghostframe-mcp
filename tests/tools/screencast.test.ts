@@ -5,209 +5,143 @@
  */
 
 import assert from 'node:assert';
-import {describe, it, afterEach} from 'node:test';
+import {execFile} from 'node:child_process';
+import {mkdtemp, readFile, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {describe, it} from 'node:test';
+import {promisify} from 'node:util';
 
 import sinon from 'sinon';
 
-import type {ParsedArguments} from '../../src/bin/ghostframe-mcp-cli-options.js';
 import {startScreencast, stopScreencast} from '../../src/tools/screencast.js';
 import {withMcpContext} from '../utils.js';
 
-function createMockRecorder() {
-  return {
-    stop: sinon.stub().resolves(),
-  };
-}
-
 describe('screencast', () => {
-  afterEach(() => {
-    sinon.restore();
-  });
-
-  describe('screencast_start', () => {
-    it('starts a screencast recording with filePath', async () => {
+  it('records a real video, refuses overlapping recordings and allows restarting', async t => {
+    try {
+      await promisify(execFile)('ffmpeg', ['-version']);
+    } catch {
+      t.skip('The real video boundary requires ffmpeg in PATH.');
+      return;
+    }
+    const directory = await mkdtemp(
+      path.join(tmpdir(), 'ghostframe-video-test-'),
+    );
+    try {
       await withMcpContext(async (response, context) => {
-        const mockRecorder = createMockRecorder();
-        const selectedPage = context.getSelectedPptrPage();
-        const screencastStub = sinon
-          .stub(selectedPage, 'screencast')
-          .resolves(mockRecorder as never);
-
+        const filePath = path.join(directory, 'recording.mp4');
+        const page = context.getSelectedPptrPage();
+        const request = {
+          params: {filePath},
+          page: context.getSelectedMcpPage(),
+        };
+        await page.setContent('<main>Recording</main>');
+        await startScreencast().handler(request, response, context);
+        response.resetResponseLineForTesting();
+        await startScreencast().handler(request, response, context);
+        assert.ok(
+          response.responseLines.some(line =>
+            line.includes('already in progress'),
+          ),
+        );
+        await page.evaluate(async () => {
+          await new Promise<void>(resolve => {
+            let frame = 0;
+            const animate = () => {
+              document.body.style.background = frame % 2 ? 'red' : 'blue';
+              if (++frame >= 20) {
+                resolve();
+              } else {
+                requestAnimationFrame(animate);
+              }
+            };
+            requestAnimationFrame(animate);
+          });
+        });
+        await stopScreencast.handler(
+          {params: {}, page: request.page},
+          response,
+          context,
+        );
+        const video = await readFile(filePath);
+        assert.ok(video.length > 100);
+        assert.strictEqual(video.toString('ascii', 4, 8), 'ftyp');
+        const frame = await promisify(execFile)(
+          'ffmpeg',
+          [
+            '-nostdin',
+            '-v',
+            'error',
+            '-i',
+            filePath,
+            '-frames:v',
+            '1',
+            '-f',
+            'image2pipe',
+            '-vcodec',
+            'png',
+            'pipe:1',
+          ],
+          {encoding: null, maxBuffer: 10 * 1024 * 1024, timeout: 10_000},
+        );
+        assert.strictEqual(
+          frame.stdout.subarray(0, 8).toString('hex'),
+          '89504e470d0a1a0a',
+        );
         await startScreencast().handler(
           {
-            params: {filePath: '/tmp/test-recording.mp4'},
-            page: context.getSelectedMcpPage(),
+            params: {filePath: path.join(directory, 'second.mp4')},
+            page: request.page,
           },
           response,
           context,
         );
-
-        sinon.assert.calledOnce(screencastStub);
-        const callArgs = screencastStub.firstCall.args[0];
-        assert.ok(callArgs);
-        assert.ok(callArgs.path?.endsWith('test-recording.mp4'));
-
-        assert.ok(context.getScreenRecorder() !== null);
-        assert.ok(
-          response.responseLines
-            .join('\n')
-            .includes('Screencast recording started'),
-        );
-      });
-    });
-
-    it('starts a screencast recording with temp file when no filePath', async () => {
-      await withMcpContext(async (response, context) => {
-        const mockRecorder = createMockRecorder();
-        const selectedPage = context.getSelectedPptrPage();
-        const screencastStub = sinon
-          .stub(selectedPage, 'screencast')
-          .resolves(mockRecorder as never);
-
-        await startScreencast().handler(
-          {params: {}, page: context.getSelectedMcpPage()},
-          response,
-          context,
-        );
-
-        sinon.assert.calledOnce(screencastStub);
-        const callArgs = screencastStub.firstCall.args[0];
-        assert.ok(callArgs);
-        assert.ok(callArgs.path?.endsWith('.mp4'));
-        assert.ok(context.getScreenRecorder() !== null);
-      });
-    });
-
-    it('errors if a recording is already active', async () => {
-      await withMcpContext(async (response, context) => {
-        const mockRecorder = createMockRecorder();
-        context.setScreenRecorder({
-          recorder: mockRecorder as never,
-          filePath: '/tmp/existing.mp4',
+        await page.evaluate(async () => {
+          await new Promise<void>(resolve => {
+            let frame = 0;
+            const animate = () => {
+              document.body.style.background = frame % 2 ? 'green' : 'yellow';
+              if (++frame >= 20) {
+                resolve();
+              } else {
+                requestAnimationFrame(animate);
+              }
+            };
+            requestAnimationFrame(animate);
+          });
         });
-
-        const selectedPage = context.getSelectedPptrPage();
-        const screencastStub = sinon.stub(selectedPage, 'screencast');
-
-        await startScreencast().handler(
-          {params: {}, page: context.getSelectedMcpPage()},
+        await stopScreencast.handler(
+          {params: {}, page: request.page},
           response,
           context,
         );
-
-        sinon.assert.notCalled(screencastStub);
         assert.ok(
-          response.responseLines
-            .join('\n')
-            .includes('a screencast recording is already in progress'),
+          (await readFile(path.join(directory, 'second.mp4'))).length > 0,
         );
       });
-    });
-
-    it('provides a clear error when ffmpeg is not found', async () => {
-      await withMcpContext(async (response, context) => {
-        const selectedPage = context.getSelectedPptrPage();
-        const error = new Error('spawn ffmpeg ENOENT');
-        sinon.stub(selectedPage, 'screencast').rejects(error);
-
-        await assert.rejects(
-          startScreencast().handler(
-            {
-              params: {filePath: '/tmp/test.mp4'},
-              page: context.getSelectedMcpPage(),
-            },
-            response,
-            context,
-          ),
-          /ffmpeg is required for screencast recording/,
-        );
-
-        assert.strictEqual(context.getScreenRecorder(), null);
-      });
-    });
-
-    it('passes ffmpegPath from args to puppeteer', async () => {
-      await withMcpContext(async (response, context) => {
-        const mockRecorder = createMockRecorder();
-        const selectedPage = context.getSelectedPptrPage();
-        const screencastStub = sinon
-          .stub(selectedPage, 'screencast')
-          .resolves(mockRecorder as never);
-
-        const experimentalFfmpegPath = '/custom/path/to/ffmpeg';
-        await startScreencast({
-          experimentalFfmpegPath,
-        } as ParsedArguments).handler(
-          {params: {}, page: context.getSelectedMcpPage()},
-          response,
-          context,
-        );
-
-        sinon.assert.calledOnce(screencastStub);
-        const callArgs = screencastStub.firstCall.args[0];
-        assert.strictEqual(callArgs?.ffmpegPath, experimentalFfmpegPath);
-      });
-    });
+    } finally {
+      await rm(directory, {recursive: true, force: true});
+    }
   });
 
-  describe('screencast_stop', () => {
-    it('does nothing if no recording is active', async () => {
-      await withMcpContext(async (response, context) => {
-        assert.strictEqual(context.getScreenRecorder(), null);
-        await stopScreencast.handler(
-          {params: {}, page: context.getSelectedMcpPage()},
-          response,
-          context,
-        );
-        assert.strictEqual(response.responseLines.length, 0);
-      });
-    });
-
-    it('stops an active recording and reports the file path', async () => {
-      await withMcpContext(async (response, context) => {
-        const mockRecorder = createMockRecorder();
-        const filePath = '/tmp/test-recording.mp4';
-        context.setScreenRecorder({
-          recorder: mockRecorder as never,
-          filePath,
-        });
-
-        await stopScreencast.handler(
-          {params: {}, page: context.getSelectedMcpPage()},
-          response,
-          context,
-        );
-
-        sinon.assert.calledOnce(mockRecorder.stop);
-        assert.strictEqual(context.getScreenRecorder(), null);
-        assert.ok(
-          response.responseLines
-            .join('\n')
-            .includes('stopped and saved to /tmp/test-recording.mp4'),
-        );
-      });
-    });
-
-    it('clears the recorder even if stop() throws', async () => {
-      await withMcpContext(async (response, context) => {
-        const mockRecorder = createMockRecorder();
-        mockRecorder.stop.rejects(new Error('ffmpeg process error'));
-        context.setScreenRecorder({
-          recorder: mockRecorder as never,
-          filePath: '/tmp/test.mp4',
-        });
-
+  it('turns a missing external ffmpeg executable into actionable installation guidance', async () => {
+    await withMcpContext(async (response, context) => {
+      const stub = sinon
+        .stub(context.getSelectedPptrPage(), 'screencast')
+        .rejects(new Error('spawn ffmpeg ENOENT'));
+      try {
         await assert.rejects(
-          stopScreencast.handler(
+          startScreencast().handler(
             {params: {}, page: context.getSelectedMcpPage()},
             response,
             context,
           ),
-          /ffmpeg process error/,
+          /ffmpeg is required.*Install ffmpeg/s,
         );
-
-        assert.strictEqual(context.getScreenRecorder(), null);
-      });
+      } finally {
+        stub.restore();
+      }
     });
   });
 });

@@ -68,7 +68,15 @@ See [`stealth-configuration.md#evaluate_script-and-isolated-worlds`](./stealth-c
 
 ### `list_console_messages` returns nothing
 
-Expected behaviour under `--stealth`. The Universe gate also disables the console / pageerror / `Runtime.exceptionThrown` listeners that implicitly enable `Runtime`. Console data is not collected.
+Console capture uses the page's existing primary CDP session.
+It remains active during ordinary stealth use.
+The separate DevTools Universe stays disabled.
+
+Check the selected page and the message type filter.
+Messages from before collection started can be absent.
+Worker-only messages may not appear in the page's console list.
+If JavaScript is paused, resume it before a foreground console inspection.
+See [the investigation guide](investigation.md) for pause controls.
 
 ### Persona looks right but the site still flags us
 

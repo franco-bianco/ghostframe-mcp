@@ -21,8 +21,20 @@ import type {
 import {puppeteer} from './third_party/index.js';
 
 let browser: Browser | undefined;
+const internalExtensions = new WeakMap<Browser, Set<string>>();
 
-function makeTargetFilter() {
+export function registerInternalExtension(browser: Browser, id: string): void {
+  internalExtensions.get(browser)?.add(`chrome-extension://${id}/`);
+}
+
+export function unregisterInternalExtension(
+  browser: Browser,
+  id: string,
+): void {
+  internalExtensions.get(browser)?.delete(`chrome-extension://${id}/`);
+}
+
+function makeTargetFilter(allowedExtensions: Set<string>) {
   const ignoredPrefixes = new Set([
     'chrome://',
     'chrome-untrusted://',
@@ -30,6 +42,13 @@ function makeTargetFilter() {
   ]);
 
   return function targetFilter(target: Target): boolean {
+    if (target.type() === 'service_worker') {
+      for (const prefix of allowedExtensions) {
+        if (target.url().startsWith(prefix)) {
+          return true;
+        }
+      }
+    }
     if (target.url() === 'chrome://newtab/') {
       return true;
     }
@@ -167,35 +186,6 @@ export async function installStealthInitScript(
   }
 }
 
-/** Registers HTTP proxy authentication on current and future pages. */
-async function installProxyAuth(
-  browser: Browser,
-  username: string,
-  password: string,
-): Promise<void> {
-  const auth = async (target: Target): Promise<void> => {
-    try {
-      const page = await target.page();
-      if (!page) {
-        return;
-      }
-      await page.authenticate({username, password});
-    } catch (err) {
-      logger('Failed to install proxy authentication', err);
-    }
-  };
-  browser.on('targetcreated', target => {
-    void auth(target);
-  });
-  for (const page of await browser.pages()) {
-    try {
-      await page.authenticate({username, password});
-    } catch (err) {
-      logger('Failed to install proxy authentication on existing page', err);
-    }
-  }
-}
-
 export async function launch(options: McpLaunchOptions): Promise<Browser> {
   const {channel, executablePath, headless, isolated} = options;
   const profileDirName =
@@ -245,9 +235,16 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
   }
 
   try {
+    const allowedExtensions = new Set<string>();
     const browser = await puppeteer.launch({
+      // The MCP entry point awaits Browser.close() to flush persistent state.
+      // Puppeteer's signal handlers would kill Chrome concurrently.
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
       channel: puppeteerChannel,
-      targetFilter: makeTargetFilter(),
+      targetFilter: makeTargetFilter(allowedExtensions),
+      enableExtensions: true,
       executablePath,
       defaultViewport: null,
       userDataDir,
@@ -258,6 +255,23 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       acceptInsecureCerts: options.acceptInsecureCerts,
       handleDevToolsAsPage: true,
     });
+    internalExtensions.set(browser, allowedExtensions);
+    // A crashed daemon can leave a controller and its regular-profile proxy
+    // setting installed. Remove only our controllers before opening pages.
+    try {
+      for (const [id, extension] of await browser.extensions()) {
+        if (
+          extension.name === 'Ghostframe proxy controller' &&
+          path.basename(extension.path).startsWith('ghostframe-proxy-')
+        ) {
+          await browser.uninstallExtension(id);
+        }
+      }
+    } catch (error) {
+      // Older Chrome builds lack Extensions.getExtensions. Runtime proxy tools
+      // will report unsupported extension control when invoked on those builds.
+      logger('Could not inspect leftover proxy controllers', error);
+    }
     if (options.logFile) {
       // FIXME: we are probably subscribing too late to catch startup logs. We
       // should expose the process earlier or expose the getRecentLogs() getter.
@@ -266,16 +280,6 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
     }
     await installStealthInitScript(browser);
     await closeInitialTab(browser);
-    if (
-      options.proxyUsername !== undefined &&
-      options.proxyPassword !== undefined
-    ) {
-      await installProxyAuth(
-        browser,
-        options.proxyUsername,
-        options.proxyPassword,
-      );
-    }
     if (options.viewport) {
       const [page] = await browser.pages();
       await page?.resize({

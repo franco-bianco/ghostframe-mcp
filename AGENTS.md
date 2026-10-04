@@ -11,6 +11,9 @@ from upstream.
 - Use `npm run test` to build and run tests, run all tests to verify correctness.
 - Use `npm run test path-to-test.ts` to build and run a single test file, for example, `npm run test tests/McpContext.test.ts`.
 - Use `npm run format` to fix formatting and get linting errors.
+- Follow [the documentation guidelines](docs/documentation-guidelines.md) for new and revised Markdown documents.
+- Follow [the testing policy](docs/testing-policy.md) for all implementation and test work. Establish intended behavior and audit affected checks before changes. Record reasons for test rewrites, replacements, and deletions.
+- Regenerate tool and CLI references when tool schemas change. Use `npm run docs:generate` and `npm run cli:generate` after a build.
 
 ## Rules for TypeScript
 

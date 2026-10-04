@@ -11,6 +11,11 @@ import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
 import {installStealthOnPage} from './browser.js';
+import {InterceptionController} from './investigation/InterceptionController.js';
+import {NetworkCapture} from './investigation/NetworkCapture.js';
+import {OperationManager} from './investigation/OperationManager.js';
+import {ProxyController} from './investigation/ProxyController.js';
+import {RuntimeInspector} from './investigation/RuntimeInspector.js';
 import {McpPage} from './McpPage.js';
 import {
   NetworkCollector,
@@ -19,6 +24,7 @@ import {
   type UncaughtError,
 } from './PageCollector.js';
 import {
+  CdpFrame,
   Locator,
   PredefinedNetworkConditions,
   type Browser,
@@ -42,10 +48,12 @@ import type {
   UserAgentMetadata,
 } from './types.js';
 import {ensureExtension, getTempFilePath} from './utils/files.js';
+import type {ParsedProxy} from './utils/proxy.js';
 import {getNetworkMultiplierFromString} from './WaitForHelper.js';
 
 interface McpContextOptions {
   allowUnrestrictedPaths: boolean;
+  startupProxy?: ParsedProxy;
   // Test-only escape hatch; production always runs stealthed.
   stealth?: boolean;
 }
@@ -76,6 +84,11 @@ export class McpContext implements Context {
   #selectedPage?: McpPage;
   #networkCollector: NetworkCollector;
   #consoleCollector: ConsoleCollector;
+  #networkCapture: NetworkCapture;
+  #proxyController: ProxyController;
+  #runtimeInspector: RuntimeInspector;
+  #operationManager = new OperationManager();
+  #interceptionController = new InterceptionController();
 
   #screenRecorderData: {recorder: ScreenRecorder; filePath: string} | null =
     null;
@@ -83,7 +96,6 @@ export class McpContext implements Context {
   #nextPageId = 1;
   #sessionEmulation: EmulationSettings = {};
 
-  #locatorClass: typeof Locator;
   #options: McpContextOptions;
   #roots: Root[] | undefined = undefined;
 
@@ -91,14 +103,23 @@ export class McpContext implements Context {
     browser: Browser,
     logger: Debugger,
     options: McpContextOptions,
-    locatorClass: typeof Locator,
   ) {
     this.browser = browser;
     this.logger = logger;
-    this.#locatorClass = locatorClass;
     this.#options = options;
 
     this.#networkCollector = new NetworkCollector(this.browser);
+    this.#networkCapture = new NetworkCapture(
+      browser,
+      page => this.#mcpPages.get(page)?.id,
+      filePath => this.validatePath(filePath),
+    );
+    this.#proxyController = new ProxyController(browser, options.startupProxy);
+    this.#runtimeInspector = new RuntimeInspector(
+      browser,
+      id => this.getPageById(id).pptrPage,
+      () => this.getSelectedMcpPage().pptrPage,
+    );
 
     this.#consoleCollector = new ConsoleCollector(this.browser, collect => {
       return {
@@ -121,9 +142,47 @@ export class McpContext implements Context {
     // Console capture rides the primary CDP session, where puppeteer has
     // already enabled Runtime, so it costs no extra detection surface.
     await this.#consoleCollector.init(pages);
+    if (this.#options.startupProxy) {
+      await this.#proxyController.initialize();
+    }
   }
 
-  dispose() {
+  getNetworkCapture(): NetworkCapture {
+    return this.#networkCapture;
+  }
+
+  getProxyController(): ProxyController {
+    return this.#proxyController;
+  }
+
+  getRuntimeInspector(): RuntimeInspector {
+    return this.#runtimeInspector;
+  }
+
+  getOperationManager(): OperationManager {
+    return this.#operationManager;
+  }
+
+  getInterceptionController(): InterceptionController {
+    return this.#interceptionController;
+  }
+
+  async dispose(options: {closeBrowser?: boolean} = {}): Promise<void> {
+    // Release pauses before terminating jobs; keep capture alive for their end markers.
+    await this.#interceptionController.dispose();
+    await this.#runtimeInspector.stopDebuggers();
+    await this.#operationManager.dispose();
+    await this.#runtimeInspector.dispose();
+    await this.#networkCapture.dispose();
+    if (options.closeBrowser) {
+      try {
+        await this.browser.close();
+      } finally {
+        await this.#proxyController.dispose();
+      }
+    } else {
+      await this.#proxyController.dispose();
+    }
     this.#networkCollector.dispose();
     this.#consoleCollector.dispose();
     for (const mcpPage of this.#mcpPages.values()) {
@@ -140,10 +199,8 @@ export class McpContext implements Context {
     browser: Browser,
     logger: Debugger,
     opts: McpContextOptions,
-    /* Let tests use unbundled Locator class to avoid overly strict checks within puppeteer that fail when mixing bundled and unbundled class instances */
-    locatorClass: typeof Locator = Locator,
   ) {
-    const context = new McpContext(browser, logger, opts, locatorClass);
+    const context = new McpContext(browser, logger, opts);
     await context.#init();
     return context;
   }
@@ -357,12 +414,11 @@ export class McpContext implements Context {
       // Clear the override entirely instead of forcing {0, 0} (Null Island),
       // which is itself a fingerprintable bot tell. Falls back to the
       // browser's real geolocation behavior.
-      const client = await page.createCDPSession();
-      try {
-        await client.send('Emulation.clearGeolocationOverride');
-      } finally {
-        await client.detach();
+      const frame = page.mainFrame();
+      if (!(frame instanceof CdpFrame)) {
+        throw new Error('Emulation requires a CDP page.');
       }
+      await frame.client.send('Emulation.clearGeolocationOverride');
       delete newSettings.geolocation;
     } else {
       await page.setGeolocation(options.geolocation);
@@ -577,6 +633,7 @@ export class McpContext implements Context {
       if (!mcpPage) {
         mcpPage = new McpPage(page, this.#nextPageId++);
         this.#mcpPages.set(page, mcpPage);
+        this.#networkCapture.addPage(page);
         // We emulate a focused page for all pages to support multi-agent workflows.
         void page.emulateFocusedPage(true).catch(error => {
           this.logger('Error turning on focused page emulation', error);
@@ -759,7 +816,7 @@ export class McpContext implements Context {
     const page = targetPage ?? this.getSelectedPptrPage();
     const frames = page.frames();
 
-    let locator = this.#locatorClass.race(
+    let locator = Locator.race(
       frames.flatMap(frame =>
         text.flatMap(value => [
           frame.locator(`aria/${value}`),

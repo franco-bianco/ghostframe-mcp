@@ -126,10 +126,20 @@ export function serializeArgs(
       }
     } else if (Array.isArray(value)) {
       for (const item of value) {
-        args.push(`--${kebabKey}`, String(item));
+        const text = String(item);
+        if (text.startsWith('-')) {
+          args.push(`--${kebabKey}=${text}`);
+        } else {
+          args.push(`--${kebabKey}`, text);
+        }
       }
     } else {
-      args.push(`--${kebabKey}`, String(value));
+      const text = String(value);
+      if (text.startsWith('-')) {
+        args.push(`--${kebabKey}=${text}`);
+      } else {
+        args.push(`--${kebabKey}`, text);
+      }
     }
   }
   return args;

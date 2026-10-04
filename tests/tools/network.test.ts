@@ -67,19 +67,7 @@ describe('network', () => {
   });
 
   describe('network_list_requests', () => {
-    it('list requests', async () => {
-      await withMcpContext(async (response, context) => {
-        await listNetworkRequests.handler(
-          {params: {}, page: context.getSelectedMcpPage()},
-          response,
-          context,
-        );
-        assert.ok(response.includeNetworkRequests);
-        assert.strictEqual(response.networkRequestsPageIdx, undefined);
-      });
-    });
-
-    it('list requests form current navigations only', async t => {
+    it('list requests from current navigations only', async t => {
       server.addHtmlRoute('/one', html`<main>First</main>`);
       server.addHtmlRoute('/two', html`<main>Second</main>`);
       server.addHtmlRoute('/three', html`<main>Third</main>`);
@@ -178,32 +166,78 @@ describe('network', () => {
     });
   });
   describe('network_get_request', () => {
-    it('attaches request', async () => {
+    it('returns the captured method, headers and bodies for a POST request', async () => {
+      server.addHtmlRoute('/post-page', html`<main>API</main>`);
+      server.addRoute('/post-api', (req, res) => {
+        let body = '';
+        req.setEncoding('utf8');
+        req.on('data', chunk => {
+          body += chunk;
+        });
+        req.on('end', () => {
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('X-Response-Evidence', 'received');
+          res.end(JSON.stringify({received: body}));
+        });
+      });
       await withMcpContext(async (response, context) => {
+        await context.setUpNetworkCollectorForTesting();
         const page = context.getSelectedPptrPage();
-        await page.goto('data:text/html,<div>Hello MCP</div>');
+        await page.goto(server.getRoute('/post-page'));
+        const received = page.waitForResponse(item =>
+          item.url().endsWith('/post-api'),
+        );
+        await page.evaluate(async () => {
+          await fetch('/post-api', {
+            method: 'POST',
+            headers: {'X-Request-Evidence': 'sent'},
+            body: 'payload=123',
+          }).then(res => res.text());
+        });
+        assert.strictEqual(
+          await (await received).text(),
+          '{"received":"payload=123"}',
+        );
+        const request = context
+          .getNetworkRequests(context.getSelectedMcpPage())
+          .find(item => item.url().endsWith('/post-api'));
+        assert.ok(request);
+        const reqid = context.getNetworkRequestStableId(request);
+        assert.ok(typeof reqid === 'number');
         await getNetworkRequest.handler(
-          {params: {reqid: 1}, page: context.getSelectedMcpPage()},
+          {params: {reqid}, page: context.getSelectedMcpPage()},
           response,
           context,
         );
+        const result = await response.handle('get_network_request', context);
+        assert.strictEqual(
+          'networkRequests' in result.structuredContent,
+          false,
+        );
+        assert.ok('networkRequest' in result.structuredContent);
+        const detail: unknown = result.structuredContent.networkRequest;
+        assert.ok(detail && typeof detail === 'object');
+        assert.ok('method' in detail && detail.method === 'POST');
+        assert.ok(
+          'url' in detail && detail.url === server.getRoute('/post-api'),
+        );
+        assert.ok(
+          'requestBody' in detail && detail.requestBody === 'payload=123',
+        );
+        assert.ok('responseBody' in detail);
+        assert.strictEqual(detail.responseBody, '{"received":"payload=123"}');
+        assert.ok(
+          'requestHeaders' in detail &&
+            JSON.stringify(detail.requestHeaders).includes('sent'),
+        );
+        assert.ok(
+          'responseHeaders' in detail &&
+            JSON.stringify(detail.responseHeaders).includes('received'),
+        );
+      });
+    });
 
-        assert.equal(response.attachedNetworkRequestId, 1);
-      });
-    });
-    it('should not add the request list', async () => {
-      await withMcpContext(async (response, context) => {
-        const page = context.getSelectedPptrPage();
-        await page.goto('data:text/html,<div>Hello MCP</div>');
-        await getNetworkRequest.handler(
-          {params: {reqid: 1}, page: context.getSelectedMcpPage()},
-          response,
-          context,
-        );
-        assert(!response.includeNetworkRequests);
-      });
-    });
-    it('should get request from previous navigations', async t => {
+    it('retains identifiable request metadata after subsequent navigations', async () => {
       server.addHtmlRoute('/one', html`<main>First</main>`);
       server.addHtmlRoute('/two', html`<main>Second</main>`);
       server.addHtmlRoute('/three', html`<main>Third</main>`);
@@ -225,10 +259,12 @@ describe('network', () => {
           context,
         );
         const responseData = await response.handle('get_request', context);
-
-        t.assert.snapshot?.(
-          stabilizeResponseOutput(getTextContent(responseData.content[0])),
-        );
+        assert.ok('networkRequest' in responseData.structuredContent);
+        const detail: unknown = responseData.structuredContent.networkRequest;
+        assert.ok(detail && typeof detail === 'object');
+        assert.ok('url' in detail && detail.url === server.getRoute('/one'));
+        assert.ok('method' in detail && detail.method === 'GET');
+        assert.ok('status' in detail && detail.status === '200');
       });
     });
   });

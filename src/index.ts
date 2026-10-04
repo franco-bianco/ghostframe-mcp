@@ -14,6 +14,7 @@ import {logger} from './logger.js';
 import {McpContext} from './McpContext.js';
 import {McpResponse} from './McpResponse.js';
 import {Mutex} from './Mutex.js';
+import type {Browser} from './third_party/index.js';
 import {
   McpServer,
   type CallToolResult,
@@ -173,7 +174,41 @@ export async function createMcpServer(
   };
 
   let context: McpContext;
-  async function getContext(): Promise<McpContext> {
+  let ownedBrowser: Browser | undefined;
+  let initializing: Promise<McpContext> | undefined;
+  let shuttingDown = false;
+  let shutdownPromise: Promise<void> | undefined;
+  function shutdown(): Promise<void> {
+    shuttingDown = true;
+    shutdownPromise ??= (async () => {
+      try {
+        await initializing?.catch(error => {
+          logger('Context initialization failed during shutdown', error);
+        });
+        if (context) {
+          await context.dispose({closeBrowser: true});
+        }
+      } finally {
+        if (ownedBrowser?.connected) {
+          await ownedBrowser.close();
+        }
+      }
+    })();
+    return shutdownPromise;
+  }
+  server.server.onclose = () => {
+    void shutdown().catch(error => logger('Browser shutdown failed', error));
+  };
+  function getContext(): Promise<McpContext> {
+    if (shuttingDown) {
+      return Promise.reject(new Error('Browser server is shutting down.'));
+    }
+    initializing ??= initializeContext().finally(() => {
+      initializing = undefined;
+    });
+    return initializing;
+  }
+  async function initializeContext(): Promise<McpContext> {
     const chromeArgs: string[] = (serverArgs.chromeArg ?? []).map(String);
     const ignoreDefaultChromeArgs: string[] = (
       serverArgs.ignoreDefaultChromeArg ?? []
@@ -201,10 +236,15 @@ export async function createMcpServer(
       proxyUsername: proxy?.username,
       proxyPassword: proxy?.password,
     });
+    ownedBrowser = browser;
 
     if (context?.browser !== browser) {
+      if (context) {
+        await context.dispose();
+      }
       context = await McpContext.from(browser, logger, {
         allowUnrestrictedPaths: serverArgs.allowUnrestrictedPaths,
+        startupProxy: proxy,
       });
       await updateRoots();
     }
@@ -212,6 +252,49 @@ export async function createMcpServer(
   }
 
   const toolMutex = new Mutex();
+  const controlTools = new Set([
+    'start_action',
+    'get_operation',
+    'cancel_operation',
+    'arm_interception',
+    'read_interception',
+    'resolve_interception',
+    'debugger_control',
+    'inspect_handle',
+    'release_handles',
+    'start_capture',
+    'stop_capture',
+    'read_capture',
+    'arm_network_wait',
+    'read_network_wait',
+    'list_network_requests',
+    'list_targets',
+    'get_proxy',
+    'set_proxy',
+    'session_cookies',
+    'list_pages',
+    'new_page',
+    'select_page',
+    'close_page',
+    'handle_dialog',
+    'runtime_evaluate',
+    'call_handle',
+  ]);
+  const triggerTools = new Set([
+    'click',
+    'dblclick',
+    'hover',
+    'drag',
+    'fill',
+    'fill_form',
+    'upload_file',
+    'press_key',
+    'type_text',
+    'navigate_page',
+    'evaluate_script',
+    'runtime_evaluate',
+    'call_handle',
+  ]);
 
   function registerTool(tool: ToolDefinition | DefinedPageTool): void {
     const {disabled, reason: disabledReason} = getToolStatusInfo(
@@ -257,11 +340,35 @@ export async function createMcpServer(
           logger(`${tool.name} context: resolved`);
           await context.detectOpenDevToolsWindows();
           const response = new McpResponse();
+
+          let actionId: number | undefined;
+          let actionPageId: number | undefined;
           try {
             const page = params.pageId
               ? context.getPageById(params.pageId)
               : context.getSelectedMcpPage();
             response.setPage(page);
+            actionPageId = page.id;
+            if (!controlTools.has(tool.name)) {
+              context.getOperationManager().assertAvailable(page.pptrPage);
+              if (context.getRuntimeInspector().isPaused(page.pptrPage)) {
+                throw new Error(
+                  'Page JavaScript is paused. Use debugger_control or resolve_interception before this tool.',
+                );
+              }
+              if (
+                triggerTools.has(tool.name) &&
+                (context.getRuntimeInspector().hasDebugger(page.pptrPage) ||
+                  context.getInterceptionController().isActive(page.pptrPage))
+              ) {
+                throw new Error(
+                  'Use start_action for supported actions, or release the debugger/interception before this tool.',
+                );
+              }
+            }
+            actionId = context
+              .getNetworkCapture()
+              .markAction({tool: tool.name, phase: 'start', pageId: page.id});
             if (tool.blockedByDialog) {
               page.throwIfDialogOpen();
             }
@@ -286,6 +393,15 @@ export async function createMcpServer(
             }
           } catch (err) {
             response.setError(err);
+          } finally {
+            if (actionId !== undefined) {
+              context.getNetworkCapture().markAction({
+                tool: tool.name,
+                phase: 'end',
+                pageId: actionPageId,
+                actionId,
+              });
+            }
           }
           const {content, structuredContent} = await response.handle(
             tool.name,
@@ -333,7 +449,7 @@ export async function createMcpServer(
 
   await loadIssueDescriptions();
 
-  return {server};
+  return {server, shutdown};
 }
 
 export const logDisclaimers = () => {

@@ -25,7 +25,9 @@ describe('script', () => {
           response,
           context,
         );
-        const lineEvaluation = response.responseLines.at(2)!;
+        const lineEvaluation =
+          response.responseLines.at(2) ??
+          assert.fail('Missing serialized evaluation result');
         assert.strictEqual(JSON.parse(lineEvaluation), 10);
       });
     });
@@ -39,7 +41,9 @@ describe('script', () => {
           context,
         );
 
-        let lineEvaluation = response.responseLines.at(2)!;
+        let lineEvaluation =
+          response.responseLines.at(2) ??
+          assert.fail('Missing serialized evaluation result');
         assert.strictEqual(JSON.parse(lineEvaluation), '');
 
         const page = await context.newPage();
@@ -58,23 +62,32 @@ describe('script', () => {
           context,
         );
 
-        lineEvaluation = response.responseLines.at(2)!;
+        lineEvaluation =
+          response.responseLines.at(2) ??
+          assert.fail('Missing serialized evaluation result');
         assert.strictEqual(JSON.parse(lineEvaluation), 'New Page');
       });
     });
 
-    it('work for complex objects', async () => {
+    it('serializes nested arrays and objects', async () => {
       await withMcpContext(async (response, context) => {
         const page = context.getSelectedPptrPage();
 
-        await page.setContent(html`<script src="./scripts.js"></script> `);
+        await page.setContent(html`<script defer></script>`);
+        await page.evaluate(() => {
+          const script = document.querySelector('script');
+          if (!script) {
+            throw new Error('Missing script fixture');
+          }
+          script.async = false;
+        });
 
         await evaluateScript().handler(
           {
             params: {
               function: String(() => {
                 const scripts = Array.from(
-                  document.head.querySelectorAll('script'),
+                  document.querySelectorAll('script'),
                 ).map(s => ({src: s.src, async: s.async, defer: s.defer}));
 
                 return {scripts};
@@ -84,10 +97,48 @@ describe('script', () => {
           response,
           context,
         );
-        const lineEvaluation = response.responseLines.at(2)!;
+        const lineEvaluation =
+          response.responseLines.at(2) ??
+          assert.fail('Missing serialized evaluation result');
         assert.deepEqual(JSON.parse(lineEvaluation), {
-          scripts: [],
+          scripts: [{src: '', async: false, defer: true}],
         });
+      });
+    });
+
+    it('isolates evaluation globals unless the main world is requested', async () => {
+      await withMcpContext(async (response, context) => {
+        await context.getSelectedPptrPage().evaluate(() => {
+          Reflect.set(window, 'evaluationFixture', 'main-world');
+        });
+        await evaluateScript().handler(
+          {params: {function: '() => typeof globalThis.evaluationFixture'}},
+          response,
+          context,
+        );
+        assert.strictEqual(
+          JSON.parse(
+            response.responseLines.at(2) ?? assert.fail('Missing result'),
+          ),
+          'undefined',
+        );
+        response.resetResponseLineForTesting();
+        await evaluateScript().handler(
+          {
+            params: {
+              function: '() => globalThis.evaluationFixture',
+              world: 'main',
+            },
+          },
+          response,
+          context,
+        );
+        assert.strictEqual(
+          JSON.parse(
+            response.responseLines.at(2) ?? assert.fail('Missing result'),
+          ),
+          'main-world',
+        );
       });
     });
 
@@ -109,7 +160,9 @@ describe('script', () => {
           response,
           context,
         );
-        const lineEvaluation = response.responseLines.at(2)!;
+        const lineEvaluation =
+          response.responseLines.at(2) ??
+          assert.fail('Missing serialized evaluation result');
         assert.strictEqual(JSON.parse(lineEvaluation), 'Works');
       });
     });
@@ -132,7 +185,9 @@ describe('script', () => {
           response,
           context,
         );
-        const lineEvaluation = response.responseLines.at(2)!;
+        const lineEvaluation =
+          response.responseLines.at(2) ??
+          assert.fail('Missing serialized evaluation result');
         assert.strictEqual(JSON.parse(lineEvaluation), false);
       });
     });
@@ -155,7 +210,9 @@ describe('script', () => {
           response,
           context,
         );
-        const lineEvaluation = response.responseLines.at(2)!;
+        const lineEvaluation =
+          response.responseLines.at(2) ??
+          assert.fail('Missing serialized evaluation result');
         assert.strictEqual(JSON.parse(lineEvaluation), 'John Doe');
       });
     });
@@ -178,7 +235,9 @@ describe('script', () => {
           response,
           context,
         );
-        const lineEvaluation = response.responseLines.at(2)!;
+        const lineEvaluation =
+          response.responseLines.at(2) ??
+          assert.fail('Missing serialized evaluation result');
         assert.strictEqual(JSON.parse(lineEvaluation), 'Works');
       });
     });
@@ -205,7 +264,9 @@ describe('script', () => {
           response,
           context,
         );
-        const lineEvaluation = response.responseLines.at(2)!;
+        const lineEvaluation =
+          response.responseLines.at(2) ??
+          assert.fail('Missing serialized evaluation result');
         assert.strictEqual(JSON.parse(lineEvaluation), 'test');
       });
     });
@@ -232,7 +293,9 @@ describe('script', () => {
           response,
           context,
         );
-        const lineEvaluation = response.responseLines.at(2)!;
+        const lineEvaluation =
+          response.responseLines.at(2) ??
+          assert.fail('Missing serialized evaluation result');
         assert.strictEqual(JSON.parse(lineEvaluation), true);
       });
     });
@@ -262,7 +325,9 @@ describe('script', () => {
           response,
           context,
         );
-        const lineEvaluation = response.responseLines.at(2)!;
+        const lineEvaluation =
+          response.responseLines.at(2) ??
+          assert.fail('Missing serialized evaluation result');
         assert.strictEqual(JSON.parse(lineEvaluation), 'I am iframe button');
       });
     });

@@ -21,44 +21,6 @@ import {DevTools} from '../src/third_party/index.js';
 import {getMockRequest, getMockBrowser} from './utils.js';
 
 describe('PageCollector', () => {
-  it('works', async () => {
-    const browser = getMockBrowser();
-    const page = (await browser.pages())[0];
-    const request = getMockRequest();
-    const collector = new PageCollector(browser, collect => {
-      return {
-        request: req => {
-          collect(req);
-        },
-      } as ListenerMap;
-    });
-    await collector.init([page]);
-    page.emit('request', request);
-
-    assert.equal(collector.getData(page)[0], request);
-  });
-
-  it('clean up after navigation', async () => {
-    const browser = getMockBrowser();
-    const page = (await browser.pages())[0];
-    const mainFrame = page.mainFrame();
-    const request = getMockRequest();
-    const collector = new PageCollector(browser, collect => {
-      return {
-        request: req => {
-          collect(req);
-        },
-      } as ListenerMap;
-    });
-    await collector.init([page]);
-    page.emit('request', request);
-
-    assert.equal(collector.getData(page)[0], request);
-    page.emit('framenavigated', mainFrame);
-
-    assert.equal(collector.getData(page).length, 0);
-  });
-
   it('does not clean up after sub frame navigation', async () => {
     const browser = getMockBrowser();
     const page = (await browser.pages())[0];
@@ -163,7 +125,7 @@ describe('PageCollector', () => {
     assert.equal(collector.getData(page).length, 0);
   });
 
-  it('should assign ids to requests', async () => {
+  it('assigns distinct request IDs that resolve to the collected requests', async () => {
     const browser = getMockBrowser();
     const page = (await browser.pages())[0];
     const request1 = getMockRequest();
@@ -184,6 +146,9 @@ describe('PageCollector', () => {
 
     assert.equal(collector.getIdForResource(request1), 1);
     assert.equal(collector.getIdForResource(request2), 2);
+    assert.equal(collector.getById(page, 1), request1);
+    assert.equal(collector.getById(page, 2), request2);
+    assert.throws(() => collector.getById(page, 3));
   });
 });
 

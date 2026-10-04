@@ -1,133 +1,104 @@
 # ghostframe-mcp
 
-Private stealth browser-automation MCP server. Forked from [`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp); default-on stealth posture for driving bot-managed sites. Coexists with upstream `chrome-devtools-mcp` on the same machine.
+Ghostframe lets agents inspect website flows and investigate frontend APIs.
+It combines browser actions, durable traffic capture, and direct access to JavaScript runtime objects.
 
-Not published to npm (`"private": true` in `package.json`). Local install only.
+This private MCP server and CLI is forked from
+[`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp).
+It uses Chrome, Puppeteer, and the Chrome DevTools Protocol (CDP).
+It does not require a Chromium fork.
+
+The package is private and is not published to npm.
+Install it from this repository.
 
 ## Contents
 
-- [At a glance](#at-a-glance)
-- [Differences from upstream](#differences-from-upstream)
-  - [Stealth mode (always on)](#stealth-mode-always-on)
-  - [Chrome launch flags](#chrome-launch-flags)
-  - [Tool changes](#tool-changes)
-  - [Other](#other)
+- [Capabilities](#capabilities)
+- [Investigation workflow](#investigation-workflow)
+- [Stealth behavior](#stealth-behavior)
 - [Setup](#setup)
-  - [Driving it from a terminal](#driving-it-from-a-terminal)
-  - [Installing the skills](#installing-the-skills)
-- [Side-by-side with upstream](#side-by-side-with-upstream)
+- [Terminal use](#terminal-use)
 - [Proxy](#proxy)
 - [File access](#file-access)
 - [Tools](#tools)
 - [Configuration](#configuration)
-- [Docs and skills](#docs-and-skills)
-- [Disclaimer](#disclaimer)
+- [Documentation and skills](#documentation-and-skills)
 
-## At a glance
+## Capabilities
 
-Measured against the last upstream commit before this fork diverged.
+| Capability          | What the agent can do                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------- |
+| Browser actions     | Navigate, click, type, fill forms, upload files, and handle dialogs.                              |
+| Page inspection     | Read accessibility snapshots and capture screenshots.                                             |
+| Network inspection  | Inspect captured request and response headers and bodies.                                         |
+| Durable capture     | Save network events and eager bodies across navigations and tab closure.                          |
+| Streaming capture   | Read WebSocket and EventSource messages; request experimental fetch-stream capture.               |
+| Request experiments | Pause real traffic, change a request, or replace its response.                                    |
+| Runtime inspection  | Select a frame or worker, retain object handles, and inspect properties without invoking getters. |
+| Event listeners     | Find listeners on an element and its ancestors. Retain actual handler functions.                  |
+| Scoped debugger     | Set breakpoints, inspect paused scopes, and read generated script sources.                        |
+| Browser state       | Read and change scoped cookies, including HttpOnly cookies. Inspect partitioned storage.          |
+| Proxy changes       | Change the regular profile proxy after launch. Keep tabs and loaded state.                        |
+| Nonblocking actions | Start an action, inspect a pause, and read its result through an operation ID.                    |
 
-|                                   | `chrome-devtools-mcp`                               | `ghostframe-mcp`                                           |
-| --------------------------------- | --------------------------------------------------- | ---------------------------------------------------------- |
-| Purpose                           | General browser automation and web debugging        | Driving sites that run bot management                      |
-| Stealth posture                   | None                                                | Always on, no flag to disable                              |
-| CLI options                       | 39                                                  | 19                                                         |
-| Tool modules                      | 19                                                  | 12                                                         |
-| Tools exposed                     | More, spread across category and experimental gates | 25, ungated                                                |
-| DOM polyfills                     | None                                                | `chrome.runtime`, permissions coherence, native `toString` |
-| Input timing                      | Immediate synthetic events                          | Bezier mouse paths, lognormal keystrokes, pointer pressure |
-| Persona                           | Per-page `emulate`, does not follow new tabs        | Session-wide, reapplied to pages opened later              |
-| Headless user agent               | Reports `HeadlessChrome`                            | Rewritten before the first request                         |
-| Browser connection                | Launch or attach over HTTP/WebSocket                | Launch only, over a pipe                                   |
-| DevTools Universe                 | Enabled; forces `Debugger.enable` per page          | Removed                                                    |
-| Console capture                   | On                                                  | On                                                         |
-| Network capture                   | On                                                  | On                                                         |
-| Network header redaction          | Off by default                                      | Removed; headers are always returned in full               |
-| Telemetry                         | Reports to Google Clearcut                          | None                                                       |
-| Lighthouse / performance / memory | Yes                                                 | No                                                         |
-| Extensions, in-page tools, WebMCP | Yes                                                 | No                                                         |
-| Reduced toolset (`--slim`)        | Yes                                                 | No                                                         |
-| Default profile                   | `~/.cache/chrome-devtools-mcp/`                     | `~/.cache/ghostframe-mcp/`                                 |
-| Published to npm                  | Yes                                                 | No, local install only                                     |
+These tools expose browser facts and controls that returned text cannot reproduce.
+Agents can use saved evidence to compare payloads, search downloaded sources, or write API clients.
+Ghostframe does not need separate tools for those analysis steps.
 
-Both share the same MCP protocol, the same snapshot-and-uid interaction model, the
-same puppeteer core, and the same tool names where a tool exists in both. A prompt
-written for upstream generally works here, minus the removed tools.
+See [Investigation guide](docs/investigation.md) for procedures and limits.
+See [Feature priorities](docs/feature-priorities.md) for the capability ranking and remaining Chrome boundaries.
 
-## Differences from upstream
+## Investigation workflow
 
-### Stealth mode (always on)
+1. Open the website with `new_page`.
+2. Start a capture with `start_capture`.
+3. Take a snapshot with `take_snapshot`.
+4. Perform one browser action.
+5. Read new events with `read_capture`.
+6. Inspect the relevant request or saved body.
+7. Stop the capture with `stop_capture`.
 
-There is no `--stealth` flag and no way to turn stealth off. The posture is:
+Use `arm_network_wait` before an action when you need a specific network event.
+Use `start_action` when a debugger breakpoint or interception can pause that action.
+It returns an operation ID so the next tool call can inspect and release the pause.
 
-- Patchright-shape DOM polyfills are injected on every navigation in every page:
-  - `chrome.runtime` stub (Chrome omits it on ordinary pages; its absence is a tell).
-  - `chrome.loadTimes()` / `chrome.csi()` fallbacks, anchored to `performance.timeOrigin`,
-    for Chrome versions that no longer ship them.
-  - `Notification.permission` reconciled with `navigator.permissions.query({name:'notifications'})`.
-  - `Function.prototype.toString` preserving `[native code]`, including for itself.
-- Headless launches rewrite the user agent so the first request does not say
-  `HeadlessChrome`.
-- WebGL is untouched, so Chrome reports the renderer it actually uses.
-- `navigator.webdriver` is left alone. The launch flags already make it `false`, and
-  overriding it in JS would replace a native getter with a detectable one.
-- Mouse, hover, fill, type, key-press and drag go through humanisers:
-  - Cubic-bezier mouse paths with 8-24 `mouseMoved` events, 8-30ms non-uniform gap.
-  - Press and release are dispatched at the jittered point with a real pointer
-    pressure, rather than delegating to a helper that re-centres on the element.
-  - Lognormal keystroke flight (mean ~110ms), 50-150ms dwell, 350-600ms thinking
-    pauses every 8-25 chars.
-  - Drag transitions use an 80-280ms randomized dwell.
-- Geolocation defaults to no override, not `{lat:0,lon:0}`.
-- A persona set with `emulate` is reapplied to pages opened later in the session, so
-  two tabs in one browser cannot report different identities.
+A capture records action time boundaries.
+These boundaries show temporal association.
+They do not prove that an action caused a request.
 
-Console capture is on. It rides the primary CDP session, where puppeteer has already
-enabled `Runtime` to make `evaluate_script` work at all, so it adds no detection
-surface. The chrome-devtools-frontend Universe was removed — it attached a second CDP
-session per page and enabled `Debugger` — so console errors no longer carry symbolized
-stack traces.
+## Stealth behavior
 
-### Chrome launch flags
+Stealth defaults stay active during ordinary browser use.
+Mouse paths and input timing vary.
+Page initialization scripts supply Chrome API shapes and permissions coherence.
+Headless launches remove `HeadlessChrome` from the initial user agent.
 
-- `--disable-blink-features=AutomationControlled` added. This is what makes
-  `navigator.webdriver` read `false`; measured, stripping `--enable-automation` alone
-  leaves it `true`.
-- `--enable-automation` stripped from default args, which removes the automation
-  infobar and the associated switches.
-- `--disable-infobars` passed explicitly. Chrome treats the blink-features flag as
-  unsupported and would otherwise offer to say so in a banner.
-- Hardcoded `--screen-info=3840x2160` removed.
-- Default user-data-dir is `~/.cache/ghostframe-mcp/...`, distinct from upstream's `~/.cache/chrome-devtools-mcp/...` so cookies, Cloudflare reputation, and the profile lock don't collide.
-- `pipe: true` is kept (over the detectable `--remote-debugging-port`).
+The browser uses a debugging pipe.
+It does not use a remote debugging port.
+Ghostframe removes the default automation infobar flag and uses
+`--disable-blink-features=AutomationControlled`.
 
-### Tool changes
+The upstream DevTools Universe is not enabled.
+Passive capture uses the existing page CDP session.
+A debugger session starts only after an explicit `debugger_control` call.
 
-**Added:** `set_blocked_urls` (CDP `Network.setBlockedURLs`). Rules persist across page navigations until cleared or the page closes.
+Debugger pauses and request interception change execution timing.
+Runtime inspection and proxy control also add browser activity.
+Stealth defaults do not make these operations invisible.
 
-**Schema additions on existing tools:**
+Chrome supplies the website-facing TLS and HTTP stack.
+Native proxy control does not terminate destination TLS.
+WebGL reports the actual renderer.
+The `emulate` tool applies persona settings to pages opened later in the session.
 
-- `evaluate_script` accepts `world: 'isolated' | 'main'`. Default is `isolated` for stealth, except when `args` (element UIDs) are passed, in which case it falls back to `main` (element handles can only be evaluated in the realm that created them).
-- `emulate` accepts `userAgentMetadata` (JSON-encoded UA Client-Hints), `locale`, and `timezone`, and routes UA/locale/timezone overrides through raw CDP `Emulation.setUserAgentOverride` + `setLocaleOverride` + `setTimezoneOverride` + `Network.setExtraHTTPHeaders` so `navigator.userAgent`, `Sec-CH-UA-*`, and `Accept-Language` stay coherent.
-
-**Removed:** Lighthouse, memory and performance tools; the five extension tools;
-in-page tools and WebMCP; `click_at`; `get_tab_id`; and `--slim` mode. Connect mode
-(`--browser-url`, `--ws-endpoint`, `--auto-connect`) is gone too — it left pre-existing
-tabs unshimmed and was the only path using the WebSocket transport. The fork launches
-Chrome itself over a pipe. Use upstream `chrome-devtools-mcp` for the audit tooling.
-
-The flag surface is 19 options, down from 40. Anything that was off by default and
-gated a feature has been resolved one way or the other: the feature is either always
-on or gone.
-
-### Other
-
-- Telemetry is removed entirely. No usage statistics are collected or transmitted.
-- `--proxy-server` accepts authenticated proxies — see [Proxy](#proxy).
-- File access defaults to MCP workspace roots plus the system temporary directory. `--allow-unrestricted-paths` restores the legacy unrestricted behavior.
-- Package marked private; npm name is `ghostframe-mcp`; bin entries are `ghostframe-mcp` (server) and `ghostframe` (CLI). Names are distinct from upstream `chrome-devtools-mcp` / `chrome-devtools` so a global install never shadows upstream.
+Lighthouse, performance tracing, and heap snapshots remain outside this fork.
+Telemetry is removed.
+The default profile path is separate from upstream.
 
 ## Setup
+
+Requirements: Node.js v20.19 or later and Chrome.
+Use `--channel` to select another installed Chrome channel.
 
 ```bash
 git clone <fork-url> ~/Documents/ghostframe-mcp
@@ -136,148 +107,123 @@ npm install
 npm run build
 ```
 
-Register with Claude Code (user-scoped):
+Register the server in your MCP client:
+
+```json
+{
+  "mcpServers": {
+    "ghostframe": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js"
+      ]
+    }
+  }
+}
+```
+
+For Claude Code:
 
 ```bash
 claude mcp add -s user ghostframe -- \
   node /absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js
 ```
 
-Or as JSON in your MCP client config:
+Run `npm run build` after source changes.
+The server path in your client configuration stays the same.
 
-```json
-{
-  "mcpServers": {
-    "ghostframe": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js"
-      ]
-    }
-  }
-}
-```
+## Terminal use
 
-After pulling new commits, run `npm run build`. The MCP config does not change.
-
-### Driving it from a terminal
-
-The `ghostframe` CLI talks to the same server. Link it once:
+The `ghostframe` CLI uses the same server tools.
+Its daemon and Chrome start on first use.
 
 ```bash
-npm link              # puts `ghostframe` and `ghostframe-mcp` on your PATH
+npm link
 ghostframe --help
-```
-
-Then run tools directly. The daemon and Chrome start on first use:
-
-```bash
 ghostframe new_page "https://example.com"
 ghostframe take_snapshot
 ghostframe click "1_4"
 ```
 
-To run several browsers at once, give each its own profile directory. Chrome refuses
-two instances on one profile, so this is the thing to get right:
+Use separate profile directories for concurrent browsers:
 
 ```bash
-ghostframe start --userDataDir ~/.cache/ghostframe-personas/a   # terminal 1
-ghostframe start --userDataDir ~/.cache/ghostframe-personas/b   # terminal 2
+ghostframe start --sessionId a --userDataDir ~/.cache/ghostframe-personas/a
+ghostframe start --sessionId b --userDataDir ~/.cache/ghostframe-personas/b
 ```
 
-Use `--isolated` instead if you want a throwaway profile with no persisted logins.
+Chrome permits one browser process per profile directory.
+The CLI uses a temporary profile by default.
+Use distinct `--sessionId` values to address concurrent daemons.
 
-### Installing the skills
-
-The skill sources are tracked in `skills/`, but Claude Code only discovers skills in
-`.claude/skills/` (project) or `~/.claude/skills/` (personal). Install them to the
-personal directory so they load in any session, not only when your working directory
-is this repo:
-
-```bash
-cp -R skills/ghostframe-* ~/.claude/skills/
-```
-
-Verify with `/skills` in Claude Code — each should appear by name. Re-run the copy
-after pulling changes to `skills/`.
-
-Requirements: Node.js v20.19+, Chrome stable (or another channel via `--channel`).
-
-Dependabot checks npm and GitHub Actions dependencies weekly. Puppeteer, Chrome DevTools frontend, the MCP SDK, yargs, debug, and core-js are grouped separately so higher-risk upgrades are tested independently.
-
-## Side-by-side with upstream
-
-The fork's npm name, bin entries, and default user-data-dir are all distinct from upstream so both packages can be installed and registered with the same MCP client at once. Add both servers to your client config:
-
-```json
-{
-  "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
-      "args": ["-y", "chrome-devtools-mcp@latest"]
-    },
-    "ghostframe": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js"
-      ]
-    }
-  }
-}
-```
-
-Pick which to invoke per task:
-
-- `ghostframe` — sites with bot management (Cloudflare, DataDome, AXS-style ticketing), anything where `navigator.webdriver=true` would block, work that benefits from clean per-session state.
-- `chrome-devtools` (upstream) — Lighthouse audits, performance tracing, heap snapshots, accessibility audits, trusted local pages.
+Ghostframe and upstream can run side by side.
+Their executable names and default profile directories differ.
 
 ## Proxy
 
-Proxies are off by default. Without `--proxy-server`, Chrome uses the machine's normal network route and public IP.
-
-Pass an unauthenticated proxy with `--proxy-server`:
-
-```text
---proxy-server=203.0.113.7:8888
---proxy-server=http://203.0.113.7:8888
---proxy-server=socks5://proxy.example.com:1080
-```
-
-HTTP proxy authentication uses `GHOSTFRAME_PROXY_USERNAME` and `GHOSTFRAME_PROXY_PASSWORD`. Both variables are required together. Chrome does not support authenticated SOCKS proxies.
+Call `set_proxy` after launch to select a proxy.
+Call `get_proxy` to inspect the effective regular profile settings.
+These calls do not restart Chrome.
 
 ```json
 {
-  "mcpServers": {
-    "ghostframe-proxied": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/ghostframe-mcp/build/src/bin/ghostframe-mcp.js",
-        "--proxy-server=203.0.113.7:8888"
-      ],
-      "env": {
-        "GHOSTFRAME_PROXY_USERNAME": "user",
-        "GHOSTFRAME_PROXY_PASSWORD": "pass"
-      }
-    }
-  }
+  "mode": "proxy",
+  "server": "http://proxy.example.com:8888",
+  "username": "user",
+  "password": "pass",
+  "connectionPolicy": "new_connections"
 }
 ```
 
-The common `IP:PORT:USER:PASS` format remains available as an explicit compatibility mode:
+Return to direct access with:
 
-```bash
-ghostframe start \
-  --allow-legacy-proxy-credentials \
-  --proxy-server=203.0.113.7:8888:user:pass
+```json
+{"mode": "direct"}
 ```
 
-Legacy embedded credentials are rejected by default because process arguments can be inspected by other local processes. The Ghostframe CLI removes them from daemon arguments and transfers them through the daemon environment before starting the MCP server.
+Proxy control uses a managed Chrome extension and the native Chrome proxy settings.
+It applies to the regular profile.
+Isolated contexts with explicit proxy overrides can use another route.
+
+Existing tunnels, requests, and sockets can keep their previous route.
+The tool does not migrate them.
+`disconnect_existing` is rejected.
+A proxy change does not verify connectivity or change UDP and WebRTC routing.
+
+Chrome can cache proxy authentication.
+Ghostframe rejects changed or removed credentials for a previously configured host and port.
+Use another endpoint or restart Chrome for that change.
+Authenticated SOCKS proxies are not supported.
+
+You can still select a proxy at launch:
+
+```text
+--proxy-server=http://proxy.example.com:8888
+--proxy-server=socks5://proxy.example.com:1080
+```
+
+For launch-time HTTP authentication, set both
+`GHOSTFRAME_PROXY_USERNAME` and `GHOSTFRAME_PROXY_PASSWORD`.
+Legacy embedded credentials require `--allow-legacy-proxy-credentials`.
 
 ## File access
 
-Reads and writes are limited to workspace roots supplied by the MCP client and the system temporary directory. Existing paths and the nearest existing parent of new outputs are resolved canonically, so symlinks cannot escape an allowed root. If the client supplies no roots, only the temporary directory is allowed.
+Tool file paths are limited to client workspace roots and the system temporary directory.
+If the client supplies no roots, only temporary paths are allowed.
+Path validation resolves existing paths and the nearest existing parent.
+Symlinks cannot bypass the allowed roots.
 
-Use `--allow-unrestricted-paths` only for compatibility with clients that cannot advertise roots and must access other local paths.
+Use `--allow-unrestricted-paths` when your client cannot supply roots and requires other paths.
+
+Network inspection, capture, and interception return collected header values in full.
+This includes authentication, cookie, and custom headers.
+Captured bodies are saved unchanged.
+They can contain session tokens or other application data.
+
+Capture files use decoded CDP bodies and normalized header representations.
+They are not wire recordings.
+Some bodies, headers, frames, and targets can be unavailable.
+The capture journal records known gaps and byte limits.
 
 ## Tools
 
@@ -303,20 +249,42 @@ Use `--allow-unrestricted-paths` only for compatibility with clients that cannot
 - **Emulation** (2 tools)
   - [`emulate`](docs/tool-reference.md#emulate)
   - [`resize_page`](docs/tool-reference.md#resize_page)
-- **Network** (3 tools)
+- **Network** (13 tools)
+  - [`arm_interception`](docs/tool-reference.md#arm_interception)
+  - [`arm_network_wait`](docs/tool-reference.md#arm_network_wait)
   - [`get_network_request`](docs/tool-reference.md#get_network_request)
+  - [`get_proxy`](docs/tool-reference.md#get_proxy)
   - [`list_network_requests`](docs/tool-reference.md#list_network_requests)
+  - [`read_capture`](docs/tool-reference.md#read_capture)
+  - [`read_interception`](docs/tool-reference.md#read_interception)
+  - [`read_network_wait`](docs/tool-reference.md#read_network_wait)
+  - [`resolve_interception`](docs/tool-reference.md#resolve_interception)
   - [`set_blocked_urls`](docs/tool-reference.md#set_blocked_urls)
-- **Debugging** (5 tools)
+  - [`set_proxy`](docs/tool-reference.md#set_proxy)
+  - [`start_capture`](docs/tool-reference.md#start_capture)
+  - [`stop_capture`](docs/tool-reference.md#stop_capture)
+- **Debugging** (17 tools)
+  - [`call_handle`](docs/tool-reference.md#call_handle)
+  - [`cancel_operation`](docs/tool-reference.md#cancel_operation)
+  - [`debugger_control`](docs/tool-reference.md#debugger_control)
   - [`evaluate_script`](docs/tool-reference.md#evaluate_script)
   - [`get_console_message`](docs/tool-reference.md#get_console_message)
+  - [`get_event_listeners`](docs/tool-reference.md#get_event_listeners)
+  - [`get_operation`](docs/tool-reference.md#get_operation)
+  - [`inspect_handle`](docs/tool-reference.md#inspect_handle)
+  - [`inspect_storage`](docs/tool-reference.md#inspect_storage)
   - [`list_console_messages`](docs/tool-reference.md#list_console_messages)
+  - [`list_targets`](docs/tool-reference.md#list_targets)
+  - [`release_handles`](docs/tool-reference.md#release_handles)
+  - [`runtime_evaluate`](docs/tool-reference.md#runtime_evaluate)
+  - [`session_cookies`](docs/tool-reference.md#session_cookies)
+  - [`start_action`](docs/tool-reference.md#start_action)
   - [`take_screenshot`](docs/tool-reference.md#take_screenshot)
   - [`take_snapshot`](docs/tool-reference.md#take_snapshot)
 
 <!-- END AUTO GENERATED TOOLS -->
 
-Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md).
+Full tool schemas are in [Tool reference](docs/tool-reference.md).
 
 ## Configuration
 
@@ -344,22 +312,24 @@ Full schemas: [`docs/tool-reference.md`](./docs/tool-reference.md).
 
 <!-- END AUTO GENERATED OPTIONS -->
 
-Pass options via the `args` array in the MCP JSON config. Run `node build/src/bin/ghostframe-mcp.js --help` to print the full list.
+## Documentation and skills
 
-## Docs and skills
+Follow [the documentation guidelines](docs/documentation-guidelines.md) and [the testing policy](docs/testing-policy.md) for repository changes.
+The [test audit](docs/testing-audit.md) records the current cleanup and the behaviors that retained checks protect.
 
-- [`docs/detection-signals.md`](./docs/detection-signals.md) — six-layer detection map (CDP / launch / DOM / fingerprint / behavioral / network) with citations.
-- [`docs/stealth-configuration.md`](./docs/stealth-configuration.md) — stealth posture, isolated-world routing, persona bundling, polyfill list.
-- [`docs/design-principles.md`](./docs/design-principles.md), [`docs/cli.md`](./docs/cli.md), [`docs/troubleshooting.md`](./docs/troubleshooting.md) — adapted from upstream for stealth scope.
-  Sources in `skills/`, installed to `~/.claude/skills/` — see
-  [Installing the skills](#installing-the-skills):
+- [Investigation guide](docs/investigation.md): procedures for capture, proxy changes, runtime access, and controlled experiments.
+- [Tool reference](docs/tool-reference.md): generated schemas for all tools.
+- [Design principles](docs/design-principles.md): implementation rules and investigation tradeoffs.
+- [Documentation guidelines](docs/documentation-guidelines.md): writing rules for this repository.
+- [Stealth configuration](docs/stealth-configuration.md): browser configuration details.
+- [Detection signals](docs/detection-signals.md): known detection layers.
+- [Troubleshooting](docs/troubleshooting.md): setup and browser failures.
 
-- `ghostframe-cli` — driving the browser from the terminal, world routing, personas.
-- `ghostframe-detect-test` — sweep `bot.sannysoft.com`, `arh.antoinevastel.com`, `creepjs`, `pixelscan`.
-- `ghostframe-diagnose-block` — six-layer walk for "blocked but detectors pass".
-- `ghostframe-troubleshoot` — symptom-to-fix for failed tool calls.
-- `ghostframe-borrow-feature` — porting a primitive from a reference stealth project.
+Skill sources are in `skills/`.
+To install them for Claude Code:
 
-## Disclaimer
+```bash
+cp -R skills/ghostframe-* ~/.claude/skills/
+```
 
-This fork exposes browser content to MCP clients. Don't share sensitive or personal information you wouldn't share with an MCP-connected agent. Intended for personal use against sites you own or have authorisation to test.
+Copy them again after skill changes.

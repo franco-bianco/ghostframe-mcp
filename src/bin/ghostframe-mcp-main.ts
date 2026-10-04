@@ -26,8 +26,31 @@ if (process.env['CHROME_DEVTOOLS_MCP_CRASH_ON_UNCAUGHT'] !== 'true') {
 }
 
 logger(`Starting ghostframe-mcp server v${VERSION}`);
-const {server} = await createMcpServer(args, {
+const {server, shutdown} = await createMcpServer(args, {
   logFile,
+});
+let stopping = false;
+async function stop(): Promise<void> {
+  if (stopping) {
+    return;
+  }
+  stopping = true;
+  try {
+    await shutdown();
+    await server.close();
+    process.exit(0);
+  } catch (error) {
+    logger('Graceful shutdown failed', error);
+    process.exit(1);
+  }
+}
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  process.on(signal, () => {
+    void stop();
+  });
+}
+process.stdin.once('end', () => {
+  void stop();
 });
 const transport = new StdioServerTransport();
 await server.connect(transport);

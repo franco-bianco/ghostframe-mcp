@@ -69,7 +69,6 @@ const nodeArgs = [
   '--no-warnings=ExperimentalWarning',
   '--test-reporter',
   (process.env['NODE_TEST_REPORTER'] ?? process.env['CI']) ? 'spec' : 'dot',
-  '--test-force-exit',
   '--test',
   '--test-timeout=120000',
   ...flags,

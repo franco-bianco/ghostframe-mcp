@@ -19,6 +19,7 @@ import {
   OFF_BY_DEFAULT_CATEGORIES,
   labels,
 } from '../build/src/tools/categories.js';
+import {pageIdSchema} from '../build/src/tools/ToolDefinition.js';
 import {createTools} from '../build/src/tools/tools.js';
 
 const OUTPUT_PATH = './docs/tool-reference.md';
@@ -407,7 +408,7 @@ async function generateReference(
 
           let typeInfo = prop.type || 'unknown';
           if (prop.enum) {
-            typeInfo = `enum: ${prop.enum.map((v: string) => `"${v}"`).join(', ')}`;
+            typeInfo = `enum: ${prop.enum.map((v: string) => `\`"${v}"\``).join(', ')}`;
           }
 
           markdown += `- **${propName}** (${typeInfo})${requiredText}`;
@@ -469,6 +470,12 @@ function getToolsAndCategories(tools: any) {
         if (isRequired(schema)) {
           required.push(key);
         }
+      }
+      if ('pageScoped' in tool && tool.pageScoped) {
+        properties.pageId = {
+          type: 'number',
+          description: pageIdSchema.pageId.description,
+        };
       }
 
       return {

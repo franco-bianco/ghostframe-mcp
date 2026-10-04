@@ -13,15 +13,6 @@ import {pathToFileURL} from 'node:url';
 import {withMcpContext} from './utils.js';
 
 describe('McpContext Roots', () => {
-  it('should allow access to os.tmpdir() even if roots are empty', async () => {
-    await withMcpContext(async (_response, context) => {
-      context.setRoots([]);
-      const tmpPath = path.join(os.tmpdir(), 'test-file.txt');
-      // This should not throw
-      await context.validatePath(tmpPath);
-    });
-  });
-
   it('should allow access to os.tmpdir() when other roots are set', async () => {
     await withMcpContext(async (_response, context) => {
       const otherRoot = path.resolve(

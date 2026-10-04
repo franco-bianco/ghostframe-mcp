@@ -4,7 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {ElementHandle, Page, Point} from '../third_party/index.js';
+import type {
+  ElementHandle,
+  KeyInput,
+  Page,
+  Point,
+} from '../third_party/index.js';
 
 import {parseKey} from './keyboard.js';
 
@@ -130,6 +135,7 @@ async function bezierMoveTo(page: Page, x: number, y: number): Promise<void> {
 interface HumanizedClickOptions {
   count?: number;
   disabled?: boolean;
+  signal?: AbortSignal;
 }
 
 interface ClickTargetXY {
@@ -188,10 +194,11 @@ export async function humanizedClick(
   target: ClickTarget,
   options: HumanizedClickOptions = {},
 ): Promise<void> {
+  options.signal?.throwIfAborted();
   const count = options.count ?? 1;
   if (options.disabled) {
     if (target.type === 'handle') {
-      await target.handle.asLocator().click({count});
+      await target.handle.asLocator().click({count, signal: options.signal});
     } else {
       await page.mouse.click(target.x, target.y, {count});
     }
@@ -204,15 +211,18 @@ export async function humanizedClick(
       : {x: target.x, y: target.y};
   await bezierMoveTo(page, point.x, point.y);
   await sleep(jitter(80, 250));
+  options.signal?.throwIfAborted();
 
   // Press at the jittered point rather than delegating to Locator.click,
   // which would re-derive the element centre and teleport there first.
   for (let i = 0; i < count; i++) {
+    options.signal?.throwIfAborted();
     if (i > 0) {
       await sleep(jitter(60, 140));
     }
     await dispatchMouseButton(page, 'mousePressed', point, i + 1);
     await sleep(jitter(40, 180));
+    // Release a pressed button even when cancellation arrives during dwell.
     await dispatchMouseButton(page, 'mouseReleased', point, i + 1);
   }
 }
@@ -235,13 +245,15 @@ export async function humanizedFill(
   page: Page,
   handle: ElementHandle<Element>,
   text: string,
-  options: {disabled?: boolean} = {},
+  options: {disabled?: boolean; signal?: AbortSignal} = {},
 ): Promise<void> {
+  options.signal?.throwIfAborted();
   if (options.disabled) {
-    await handle.asLocator().fill(text);
+    await handle.asLocator().fill(text, {signal: options.signal});
     return;
   }
-  await humanizedClick(page, {type: 'handle', handle});
+  await humanizedClick(page, {type: 'handle', handle}, options);
+  options.signal?.throwIfAborted();
   await handle.evaluate(element => {
     if (
       element instanceof HTMLInputElement ||
@@ -256,17 +268,19 @@ export async function humanizedFill(
     selection?.removeAllRanges();
     selection?.addRange(range);
   });
+  options.signal?.throwIfAborted();
   await page.keyboard.press('Backspace');
-  await humanizedType(page, text);
+  await humanizedType(page, text, options);
 }
 
 /** Types with per-key dwell, flight time, and occasional pauses. */
 export async function humanizedType(
   page: Page,
   text: string,
-  options: {disabled?: boolean} = {},
+  options: {disabled?: boolean; signal?: AbortSignal} = {},
 ): Promise<void> {
-  if (options.disabled) {
+  options.signal?.throwIfAborted();
+  if (options.disabled && !options.signal) {
     await page.keyboard.type(text);
     return;
   }
@@ -274,6 +288,11 @@ export async function humanizedType(
   let charsSinceThink = 0;
   let nextThinkAt = jitter(8, 25);
   for (const ch of text) {
+    options.signal?.throwIfAborted();
+    if (options.disabled) {
+      await page.keyboard.type(ch);
+      continue;
+    }
     const dwell = Math.round(lognormal(85, 50, 150));
     await page.keyboard.type(ch, {delay: dwell});
     const flight = Math.round(lognormal(110, 55, 220));
@@ -291,29 +310,31 @@ export async function humanizedType(
 export async function humanizedKeyPress(
   page: Page,
   keyInput: string,
-  options: {disabled?: boolean} = {},
+  options: {disabled?: boolean; signal?: AbortSignal} = {},
 ): Promise<void> {
   const [key, ...modifiers] = parseKey(keyInput);
-
-  if (options.disabled) {
+  const pressed: KeyInput[] = [];
+  try {
     for (const modifier of modifiers) {
+      options.signal?.throwIfAborted();
       await page.keyboard.down(modifier);
+      pressed.push(modifier);
+      if (!options.disabled) {
+        await sleep(jitter(30, 80));
+      }
     }
-    await page.keyboard.press(key);
-    for (const modifier of modifiers.toReversed()) {
+    options.signal?.throwIfAborted();
+    await page.keyboard.press(
+      key,
+      options.disabled ? undefined : {delay: jitter(40, 120)},
+    );
+  } finally {
+    for (const modifier of pressed.toReversed()) {
+      if (!options.disabled) {
+        await sleep(jitter(30, 80));
+      }
       await page.keyboard.up(modifier);
     }
-    return;
-  }
-
-  for (const modifier of modifiers) {
-    await page.keyboard.down(modifier);
-    await sleep(jitter(30, 80));
-  }
-  await page.keyboard.press(key, {delay: jitter(40, 120)});
-  for (const modifier of modifiers.toReversed()) {
-    await sleep(jitter(30, 80));
-    await page.keyboard.up(modifier);
   }
 }
 

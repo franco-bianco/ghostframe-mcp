@@ -34,6 +34,13 @@ export function redactCommandLineArgs(args: string[]): string[] {
 }
 
 export function redactSensitiveValues(value: unknown): unknown {
+  if (typeof value === 'string') {
+    // Invalid legacy proxy URLs can reach request logs before tool validation.
+    return value.replace(
+      /\b(https?|socks[45]?):\/\/[^\s/@]+@/gi,
+      '$1://[REDACTED]@',
+    );
+  }
   if (Array.isArray(value)) {
     return value.map(redactSensitiveValues);
   }

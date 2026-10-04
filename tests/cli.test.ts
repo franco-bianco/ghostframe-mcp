@@ -4,146 +4,61 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import assert from 'node:assert';
+import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
 import {parseArguments} from '../src/bin/ghostframe-mcp-cli-options.js';
 
-describe('cli args parsing', () => {
-  const defaultArgs = {
-    'category-emulation': true,
-    categoryEmulation: true,
-    'category-network': true,
-    categoryNetwork: true,
-    'allow-legacy-proxy-credentials': false,
-    allowLegacyProxyCredentials: false,
-    'allow-unrestricted-paths': false,
-    allowUnrestrictedPaths: false,
-  };
+function parse(...flags: string[]) {
+  return parseArguments('1.0.0', ['node', 'ghostframe-mcp', ...flags]);
+}
 
-  it('parses with default args', async () => {
-    const args = parseArguments('1.0.0', ['node', 'main.js']);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      channel: 'stable',
-    });
+describe('MCP launch arguments', () => {
+  it('defaults to headed stable Chrome and conservative file and credential access', () => {
+    const args = parse();
+    assert.equal(args.headless, false);
+    assert.equal(args.channel, 'stable');
+    assert.equal(args.userDataDir, undefined);
+    assert.equal(args.categoryEmulation, true);
+    assert.equal(args.categoryNetwork, true);
+    assert.equal(args.allowLegacyProxyCredentials, false);
+    assert.equal(args.allowUnrestrictedPaths, false);
   });
 
-  it('parses with user data dir', async () => {
-    const args = parseArguments('1.0.0', [
-      'node',
-      'main.js',
+  it('selects an explicit profile and custom executable without injecting a conflicting channel', () => {
+    const args = parse(
       '--user-data-dir',
-      '/tmp/chrome-profile',
-    ]);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      channel: 'stable',
-      'user-data-dir': '/tmp/chrome-profile',
-      userDataDir: '/tmp/chrome-profile',
-    });
-  });
-
-  it('parses with executable path', async () => {
-    const args = parseArguments('1.0.0', [
-      'node',
-      'main.js',
+      '/tmp/research profile',
       '--executablePath',
       '/tmp/test 123/chrome',
-    ]);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      'executable-path': '/tmp/test 123/chrome',
-      e: '/tmp/test 123/chrome',
-      executablePath: '/tmp/test 123/chrome',
-    });
+    );
+    assert.equal(args.userDataDir, '/tmp/research profile');
+    assert.equal(args.executablePath, '/tmp/test 123/chrome');
+    assert.equal(args.channel, undefined);
+    assert.equal(args.isolated, undefined);
   });
 
-  it('parses viewport', async () => {
-    const args = parseArguments('1.0.0', [
-      'node',
-      'main.js',
+  it('retains viewport and repeated Chrome arguments while honoring disabled categories', () => {
+    const args = parse(
       '--viewport',
       '888x777',
-    ]);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      channel: 'stable',
-      viewport: {
-        width: 888,
-        height: 777,
-      },
-    });
-  });
-
-  it('parses chrome args', async () => {
-    const args = parseArguments('1.0.0', [
-      'node',
-      'main.js',
-      `--chrome-arg='--no-sandbox'`,
-      `--chrome-arg='--disable-setuid-sandbox'`,
-    ]);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      channel: 'stable',
-      'chrome-arg': ['--no-sandbox', '--disable-setuid-sandbox'],
-      chromeArg: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-  });
-
-  it('parses ignore chrome args', async () => {
-    const args = parseArguments('1.0.0', [
-      'node',
-      'main.js',
-      `--ignore-default-chrome-arg='--disable-extensions'`,
-      `--ignore-default-chrome-arg='--disable-cancel-all-touches'`,
-    ]);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      channel: 'stable',
-      'ignore-default-chrome-arg': [
-        '--disable-extensions',
-        '--disable-cancel-all-touches',
-      ],
-      ignoreDefaultChromeArg: [
-        '--disable-extensions',
-        '--disable-cancel-all-touches',
-      ],
-    });
-  });
-
-  it('parses disabled category', async () => {
-    const args = parseArguments('1.0.0', [
-      'node',
-      'main.js',
+      "--chrome-arg='--no-sandbox'",
+      "--chrome-arg='--disable-setuid-sandbox'",
+      "--ignore-default-chrome-arg='--disable-extensions'",
+      "--ignore-default-chrome-arg='--disable-cancel-all-touches'",
       '--no-category-emulation',
+      '--no-category-network',
+    );
+    assert.deepEqual(args.viewport, {width: 888, height: 777});
+    assert.deepEqual(args.chromeArg, [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
     ]);
-    assert.deepStrictEqual(args, {
-      ...defaultArgs,
-      _: [],
-      headless: false,
-      $0: 'ghostframe-mcp',
-      channel: 'stable',
-      'category-emulation': false,
-      categoryEmulation: false,
-    });
+    assert.deepEqual(args.ignoreDefaultChromeArg, [
+      '--disable-extensions',
+      '--disable-cancel-all-touches',
+    ]);
+    assert.equal(args.categoryEmulation, false);
+    assert.equal(args.categoryNetwork, false);
   });
 });

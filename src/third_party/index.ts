@@ -40,6 +40,8 @@ export {
 } from 'puppeteer-core';
 export {default as puppeteer} from 'puppeteer-core';
 export type * from 'puppeteer-core';
+export type {Protocol} from 'devtools-protocol';
+export {CdpFrame} from 'puppeteer-core/internal/cdp/Frame.js';
 export {PipeTransport} from 'puppeteer-core/internal/node/PipeTransport.js';
 export type {CdpPage} from 'puppeteer-core/internal/cdp/Page.js';
 export type {JSONSchema7, JSONSchema7Definition} from 'json-schema';

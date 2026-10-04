@@ -4,82 +4,54 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import assert from 'node:assert';
+import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
 
-import type {ParsedArguments} from '../../src/bin/ghostframe-mcp-cli-options.js';
+import {
+  cliOptions,
+  parseArguments,
+} from '../../src/bin/ghostframe-mcp-cli-options.js';
 import {serializeArgs} from '../../src/daemon/utils.js';
-import type {YargsOptions} from '../../src/third_party/index.js';
 
-describe('serializeArgs', () => {
-  it('should ignore undefined or null values', () => {
-    const options: Record<string, YargsOptions> = {
-      foo: {},
-      bar: {},
-      baz: {},
-    };
-    const argv = {
-      foo: undefined,
-      bar: null,
-      baz: 'value',
-      _: [],
-      $0: 'test',
-    } as unknown as ParsedArguments;
-    const result = serializeArgs(options, argv);
-    assert.deepStrictEqual(result, ['--baz', 'value']);
-  });
-
-  it('should handle boolean values', () => {
-    const options: Record<string, YargsOptions> = {foo: {}, bar: {}};
-    const argv = {
-      foo: true,
-      bar: false,
-      _: [],
-      $0: 'test',
-    } as unknown as ParsedArguments;
-    const result = serializeArgs(options, argv);
-    assert.deepStrictEqual(result, ['--foo', '--no-bar']);
-  });
-
-  it('should handle array values', () => {
-    const options: Record<string, YargsOptions> = {foo: {}};
-    const argv = {
-      foo: ['val1', 'val2'],
-      _: [],
-      $0: 'test',
-    } as unknown as ParsedArguments;
-    const result = serializeArgs(options, argv);
-    assert.deepStrictEqual(result, ['--foo', 'val1', '--foo', 'val2']);
-  });
-
-  it('should handle primitive values', () => {
-    const options: Record<string, YargsOptions> = {foo: {}, bar: {}};
-    const argv = {
-      foo: 'string',
-      bar: 42,
-      _: [],
-      $0: 'test',
-    } as unknown as ParsedArguments;
-    const result = serializeArgs(options, argv);
-    assert.deepStrictEqual(result, ['--foo', 'string', '--bar', '42']);
-  });
-
-  it('should convert camelCase keys to kebab-case', () => {
-    const options: Record<string, YargsOptions> = {
-      camelCaseKey: {},
-      anotherKey: {},
-    };
-    const argv = {
-      camelCaseKey: 'value1',
-      anotherKey: true,
-      _: [],
-      $0: 'test',
-    } as unknown as ParsedArguments;
-    const result = serializeArgs(options, argv);
-    assert.deepStrictEqual(result, [
-      '--camel-case-key',
-      'value1',
-      '--another-key',
+describe('daemon launch argument serialization', () => {
+  it('round-trips real profile, proxy, executable, category and repeated Chrome options', () => {
+    const input = parseArguments('1.0.0', [
+      'node',
+      'ghostframe-mcp',
+      '--user-data-dir',
+      '/tmp/profile with spaces',
+      '--executable-path',
+      '/tmp/custom chrome',
+      '--proxy-server',
+      'http://proxy.example:8080',
+      '--headless',
+      '--no-category-network',
+      "--chrome-arg='--disable-quic'",
+      "--chrome-arg='--no-first-run'",
+      "--ignore-default-chrome-arg='--disable-extensions'",
     ]);
+    assert.deepEqual(input.chromeArg, ['--disable-quic', '--no-first-run']);
+    const serialized = serializeArgs(cliOptions, input);
+    const reparsed = parseArguments('1.0.0', [
+      'node',
+      'ghostframe-mcp',
+      ...serialized,
+    ]);
+    assert.equal(reparsed.userDataDir, '/tmp/profile with spaces');
+    assert.equal(reparsed.executablePath, '/tmp/custom chrome');
+    assert.equal(reparsed.channel, undefined);
+    assert.equal(reparsed.proxyServer, 'http://proxy.example:8080');
+    assert.equal(reparsed.headless, true);
+    assert.equal(reparsed.categoryNetwork, false);
+    assert.deepEqual(reparsed.chromeArg, ['--disable-quic', '--no-first-run']);
+    assert.deepEqual(reparsed.ignoreDefaultChromeArg, ['--disable-extensions']);
+    assert.equal(
+      serialized.some(
+        argument => argument === 'undefined' || argument === 'null',
+      ),
+      false,
+    );
+    assert.equal(serialized.includes('--$0'), false);
+    assert.equal(serialized.includes('--_'), false);
   });
 });

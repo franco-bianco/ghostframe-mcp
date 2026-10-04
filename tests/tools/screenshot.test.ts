@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert';
-import {rm, stat, mkdir, chmod, writeFile} from 'node:fs/promises';
+import {rm, readFile, stat, mkdir, chmod, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {describe, it} from 'node:test';
@@ -14,6 +14,11 @@ import {TextSnapshot} from '../../src/TextSnapshot.js';
 import {screenshot} from '../../src/tools/screenshot.js';
 import {screenshots} from '../snapshot.js';
 import {html, withMcpContext} from '../utils.js';
+
+function pngDimensions(bytes: Buffer) {
+  assert.strictEqual(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  return {width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20)};
+}
 
 describe('screenshot', () => {
   describe('browser_take_screenshot', () => {
@@ -30,10 +35,14 @@ describe('screenshot', () => {
 
         assert.equal(response.images.length, 1);
         assert.equal(response.images[0].mimeType, 'image/png');
-        assert.equal(
-          response.responseLines.at(0),
-          "Took a screenshot of the current page's viewport.",
+        const dimensions = pngDimensions(
+          Buffer.from(response.images[0].data, 'base64'),
         );
+        const viewport = await page.evaluate(() => ({
+          width: innerWidth * devicePixelRatio,
+          height: innerHeight * devicePixelRatio,
+        }));
+        assert.deepStrictEqual(dimensions, viewport);
       });
     });
     it('ignores quality', async () => {
@@ -52,6 +61,10 @@ describe('screenshot', () => {
 
         assert.equal(response.images.length, 1);
         assert.equal(response.images[0].mimeType, 'image/png');
+        const dimensions = pngDimensions(
+          Buffer.from(response.images[0].data, 'base64'),
+        );
+        assert.ok(dimensions.width > 0 && dimensions.height > 0);
         assert.equal(
           response.responseLines.at(0),
           "Took a screenshot of the current page's viewport.",
@@ -68,6 +81,12 @@ describe('screenshot', () => {
 
         assert.equal(response.images.length, 1);
         assert.equal(response.images[0].mimeType, 'image/jpeg');
+        assert.strictEqual(
+          Buffer.from(response.images[0].data, 'base64')
+            .subarray(0, 2)
+            .toString('hex'),
+          'ffd8',
+        );
         assert.equal(
           response.responseLines.at(0),
           "Took a screenshot of the current page's viewport.",
@@ -84,6 +103,9 @@ describe('screenshot', () => {
 
         assert.equal(response.images.length, 1);
         assert.equal(response.images[0].mimeType, 'image/webp');
+        const bytes = Buffer.from(response.images[0].data, 'base64');
+        assert.strictEqual(bytes.toString('ascii', 0, 4), 'RIFF');
+        assert.strictEqual(bytes.toString('ascii', 8, 12), 'WEBP');
         assert.equal(
           response.responseLines.at(0),
           "Took a screenshot of the current page's viewport.",
@@ -106,10 +128,15 @@ describe('screenshot', () => {
 
         assert.equal(response.images.length, 1);
         assert.equal(response.images[0].mimeType, 'image/png');
-        assert.equal(
-          response.responseLines.at(0),
-          'Took a screenshot of the full current page.',
+        const dimensions = pngDimensions(
+          Buffer.from(response.images[0].data, 'base64'),
         );
+        const extent = await page.evaluate(() => ({
+          height: document.documentElement.scrollHeight,
+          viewport: innerHeight,
+        }));
+        assert.strictEqual(dimensions.height, extent.height);
+        assert.ok(dimensions.height > extent.viewport);
       });
     });
 
@@ -144,9 +171,19 @@ describe('screenshot', () => {
           response.responseLines.at(0),
           'Took a screenshot of the full current page.',
         );
-        assert.ok(
-          response.responseLines.at(1)?.match(/Saved screenshot to.*\.png/),
-        );
+        const saved = response.responseLines
+          .at(1)
+          ?.match(/^Saved screenshot to (.+)\.$/);
+        assert.ok(saved);
+        const filepath = saved[1];
+        try {
+          const dimensions = pngDimensions(await readFile(filepath));
+          assert.ok(
+            dimensions.height > (await page.evaluate(() => innerHeight)),
+          );
+        } finally {
+          await rm(filepath, {force: true});
+        }
       });
     });
 
@@ -173,10 +210,18 @@ describe('screenshot', () => {
 
         assert.equal(response.images.length, 1);
         assert.equal(response.images[0].mimeType, 'image/png');
-        assert.equal(
-          response.responseLines.at(0),
-          'Took a screenshot of node with uid "1_1".',
+        const dimensions = pngDimensions(
+          Buffer.from(response.images[0].data, 'base64'),
         );
+        const bounds = await page
+          .locator('button')
+          .map(button => ({
+            width: button.getBoundingClientRect().width,
+            height: button.getBoundingClientRect().height,
+          }))
+          .wait();
+        assert.ok(Math.abs(dimensions.width - bounds.width) <= 1);
+        assert.ok(Math.abs(dimensions.height - bounds.height) <= 1);
       });
     });
 
@@ -209,6 +254,7 @@ describe('screenshot', () => {
           const stats = await stat(filePath);
           assert.ok(stats.isFile());
           assert.ok(stats.size > 0);
+          pngDimensions(await readFile(filePath));
         } finally {
           await rm(filePath, {force: true});
         }
