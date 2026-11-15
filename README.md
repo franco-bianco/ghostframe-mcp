@@ -57,6 +57,7 @@ See [Feature priorities](docs/feature-priorities.md) for the capability ranking 
 5. Read new events with `read_capture`.
 6. Inspect the relevant request or saved body.
 7. Stop the capture with `stop_capture`.
+8. Call `close_browser` when you are done. It closes Chrome and releases the profile; the next browser tool call launches a new one.
 
 Use `arm_network_wait` before an action when you need a specific network event.
 Use `start_action` when a debugger breakpoint or interception can pause that action.
@@ -239,7 +240,8 @@ The capture journal records known gaps and byte limits.
   - [`press_key`](docs/tool-reference.md#press_key)
   - [`type_text`](docs/tool-reference.md#type_text)
   - [`upload_file`](docs/tool-reference.md#upload_file)
-- **Navigation automation** (6 tools)
+- **Navigation automation** (7 tools)
+  - [`close_browser`](docs/tool-reference.md#close_browser)
   - [`close_page`](docs/tool-reference.md#close_page)
   - [`list_pages`](docs/tool-reference.md#list_pages)
   - [`navigate_page`](docs/tool-reference.md#navigate_page)

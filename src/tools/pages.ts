@@ -147,6 +147,23 @@ export const closePage = defineTool({
   },
 });
 
+export const closeBrowser = defineTool({
+  name: 'close_browser',
+  description:
+    'Close the browser and release its profile, leaving no Chrome process running. The server stays connected, and the next browser tool call launches a fresh browser. Open tabs, isolated contexts and in-memory page state are lost. Call this when you are done with the browser.',
+  annotations: {
+    category: ToolCategory.NAVIGATION,
+    readOnlyHint: false,
+  },
+  schema: {},
+  blockedByDialog: false,
+  handler: async () => {
+    // The server closes the browser itself, before resolving a context,
+    // because resolving one would launch a browser just to close it.
+    throw new Error('close_browser is handled by the MCP server.');
+  },
+});
+
 export const newPage = defineTool(() => {
   return {
     name: 'new_page',

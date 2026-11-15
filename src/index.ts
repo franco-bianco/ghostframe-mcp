@@ -24,6 +24,7 @@ import {
 } from './third_party/index.js';
 import type {ToolCategory} from './tools/categories.js';
 import {labels, OFF_BY_DEFAULT_CATEGORIES} from './tools/categories.js';
+import {closeBrowser as closeBrowserTool} from './tools/pages.js';
 import type {DefinedPageTool, ToolDefinition} from './tools/ToolDefinition.js';
 import {pageIdSchema} from './tools/ToolDefinition.js';
 import {createTools} from './tools/tools.js';
@@ -382,6 +383,20 @@ export async function createMcpServer(
           logger(
             `${tool.name} request: ${JSON.stringify(redactSensitiveValues(params), null, '  ')}`,
           );
+          if (tool.name === closeBrowserTool.name) {
+            // Handled here: resolving a context would launch a browser.
+            const closed = await closeBrowser();
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: closed
+                    ? 'Browser closed. The next browser tool call launches a new one.'
+                    : 'No browser is running.',
+                },
+              ],
+            };
+          }
           const context = await getContext();
           logger(`${tool.name} context: resolved`);
           await context.detectOpenDevToolsWindows();

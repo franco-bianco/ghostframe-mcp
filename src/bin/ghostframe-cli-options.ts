@@ -179,6 +179,12 @@ export const commands: Commands = {
       },
     },
   },
+  close_browser: {
+    description:
+      'Close the browser and release its profile, leaving no Chrome process running. The server stays connected, and the next browser tool call launches a fresh browser. Open tabs, isolated contexts and in-memory page state are lost. Call this when you are done with the browser.',
+    category: 'Navigation automation',
+    args: {},
+  },
   close_page: {
     description:
       'Closes the page by its index. The last open page cannot be closed.',

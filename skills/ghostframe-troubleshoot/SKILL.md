@@ -50,6 +50,12 @@ Then triage the error string:
 
 Browser failed to launch. Close existing Chrome instances, confirm Chrome installs cleanly, retry.
 
+### `The browser is already running for <profile>`
+
+Another ghostframe server (often another Claude session) still holds this profile's Chrome.
+Call `close_browser` from the session that owns it, or use `--isolated` for a throwaway profile.
+Servers built before the shutdown fixes can also leave Chrome running after their client exits; rebuild with `npm run build`.
+
 ### `Server starts but creates a new empty profile`
 
 Argument typo. Check flag spelling exactly.

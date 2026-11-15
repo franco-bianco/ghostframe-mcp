@@ -1,6 +1,6 @@
 <!-- AUTO GENERATED DO NOT EDIT - run 'npm run gen' to update-->
 
-# ghostframe-mcp Tool Reference (~13639 cl100k_base tokens)
+# ghostframe-mcp Tool Reference (~13776 cl100k_base tokens)
 
 - **[Input automation](#input-automation)** (9 tools)
   - [`click`](#click)
@@ -12,7 +12,8 @@
   - [`press_key`](#press_key)
   - [`type_text`](#type_text)
   - [`upload_file`](#upload_file)
-- **[Navigation automation](#navigation-automation)** (6 tools)
+- **[Navigation automation](#navigation-automation)** (7 tools)
+  - [`close_browser`](#close_browser)
   - [`close_page`](#close_page)
   - [`list_pages`](#list_pages)
   - [`navigate_page`](#navigate_page)
@@ -170,6 +171,14 @@
 ---
 
 ## Navigation automation
+
+### `close_browser`
+
+**Description:** Close the browser and release its profile, leaving no Chrome process running. The server stays connected, and the next browser tool call launches a fresh browser. Open tabs, isolated contexts and in-memory page state are lost. Call this when you are done with the browser.
+
+**Parameters:** None
+
+---
 
 ### `close_page`
 

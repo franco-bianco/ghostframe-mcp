@@ -85,6 +85,7 @@ ghostframe navigate_page --handleBeforeUnload "accept"
 ghostframe select_page 1
 ghostframe select_page 1 --bringToFront true
 ghostframe close_page 1
+ghostframe close_browser   # closes Chrome; the next command relaunches it
 ```
 
 ## Persona / emulation
@@ -157,7 +158,7 @@ ghostframe new_page "https://abrahamjuliot.github.io/creepjs/"
 ghostframe take_screenshot --fullPage true --filePath creep.png
 ```
 
-Then read the snapshot and the screenshot for the failed signal categories. Full workflow in ``ghostframe-detect-test``.
+Then read the snapshot and the screenshot for the failed signal categories. Full workflow in `ghostframe-detect-test`.
 
 ## Service management
 

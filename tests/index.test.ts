@@ -126,6 +126,33 @@ describe('e2e', () => {
     });
   });
 
+  it('closes the browser on close_browser and relaunches on the next call', async () => {
+    await withClient(async client => {
+      const idle = await client.callTool({
+        name: 'close_browser',
+        arguments: {},
+      });
+      assert.equal(idle.isError, undefined);
+      assert.match(JSON.stringify(idle.content), /No browser is running/);
+
+      const url = 'data:text/html,<title>Before close</title>';
+      await client.callTool({name: 'new_page', arguments: {url}});
+      const closed = await client.callTool({
+        name: 'close_browser',
+        arguments: {},
+      });
+      assert.equal(closed.isError, undefined);
+      assert.match(JSON.stringify(closed.content), /Browser closed/);
+
+      const listed = await client.callTool({name: 'list_pages', arguments: {}});
+      assert.equal(listed.isError, undefined);
+      assert.deepEqual(
+        pagesSchema.parse(listed.structuredContent).pages.map(page => page.url),
+        ['about:blank'],
+      );
+    });
+  });
+
   it('advertises required investigation capabilities and applies category settings', async () => {
     await withClient(async client => {
       const {tools} = await client.listTools();
