@@ -159,9 +159,6 @@ export const startAction = definePageTool({
         ? await inspector.operationTarget(location)
         : page.target();
     manager.assertAvailable(target);
-    const handle = params.uid
-      ? await mcpPage.getElementByUid(params.uid)
-      : undefined;
     const frame = page.mainFrame();
     if (!(frame instanceof CdpFrame)) {
       throw new Error('Background actions require a CDP page.');
@@ -177,86 +174,100 @@ export const startAction = definePageTool({
       disabled: !context.getStealth(),
       signal: abort.signal,
     };
-    const operation = manager.start(
-      target,
-      params.action,
-      async () => {
-        const capture = context.getNetworkCapture();
-        const actionId = capture.markAction({
-          tool: `start_action:${params.action}`,
-          phase: 'start',
-          pageId: capturePageId,
-        });
-        try {
-          if (params.action === 'navigate' && params.url) {
-            const result = await page.goto(params.url, {
-              timeout: params.timeout ?? 30000,
-            });
-            return {url: page.url(), status: result?.status()};
-          }
-          if (params.action === 'click' && handle) {
-            await humanizedClick(page, {type: 'handle', handle}, inputOptions);
-            return {clicked: params.uid};
-          }
-          if (
-            params.action === 'fill' &&
-            handle &&
-            params.value !== undefined
-          ) {
-            await humanizedFill(page, handle, params.value, inputOptions);
-            return {filled: params.uid};
-          }
-          if (params.action === 'type_text' && params.text !== undefined) {
-            await humanizedType(page, params.text, inputOptions);
-            return {typed: true};
-          }
-          if (params.action === 'press_key' && params.key) {
-            abort.signal.throwIfAborted();
-            await humanizedKeyPress(page, params.key, inputOptions);
-            return {pressed: params.key};
-          }
-          if (params.action === 'call_handle' && params.handle) {
-            return await context.getRuntimeInspector().callHandle({
-              handle: params.handle,
-              thisHandle: params.thisHandle,
-              args,
-              returnMode: params.returnMode,
-            });
-          }
-          if (params.function) {
-            return await context.getRuntimeInspector().evaluate({
-              function: params.function,
-              pageId: params.targetId ? undefined : pageId,
-              targetId: params.targetId,
-              frameId: params.frameId,
-              args,
-              world: params.world ?? 'main',
-              returnMode: params.returnMode ?? 'value',
-            });
-          }
-          throw new Error('Invalid action parameters.');
-        } finally {
-          await handle?.dispose();
-          capture.markAction({
+    const handle = params.uid
+      ? await mcpPage.getElementByUid(params.uid)
+      : undefined;
+    // The started action owns the handle; dispose it if the start fails.
+    let operation: ReturnType<typeof manager.start>;
+    try {
+      operation = manager.start(
+        target,
+        params.action,
+        async () => {
+          const capture = context.getNetworkCapture();
+          const actionId = capture.markAction({
             tool: `start_action:${params.action}`,
-            phase: 'end',
-            actionId,
+            phase: 'start',
             pageId: capturePageId,
           });
-        }
-      },
-      async () => {
-        abort.abort();
-        if (params.action === 'navigate') {
-          await client.send('Page.stopLoading');
-        } else if (terminateHandle) {
-          await terminateHandle();
-        } else {
-          await inspector.terminate(location);
-        }
-      },
-      params.timeout,
-    );
+          try {
+            if (params.action === 'navigate' && params.url) {
+              const result = await page.goto(params.url, {
+                timeout: params.timeout ?? 30000,
+              });
+              return {url: page.url(), status: result?.status()};
+            }
+            if (params.action === 'click' && handle) {
+              await humanizedClick(
+                page,
+                {type: 'handle', handle},
+                inputOptions,
+              );
+              return {clicked: params.uid};
+            }
+            if (
+              params.action === 'fill' &&
+              handle &&
+              params.value !== undefined
+            ) {
+              await humanizedFill(page, handle, params.value, inputOptions);
+              return {filled: params.uid};
+            }
+            if (params.action === 'type_text' && params.text !== undefined) {
+              await humanizedType(page, params.text, inputOptions);
+              return {typed: true};
+            }
+            if (params.action === 'press_key' && params.key) {
+              abort.signal.throwIfAborted();
+              await humanizedKeyPress(page, params.key, inputOptions);
+              return {pressed: params.key};
+            }
+            if (params.action === 'call_handle' && params.handle) {
+              return await context.getRuntimeInspector().callHandle({
+                handle: params.handle,
+                thisHandle: params.thisHandle,
+                args,
+                returnMode: params.returnMode,
+              });
+            }
+            if (params.function) {
+              return await context.getRuntimeInspector().evaluate({
+                function: params.function,
+                pageId: params.targetId ? undefined : pageId,
+                targetId: params.targetId,
+                frameId: params.frameId,
+                args,
+                world: params.world ?? 'main',
+                returnMode: params.returnMode ?? 'value',
+              });
+            }
+            throw new Error('Invalid action parameters.');
+          } finally {
+            await handle?.dispose();
+            capture.markAction({
+              tool: `start_action:${params.action}`,
+              phase: 'end',
+              actionId,
+              pageId: capturePageId,
+            });
+          }
+        },
+        async () => {
+          abort.abort();
+          if (params.action === 'navigate') {
+            await client.send('Page.stopLoading');
+          } else if (terminateHandle) {
+            await terminateHandle();
+          } else {
+            await inspector.terminate(location);
+          }
+        },
+        params.timeout,
+      );
+    } catch (error) {
+      await handle?.dispose();
+      throw error;
+    }
     response.appendResponseLine(JSON.stringify(operation));
   },
 });
