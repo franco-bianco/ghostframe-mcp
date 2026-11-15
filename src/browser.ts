@@ -241,6 +241,8 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
     detectDisplay();
   }
 
+  // Set once Chrome is up, so a failure in later setup does not leak it.
+  let launched: Browser | undefined;
   try {
     const allowedExtensions = new Set<string>();
     const browser = await puppeteer.launch({
@@ -262,6 +264,7 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       acceptInsecureCerts: options.acceptInsecureCerts,
       handleDevToolsAsPage: true,
     });
+    launched = browser;
     internalExtensions.set(browser, allowedExtensions);
     // A crashed daemon can leave a controller and its regular-profile proxy
     // setting installed. Remove only our controllers before opening pages.
@@ -296,6 +299,9 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
     }
     return browser;
   } catch (error) {
+    await launched?.close().catch(closeError => {
+      logger('Failed to close a partly launched browser', closeError);
+    });
     if (
       userDataDir &&
       (error as Error).message.includes('The browser is already running')
