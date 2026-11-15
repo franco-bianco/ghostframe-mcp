@@ -6,8 +6,9 @@
 
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {readFile, rm} from 'node:fs/promises';
+import {appendFile, readFile, rm} from 'node:fs/promises';
 import {createServer} from 'node:http';
+import {join} from 'node:path';
 import type {Duplex} from 'node:stream';
 import {describe, it} from 'node:test';
 
@@ -148,6 +149,31 @@ describe('NetworkCapture', () => {
         );
         assert.ok(rest.records.every(record => record.sequence !== 0));
         await assert.rejects(capture.read(started.captureId, -1), /Cursor/);
+      } finally {
+        await capture.dispose();
+        await rm(started.directory, {recursive: true, force: true});
+      }
+    });
+  });
+
+  it('ignores a trailing line that is still being appended', async () => {
+    await withBrowser(async (browser, page) => {
+      const capture = new NetworkCapture(
+        browser,
+        () => 1,
+        async () => undefined,
+      );
+      const started = await capture.start({page});
+      try {
+        await capture.stop(started.captureId);
+        const before = await capture.read(started.captureId, 0, 1000);
+        const file = join(started.directory, 'events.jsonl');
+        await appendFile(file, '{"kind":"partial"');
+        const partial = await capture.read(started.captureId, 0, 1000);
+        assert.deepEqual(partial.records, before.records);
+        await appendFile(file, '}\n');
+        const complete = await capture.read(started.captureId, 0, 1000);
+        assert.deepEqual(complete.records.at(-1), {kind: 'partial'});
       } finally {
         await capture.dispose();
         await rm(started.directory, {recursive: true, force: true});

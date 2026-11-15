@@ -1017,9 +1017,13 @@ export class NetworkCapture {
       );
     }
     await capture.writes;
-    const lines = (
-      await readFile(join(capture.directory, 'events.jsonl'), 'utf8')
-    )
+    const text = await readFile(
+      join(capture.directory, 'events.jsonl'),
+      'utf8',
+    );
+    // Appends continue during the read; drop a trailing half-written line.
+    const lines = text
+      .slice(0, text.lastIndexOf('\n') + 1)
       .split('\n')
       .filter(Boolean);
     const records: Array<Record<string, unknown>> = [];
