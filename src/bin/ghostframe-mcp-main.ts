@@ -35,6 +35,11 @@ async function stop(): Promise<void> {
     return;
   }
   stopping = true;
+  // Backstop for a hung shutdown. Exiting still makes puppeteer kill Chrome.
+  setTimeout(() => {
+    logger('Graceful shutdown timed out');
+    process.exit(1);
+  }, 15_000).unref();
   try {
     await shutdown();
     await server.close();
@@ -49,9 +54,19 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     void stop();
   });
 }
-process.stdin.once('end', () => {
-  void stop();
-});
+for (const event of ['end', 'close', 'error']) {
+  process.stdin.on(event, () => {
+    void stop();
+  });
+}
+// A client can die while another process still holds our stdin open, so
+// EOF never arrives. Re-parenting means the client is gone.
+const parentPid = process.ppid;
+setInterval(() => {
+  if (process.ppid !== parentPid) {
+    void stop();
+  }
+}, 2_000).unref();
 const transport = new StdioServerTransport();
 await server.connect(transport);
 logger('ghostframe-mcp server connected');

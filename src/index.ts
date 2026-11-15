@@ -31,6 +31,9 @@ import {parseProxy} from './utils/proxy.js';
 import {redactSensitiveValues} from './utils/redact.js';
 import {VERSION} from './version.js';
 
+// How long a graceful browser close may take before Chrome is killed.
+const BROWSER_CLOSE_TIMEOUT_MS = 5_000;
+
 // Tools that can act on the launch tab without claiming it for the agent.
 const PLACEHOLDER_NEUTRAL_TOOLS = new Set([
   'new_page',
@@ -180,27 +183,63 @@ export async function createMcpServer(
     }
   };
 
-  let context: McpContext;
+  let context: McpContext | undefined;
   let ownedBrowser: Browser | undefined;
   let initializing: Promise<McpContext> | undefined;
   let shuttingDown = false;
   let shutdownPromise: Promise<void> | undefined;
-  function shutdown(): Promise<void> {
-    shuttingDown = true;
-    shutdownPromise ??= (async () => {
+  /**
+   * Closes the browser and forgets it, so the next tool call relaunches.
+   * Kills Chrome if it does not close in time. Resolves false when no
+   * browser was running, and never rejects.
+   */
+  async function closeBrowser(): Promise<boolean> {
+    await initializing?.catch(error => {
+      logger('Context initialization failed before closing the browser', error);
+    });
+    const closingContext = context;
+    const browser = ownedBrowser;
+    context = undefined;
+    ownedBrowser = undefined;
+    if (!closingContext && !browser?.connected) {
+      return false;
+    }
+    const graceful = (async () => {
       try {
-        await initializing?.catch(error => {
-          logger('Context initialization failed during shutdown', error);
-        });
-        if (context) {
-          await context.dispose({closeBrowser: true});
-        }
+        await closingContext?.dispose({closeBrowser: true});
       } finally {
-        if (ownedBrowser?.connected) {
-          await ownedBrowser.close();
+        if (browser?.connected) {
+          await browser.close();
         }
       }
-    })();
+    })().then(
+      () => true,
+      error => {
+        logger('Graceful browser close failed', error);
+        return false;
+      },
+    );
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<false>(resolve => {
+      timer = setTimeout(() => resolve(false), BROWSER_CLOSE_TIMEOUT_MS);
+    });
+    const closed = await Promise.race([graceful, deadline]);
+    clearTimeout(timer);
+    const chrome = browser?.process();
+    if (!closed && chrome?.pid !== undefined && chrome.exitCode === null) {
+      logger('Browser did not close cleanly; killing it');
+      try {
+        // Chrome leads its own process group; take its helpers down with it.
+        process.kill(-chrome.pid, 'SIGKILL');
+      } catch {
+        chrome.kill('SIGKILL');
+      }
+    }
+    return true;
+  }
+  function shutdown(): Promise<void> {
+    shuttingDown = true;
+    shutdownPromise ??= closeBrowser().then(() => undefined);
     return shutdownPromise;
   }
   server.server.onclose = () => {
