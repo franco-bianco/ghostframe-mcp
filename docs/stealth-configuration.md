@@ -23,6 +23,7 @@ Added by default:
 - `--disable-blink-features=AutomationControlled` changes the reported `navigator.webdriver` value.
   Chrome can show an unsupported-flag banner on its first tab.
   Ghostframe replaces that tab after launch.
+  The first `new_page` call navigates the replacement tab rather than opening a second one.
 
 Kept deliberately:
 

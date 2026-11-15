@@ -76,23 +76,52 @@ describe('e2e', () => {
       });
       assert.equal(result.isError, undefined);
       const initial = pagesSchema.parse(result.structuredContent);
-      assert(
-        initial.pages.some(page => page.url === 'about:blank' && page.selected),
+      assert.deepEqual(
+        initial.pages.map(page => [page.url, page.selected]),
+        [['about:blank', true]],
       );
-      const url = 'data:text/html,<title>Persistent MCP state</title>';
-      await client.callTool({name: 'new_page', arguments: {url}});
-      const listed = await client.callTool({
-        name: 'list_pages',
-        arguments: {},
+      const first = 'data:text/html,<title>Persistent MCP state</title>';
+      await client.callTool({name: 'new_page', arguments: {url: first}});
+      const afterFirst = pagesSchema.parse(
+        (await client.callTool({name: 'list_pages', arguments: {}}))
+          .structuredContent,
+      );
+      // The first new_page navigates the launch tab instead of leaving it.
+      assert.deepEqual(
+        afterFirst.pages.map(page => [page.id, page.url, page.selected]),
+        [[initial.pages[0]!.id, first, true]],
+      );
+      const second = 'data:text/html,<title>Second page</title>';
+      await client.callTool({name: 'new_page', arguments: {url: second}});
+      const afterSecond = pagesSchema.parse(
+        (await client.callTool({name: 'list_pages', arguments: {}}))
+          .structuredContent,
+      );
+      assert.deepEqual(
+        afterSecond.pages.map(page => [page.url, page.selected]),
+        [
+          [first, false],
+          [second, true],
+        ],
+      );
+    });
+  });
+
+  it('keeps a launch tab the agent has used', async () => {
+    await withClient(async client => {
+      await client.callTool({
+        name: 'evaluate_script',
+        arguments: {function: '() => { window.marked = true; }'},
       });
-      const current = pagesSchema.parse(listed.structuredContent);
-      assert(current.pages.some(page => page.url === url && page.selected));
-      assert(
-        initial.pages.every(page =>
-          current.pages.some(
-            current => current.id === page.id && current.url === page.url,
-          ),
-        ),
+      const url = 'data:text/html,<title>New tab</title>';
+      await client.callTool({name: 'new_page', arguments: {url}});
+      const listed = pagesSchema.parse(
+        (await client.callTool({name: 'list_pages', arguments: {}}))
+          .structuredContent,
+      );
+      assert.deepEqual(
+        listed.pages.map(page => page.url),
+        ['about:blank', url],
       );
     });
   });

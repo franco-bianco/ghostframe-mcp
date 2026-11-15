@@ -8,7 +8,7 @@ import type fs from 'node:fs';
 
 import type {parseArguments} from './bin/ghostframe-mcp-cli-options.js';
 import type {Channel} from './browser.js';
-import {ensureBrowserLaunched} from './browser.js';
+import {ensureBrowserLaunched, launchPlaceholders} from './browser.js';
 import {loadIssueDescriptions} from './issue-descriptions.js';
 import {logger} from './logger.js';
 import {McpContext} from './McpContext.js';
@@ -30,6 +30,13 @@ import {createTools} from './tools/tools.js';
 import {parseProxy} from './utils/proxy.js';
 import {redactSensitiveValues} from './utils/redact.js';
 import {VERSION} from './version.js';
+
+// Tools that can act on the launch tab without claiming it for the agent.
+const PLACEHOLDER_NEUTRAL_TOOLS = new Set([
+  'new_page',
+  'select_page',
+  'close_page',
+]);
 
 export function buildFlag(category: ToolCategory) {
   return `category${category.charAt(0).toUpperCase() + category.slice(1)}`;
@@ -349,6 +356,12 @@ export async function createMcpServer(
               : context.getSelectedMcpPage();
             response.setPage(page);
             actionPageId = page.id;
+            if (
+              !tool.annotations.readOnlyHint &&
+              !PLACEHOLDER_NEUTRAL_TOOLS.has(tool.name)
+            ) {
+              launchPlaceholders.delete(page.pptrPage);
+            }
             if (!controlTools.has(tool.name)) {
               context.getOperationManager().assertAvailable(page.pptrPage);
               if (context.getRuntimeInspector().isPaused(page.pptrPage)) {

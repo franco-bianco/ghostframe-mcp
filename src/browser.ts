@@ -121,11 +121,18 @@ async function overrideUserAgent(page: Page, userAgent: string): Promise<void> {
   await client.send('Emulation.setUserAgentOverride', {userAgent});
 }
 
+/**
+ * Blank tabs opened by closeInitialTab(). The first new_page navigates one
+ * instead of opening a second tab; any page-acting tool removes the mark.
+ */
+export const launchPlaceholders = new WeakSet<Page>();
+
 /** Replaces Chrome's first tab, which carries the unsupported-flag banner. */
 async function closeInitialTab(browser: Browser): Promise<void> {
   try {
     const initial = await browser.pages();
     const replacement = await browser.newPage();
+    launchPlaceholders.add(replacement);
     await Promise.all(
       initial.map(async page => {
         if (page !== replacement && page.url() === 'about:blank') {

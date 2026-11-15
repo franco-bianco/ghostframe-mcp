@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
-import {installStealthOnPage} from './browser.js';
+import {installStealthOnPage, launchPlaceholders} from './browser.js';
 import {InterceptionController} from './investigation/InterceptionController.js';
 import {NetworkCapture} from './investigation/NetworkCapture.js';
 import {OperationManager} from './investigation/OperationManager.js';
@@ -319,6 +319,20 @@ export class McpContext implements Context {
     background?: boolean,
     isolatedContextName?: string,
   ): Promise<McpPage> {
+    if (isolatedContextName === undefined) {
+      // Navigate the blank tab left by launch() rather than leave it behind.
+      const placeholder = this.#pages.find(page =>
+        launchPlaceholders.has(page),
+      );
+      if (placeholder) {
+        launchPlaceholders.delete(placeholder);
+        const mcpPage = this.#getMcpPage(placeholder);
+        if (placeholder.url() === 'about:blank' && !mcpPage.dialog) {
+          this.selectPage(mcpPage);
+          return mcpPage;
+        }
+      }
+    }
     let page: Page;
     if (isolatedContextName !== undefined) {
       let ctx = this.#isolatedContexts.get(isolatedContextName);
