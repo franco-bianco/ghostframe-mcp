@@ -218,6 +218,7 @@ interface DebuggerSession {
   onScript: (event: Protocol.Debugger.ScriptParsedEvent) => void;
   onPause: (event: Protocol.Debugger.PausedEvent) => void;
   onResume: () => void;
+  stopping?: Promise<void>;
 }
 
 export interface DebuggerCommand extends RuntimeLocation {
@@ -269,6 +270,7 @@ export class RuntimeInspector {
   #workerRealms = new Map<string, RealmSession>();
   #handles = new Map<string, RetainedHandle>();
   #debuggers = new Map<string, DebuggerSession>();
+  #stopping = new Map<string, Promise<void>>();
   #nextTarget = 1;
   #nextHandle = 1;
   #nextBreakpoint = 1;
@@ -1062,6 +1064,9 @@ export class RuntimeInspector {
           'Debugger already active; stop it before starting another session.',
         );
       }
+      // A deadline stop runs outside the tool mutex; let it disable the old
+      // session before this one enables the debugger.
+      await this.#stopping.get(targetId);
       const realm = await this.#realm({...options, world: 'main'});
       const timeoutMs = Math.min(
         Math.max(options.timeoutMs ?? 60000, 1000),
@@ -1327,25 +1332,40 @@ export class RuntimeInspector {
     };
   }
 
-  async #stop(state: DebuggerSession): Promise<void> {
+  #stop(state: DebuggerSession): Promise<void> {
+    if (state.stopping) {
+      return state.stopping;
+    }
     clearTimeout(state.timer);
     this.#debuggers.delete(state.realm.targetId);
-    for (const remove of state.breakpoints.values()) {
-      await remove().catch(() => {
-        // Browser reloads or target shutdown may already remove breakpoints.
+    state.stopping = (async () => {
+      for (const remove of state.breakpoints.values()) {
+        await remove().catch(() => {
+          // Browser reloads or target shutdown may already remove breakpoints.
+        });
+      }
+      if (state.paused) {
+        await state.realm.client.send('Debugger.resume').catch(() => {
+          // Resume is unnecessary if the target resumed or disappeared.
+        });
+      }
+      await state.realm.client.send('Debugger.disable').catch(() => {
+        // Detached sessions cannot acknowledge disable requests.
       });
-    }
-    if (state.paused) {
-      await state.realm.client.send('Debugger.resume').catch(() => {
-        // Resume is unnecessary if the target resumed or disappeared.
-      });
-    }
-    await state.realm.client.send('Debugger.disable').catch(() => {
-      // Detached sessions cannot acknowledge disable requests.
+      state.realm.client.off('Debugger.scriptParsed', state.onScript);
+      state.realm.client.off('Debugger.paused', state.onPause);
+      state.realm.client.off('Debugger.resumed', state.onResume);
+    })();
+    // The map entry is gone before cleanup finishes; a new start on this
+    // target waits here so this Debugger.disable cannot hit its session.
+    const targetId = state.realm.targetId;
+    this.#stopping.set(targetId, state.stopping);
+    void state.stopping.finally(() => {
+      if (this.#stopping.get(targetId) === state.stopping) {
+        this.#stopping.delete(targetId);
+      }
     });
-    state.realm.client.off('Debugger.scriptParsed', state.onScript);
-    state.realm.client.off('Debugger.paused', state.onPause);
-    state.realm.client.off('Debugger.resumed', state.onResume);
+    return state.stopping;
   }
 
   async stopDebuggers(): Promise<void> {

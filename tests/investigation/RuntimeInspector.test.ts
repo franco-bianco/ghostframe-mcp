@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict';
 import {describe, it} from 'node:test';
+import {setTimeout} from 'node:timers/promises';
 
 import sinon from 'sinon';
 
@@ -501,4 +502,47 @@ describe('RuntimeInspector', () => {
     });
   });
 
+  it('waits for a deadline stop to disable the old session before starting again', async () => {
+    await withBrowser(async (browser, page) => {
+      const inspector = new RuntimeInspector(
+        browser,
+        () => page,
+        () => page,
+      );
+      const frame = page.mainFrame();
+      assert(frame instanceof CdpFrame);
+      const client = frame._client();
+      const send = client.send.bind(client);
+      const calls: string[] = [];
+      sinon.stub(client, 'send').callsFake(async (method, params) => {
+        calls.push(method);
+        if (method === 'Debugger.removeBreakpoint') {
+          // Holds the deadline stop between map removal and Debugger.disable.
+          await setTimeout(300);
+        }
+        return await send(method, params);
+      });
+      try {
+        await inspector.debugger({action: 'start', timeoutMs: 1000});
+        await inspector.debugger({
+          action: 'breakpoint',
+          kind: 'source',
+          url: 'never-loaded.js',
+          lineNumber: 0,
+        });
+        while (inspector.hasDebugger(page)) {
+          await setTimeout(10);
+        }
+        await inspector.debugger({action: 'start', timeoutMs: 5000});
+        assert(
+          calls.lastIndexOf('Debugger.disable') <
+            calls.lastIndexOf('Debugger.enable'),
+        );
+        assert.equal(inspector.hasDebugger(page), true);
+      } finally {
+        await inspector.dispose();
+        sinon.restore();
+      }
+    });
+  });
 });
