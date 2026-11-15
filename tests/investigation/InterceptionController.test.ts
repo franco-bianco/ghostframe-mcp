@@ -9,6 +9,8 @@ import {describe, it} from 'node:test';
 import {setTimeout} from 'node:timers/promises';
 import {gzipSync} from 'node:zlib';
 
+import sinon from 'sinon';
+
 import {InterceptionController} from '../../src/investigation/InterceptionController.js';
 import {OperationManager} from '../../src/investigation/OperationManager.js';
 import {serverHooks} from '../server.js';
@@ -392,6 +394,55 @@ describe('live request interception', () => {
         assert.equal(await pendingFetch, 'replacement');
       } finally {
         await controller.dispose();
+      }
+    });
+  });
+
+  it('keeps the rule armed when a pass-through request cannot be continued', async () => {
+    server.addHtmlRoute('/pass-page', '<main>test</main>');
+    server.addRoute('/pass-api', (req, res) => {
+      res.end(req.method);
+    });
+    await withBrowser(async (_browser, page) => {
+      const controller = new InterceptionController();
+      const createSession = page.createCDPSession.bind(page);
+      sinon.stub(page, 'createCDPSession').callsFake(async () => {
+        const session = await createSession();
+        const send = session.send.bind(session);
+        let failed = false;
+        sinon.stub(session, 'send').callsFake(async (method, params) => {
+          const result = await send(method, params);
+          if (method === 'Fetch.continueRequest' && !failed) {
+            // Simulates a pass-through request aborted before it continued.
+            failed = true;
+            throw new Error('Invalid InterceptionId.');
+          }
+          return result;
+        });
+        return session;
+      });
+      try {
+        await page.goto(server.getRoute('/pass-page'));
+        const rule = await controller.arm(page, {
+          urlPattern: server.getRoute('/pass-api'),
+          method: 'POST',
+        });
+        assert.equal(
+          await page.evaluate(async () =>
+            fetch('/pass-api').then(r => r.text()),
+          ),
+          'GET',
+        );
+        assert.equal(controller.get(rule.interceptionId).status, 'armed');
+        const pendingFetch = page.evaluate(async () =>
+          fetch('/pass-api', {method: 'POST'}).then(r => r.text()),
+        );
+        await waitForPause(controller, rule.interceptionId);
+        await controller.resolve(rule.interceptionId, {action: 'continue'});
+        assert.equal(await pendingFetch, 'POST');
+      } finally {
+        await controller.dispose();
+        sinon.restore();
       }
     });
   });

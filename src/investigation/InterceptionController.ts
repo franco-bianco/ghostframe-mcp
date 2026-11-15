@@ -6,6 +6,7 @@
 
 import {randomUUID} from 'node:crypto';
 
+import {logger} from '../logger.js';
 import type {CDPSession, Page, Protocol} from '../third_party/index.js';
 
 interface Rule {
@@ -187,9 +188,13 @@ export class InterceptionController {
       entry.rule.status !== 'armed' ||
       (entry.method && event.request.method.toUpperCase() !== entry.method)
     ) {
-      await entry.client.send('Fetch.continueRequest', {
-        requestId: event.requestId,
-      });
+      // A pass-through request can be aborted before it is continued. That
+      // must not fail the rule or release the held request.
+      await entry.client
+        .send('Fetch.continueRequest', {requestId: event.requestId})
+        .catch(error => {
+          logger(`Failed to continue pass-through request: ${error}`);
+        });
       return;
     }
     entry.paused = event;
