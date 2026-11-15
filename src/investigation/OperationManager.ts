@@ -34,7 +34,14 @@ export class OperationManager {
   assertAvailable(page: Page | Target): void {
     const target = 'target' in page ? page.target() : page;
     for (const {operation, target: owner} of this.#entries.values()) {
-      if (owner === target && operation.executionMayContinue) {
+      // A cancelled action that ignored termination (for example a promise
+      // that never settles) still reports executionMayContinue, but must not
+      // keep the page locked.
+      if (
+        owner === target &&
+        operation.executionMayContinue &&
+        operation.status !== 'cancelled'
+      ) {
         throw new Error(
           `Page has an unfinished action (${operation.operationId}). Use get_operation, debugger_control or resolve_interception first.`,
         );
@@ -55,7 +62,10 @@ export class OperationManager {
     this.assertAvailable(page);
     if (this.#entries.size >= 128) {
       for (const [id, entry] of this.#entries) {
-        if (!entry.operation.executionMayContinue) {
+        if (
+          !entry.operation.executionMayContinue ||
+          entry.operation.status === 'cancelled'
+        ) {
           this.#entries.delete(id);
           break;
         }

@@ -62,6 +62,38 @@ describe('operation lifecycle', () => {
     });
   });
 
+  it('releases the page after cancelling an action that ignores termination', async () => {
+    await withBrowser(async (_browser, page) => {
+      const manager = new OperationManager();
+      try {
+        const operation = manager.start(
+          page,
+          'fixture',
+          () => new Promise(() => undefined),
+          async () => undefined,
+          10,
+        );
+        await setTimeout(25);
+        assert.equal(manager.get(operation.operationId).status, 'timed_out');
+        assert.throws(() => manager.assertAvailable(page), /unfinished action/);
+        const cancelled = await manager.cancel(operation.operationId);
+        assert.equal(cancelled.status, 'cancelled');
+        assert.equal(cancelled.executionMayContinue, true);
+        manager.assertAvailable(page);
+        const next = manager.start(
+          page,
+          'next',
+          async () => 'done',
+          async () => undefined,
+        );
+        await setTimeout(0);
+        assert.equal(manager.get(next.operationId).result, 'done');
+      } finally {
+        await manager.dispose();
+      }
+    });
+  });
+
   it('cancels active execution during explicit cancellation and disposal', async () => {
     await withBrowser(async (_browser, page) => {
       const manager = new OperationManager();
