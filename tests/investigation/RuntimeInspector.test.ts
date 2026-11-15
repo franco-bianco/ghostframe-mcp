@@ -455,4 +455,50 @@ describe('RuntimeInspector', () => {
       }
     });
   });
+
+  it('routes debugger commands to the cross-origin iframe session where it started', async () => {
+    const childUrl = `${server.baseUrl.replace('localhost', '127.0.0.1')}/oopif-child`;
+    server.addHtmlRoute('/oopif-child', '<title>child</title>');
+    server.addHtmlRoute('/oopif-parent', `<iframe src="${childUrl}"></iframe>`);
+    await withBrowser(async (browser, page) => {
+      const inspector = new RuntimeInspector(
+        browser,
+        () => page,
+        () => page,
+      );
+      try {
+        await page.goto(server.getRoute('/oopif-parent'));
+        const main = page.mainFrame();
+        const child = page.frames().find(frame => frame.url() === childUrl);
+        assert(main instanceof CdpFrame && child instanceof CdpFrame);
+        assert.notEqual(child._client(), main._client());
+        await inspector.debugger({
+          action: 'start',
+          frameId: child._id,
+          timeoutMs: 5000,
+        });
+        const pause = new Promise<void>(resolve =>
+          child._client().once('Debugger.paused', () => resolve()),
+        );
+        const evaluation = inspector.evaluate({
+          frameId: child._id,
+          world: 'main',
+          function: '() => { debugger; return 7; }',
+        });
+        await pause;
+        const status = await inspector.debugger({action: 'status'});
+        assert('paused' in status && status.paused);
+        await assert.rejects(
+          inspector.debugger({action: 'resume', frameId: main._id}),
+          /frameId does not match/,
+        );
+        await inspector.debugger({action: 'resume'});
+        assert.equal((await evaluation).value, 7);
+        await inspector.debugger({action: 'stop'});
+      } finally {
+        await inspector.dispose();
+      }
+    });
+  });
+
 });

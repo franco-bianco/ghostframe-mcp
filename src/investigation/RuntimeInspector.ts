@@ -998,7 +998,8 @@ export class RuntimeInspector {
     const termination = client.send('Runtime.terminateExecution');
     // V8 cannot finish termination until the paused execution resumes. Send
     // both commands before awaiting either, so cancellation releases the tool.
-    if (state?.paused) {
+    // A pause in another session (such as an iframe) does not block this one.
+    if (state?.paused && state.realm.client === client) {
       await Promise.all([termination, client.send('Debugger.resume')]);
       state.paused = undefined;
     } else {
@@ -1041,14 +1042,27 @@ export class RuntimeInspector {
   }
 
   async debugger(options: DebuggerCommand) {
-    const realm = await this.#realm({...options, world: 'main'});
-    let state = this.#debuggers.get(realm.targetId);
+    this.#assertActive();
+    if (options.pageId !== undefined && options.targetId !== undefined) {
+      throw new Error('Specify pageId or targetId, not both.');
+    }
+    // Debugger state is per target. Only start resolves a realm; later
+    // commands use the session where Debugger.enable ran, which can belong to
+    // a cross-origin iframe even when frameId is omitted.
+    const targetId = this.#targetId(
+      await this.operationTarget({
+        pageId: options.pageId,
+        targetId: options.targetId,
+      }),
+    );
+    let state = this.#debuggers.get(targetId);
     if (options.action === 'start') {
       if (state) {
         throw new Error(
           'Debugger already active; stop it before starting another session.',
         );
       }
+      const realm = await this.#realm({...options, world: 'main'});
       const timeoutMs = Math.min(
         Math.max(options.timeoutMs ?? 60000, 1000),
         300000,
@@ -1138,9 +1152,15 @@ export class RuntimeInspector {
     }
     if (!state) {
       if (options.action === 'status') {
-        return {active: false, targetId: realm.targetId};
+        return {active: false, targetId};
       }
       throw new Error('Start a scoped debugger session first.');
+    }
+    const realm = state.realm;
+    if (options.frameId !== undefined && options.frameId !== realm.frame?._id) {
+      throw new Error(
+        'frameId does not match the frame where the debugger session started.',
+      );
     }
     if (options.action === 'stop') {
       await this.#stop(state);
