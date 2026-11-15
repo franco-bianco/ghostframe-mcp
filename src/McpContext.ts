@@ -201,7 +201,16 @@ export class McpContext implements Context {
     opts: McpContextOptions,
   ) {
     const context = new McpContext(browser, logger, opts);
-    await context.#init();
+    try {
+      await context.#init();
+    } catch (error) {
+      // Detach the listeners the constructor and #init attached, or each
+      // retry on the same browser stacks another set.
+      await context.dispose().catch(disposeError => {
+        logger('Failed to dispose a partly initialized context', disposeError);
+      });
+      throw error;
+    }
     return context;
   }
 
