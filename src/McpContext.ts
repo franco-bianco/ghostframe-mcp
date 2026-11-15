@@ -174,14 +174,14 @@ export class McpContext implements Context {
     await this.#operationManager.dispose();
     await this.#runtimeInspector.dispose();
     await this.#networkCapture.dispose();
-    if (options.closeBrowser) {
-      try {
-        await this.browser.close();
-      } finally {
-        await this.#proxyController.dispose();
-      }
-    } else {
+    // Uninstall the proxy controller while the browser is still connected,
+    // or a persistent profile keeps a record of it.
+    try {
       await this.#proxyController.dispose();
+    } finally {
+      if (options.closeBrowser) {
+        await this.browser.close();
+      }
     }
     this.#networkCollector.dispose();
     this.#consoleCollector.dispose();
